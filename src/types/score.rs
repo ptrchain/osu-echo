@@ -157,26 +157,37 @@ pub struct BanchoScore {
 
 impl BanchoScore {
     pub fn from_json(json: &serde_json::Value) -> Option<Self> {
-        let date_str = json.get("date")?.as_str()?;
-        let time = chrono_parse_to_epoch(date_str);
+        let time = json
+            .get("date")
+            .and_then(|d| d.as_str())
+            .map(chrono_parse_to_epoch)
+            .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64);
+
+        let pp = json.get("pp").and_then(|v| {
+            if let Some(s) = v.as_str() {
+                s.parse::<f64>().ok()
+            } else {
+                v.as_f64()
+            }
+        });
 
         Some(Self {
-            score_id: json.get("score_id")?.as_str().unwrap_or("0").to_string(),
-            username: json.get("username")?.as_str().unwrap_or("").to_string(),
-            score: json.get("score")?.as_str().unwrap_or("0").to_string(),
-            maxcombo: json.get("maxcombo")?.as_str().unwrap_or("0").to_string(),
-            count50: json.get("count50")?.as_str().unwrap_or("0").to_string(),
-            count100: json.get("count100")?.as_str().unwrap_or("0").to_string(),
-            count300: json.get("count300")?.as_str().unwrap_or("0").to_string(),
-            countmiss: json.get("countmiss")?.as_str().unwrap_or("0").to_string(),
-            countkatu: json.get("countkatu")?.as_str().unwrap_or("0").to_string(),
-            countgeki: json.get("countgeki")?.as_str().unwrap_or("0").to_string(),
-            perfect: json.get("perfect")?.as_str().unwrap_or("0").to_string(),
-            enabled_mods: json.get("enabled_mods")?.as_str().unwrap_or("0").to_string(),
-            user_id: json.get("user_id")?.as_str().unwrap_or("0").to_string(),
+            score_id: json_get_str(json, "score_id", "0"),
+            username: json_get_str(json, "username", ""),
+            score: json_get_str(json, "score", "0"),
+            maxcombo: json_get_str(json, "maxcombo", "0"),
+            count50: json_get_str(json, "count50", "0"),
+            count100: json_get_str(json, "count100", "0"),
+            count300: json_get_str(json, "count300", "0"),
+            countmiss: json_get_str(json, "countmiss", "0"),
+            countkatu: json_get_str(json, "countkatu", "0"),
+            countgeki: json_get_str(json, "countgeki", "0"),
+            perfect: json_get_str(json, "perfect", "0"),
+            enabled_mods: json_get_str(json, "enabled_mods", "0"),
+            user_id: json_get_str(json, "user_id", "0"),
             time,
-            replay_available: json.get("replay_available")?.as_str().unwrap_or("0").to_string(),
-            pp: None,
+            replay_available: json_get_str(json, "replay_available", "0"),
+            pp,
         })
     }
 
@@ -224,5 +235,79 @@ fn chrono_parse_to_epoch(date_str: &str) -> i64 {
         days * 86400 + hour * 3600 + min * 60 + sec
     } else {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64
+    }
+}
+
+fn json_get_str(json: &serde_json::Value, key: &str, default: &str) -> String {
+    match json.get(key) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(serde_json::Value::Number(n)) => n.to_string(),
+        _ => default.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bancho_score_from_json() {
+        let json = serde_json::json!({
+            "score_id": "12345678",
+            "username": "WhiteCat",
+            "score": "98765432",
+            "maxcombo": "1500",
+            "count50": "0",
+            "count100": "5",
+            "count300": "1000",
+            "countmiss": "1",
+            "countkatu": "2",
+            "countgeki": "3",
+            "perfect": "0",
+            "enabled_mods": "24",
+            "user_id": "450",
+            "date": "2024-05-10 12:00:00",
+            "replay_available": "1",
+            "pp": "750.5"
+        });
+
+        let score = BanchoScore::from_json(&json).unwrap();
+        assert_eq!(score.score_id, "12345678");
+        assert_eq!(score.username, "WhiteCat");
+        assert_eq!(score.pp, Some(750.5));
+        assert_eq!(score.enabled_mods, "24");
+
+        let entry_raw = score.as_leaderboard_entry(false);
+        assert_eq!(entry_raw.score, 98765432);
+        assert_eq!(entry_raw.username, "WhiteCat");
+
+        let entry_pp = score.as_leaderboard_entry(true);
+        assert_eq!(entry_pp.score, 750);
+    }
+
+    #[test]
+    fn test_bancho_score_numeric_json() {
+        let json = serde_json::json!({
+            "score_id": 9999,
+            "username": "Mrekk",
+            "score": 1000000,
+            "maxcombo": 500,
+            "count50": 0,
+            "count100": 0,
+            "count300": 300,
+            "countmiss": 0,
+            "countkatu": 0,
+            "countgeki": 0,
+            "perfect": 1,
+            "enabled_mods": 8,
+            "user_id": 12345,
+            "date": "2023-01-01 00:00:00",
+            "replay_available": 1
+        });
+
+        let score = BanchoScore::from_json(&json).unwrap();
+        assert_eq!(score.score_id, "9999");
+        assert_eq!(score.username, "Mrekk");
+        assert_eq!(score.score, "1000000");
     }
 }

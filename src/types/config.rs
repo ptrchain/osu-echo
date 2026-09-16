@@ -39,11 +39,11 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             paths: Paths { osu_path: None, songs: None, replay: None, screenshots: None },
-            pp_leaderboard: true,
+            pp_leaderboard: false,
             ping_user_when_recent_score: false,
             menu_icon: MenuIcon { image_link: None, click_link: None },
             command_prefix: "!".to_string(),
-            show_pp_for_personal_best: true,
+            show_pp_for_personal_best: false,
             amount_of_scores_on_lb: 50,
             auto_update: true,
             disable_funorange_maps: false,
@@ -105,6 +105,30 @@ impl Config {
                 self.osu_daily_api_key = Some(trimmed.to_string());
             }
         }
+
+        if let Ok(val) = std::env::var("PP_LEADERBOARD") {
+            let trimmed = val.trim().to_lowercase();
+            if trimmed == "true" || trimmed == "1" || trimmed == "yes" {
+                self.pp_leaderboard = true;
+            } else if trimmed == "false" || trimmed == "0" || trimmed == "no" {
+                self.pp_leaderboard = false;
+            }
+        }
+
+        if let Ok(val) = std::env::var("SHOW_PP_FOR_PERSONAL_BEST") {
+            let trimmed = val.trim().to_lowercase();
+            if trimmed == "true" || trimmed == "1" || trimmed == "yes" {
+                self.show_pp_for_personal_best = true;
+            } else if trimmed == "false" || trimmed == "0" || trimmed == "no" {
+                self.show_pp_for_personal_best = false;
+            }
+        }
+
+        if let Ok(val) = std::env::var("AMOUNT_OF_SCORES_ON_LB") {
+            if let Ok(amount) = val.trim().parse::<i32>() {
+                self.amount_of_scores_on_lb = amount.clamp(1, 100);
+            }
+        }
     }
 }
 
@@ -119,7 +143,15 @@ pub fn detect_osu_path() -> Option<PathBuf> {
 }
 
 /// Helper to write credentials & API keys directly to .env
-pub fn write_dotenv(username: Option<&str>, password_hash: Option<&str>, api_key: Option<&str>, daily_key: Option<&str>) -> std::io::Result<()> {
+pub fn write_dotenv(
+    username: Option<&str>,
+    password_hash: Option<&str>,
+    api_key: Option<&str>,
+    daily_key: Option<&str>,
+    pp_leaderboard: Option<bool>,
+    show_pp_for_personal_best: Option<bool>,
+    amount_of_scores: Option<i32>,
+) -> std::io::Result<()> {
     let env_path = Path::new(".env");
     let mut map = std::collections::BTreeMap::new();
 
@@ -149,6 +181,15 @@ pub fn write_dotenv(username: Option<&str>, password_hash: Option<&str>, api_key
     if let Some(d) = daily_key {
         map.insert("OSU_DAILY_API_KEY".to_string(), d.to_string());
     }
+    if let Some(pp) = pp_leaderboard {
+        map.insert("PP_LEADERBOARD".to_string(), pp.to_string());
+    }
+    if let Some(pb) = show_pp_for_personal_best {
+        map.insert("SHOW_PP_FOR_PERSONAL_BEST".to_string(), pb.to_string());
+    }
+    if let Some(amt) = amount_of_scores {
+        map.insert("AMOUNT_OF_SCORES_ON_LB".to_string(), amt.to_string());
+    }
 
     map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
     map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
@@ -163,7 +204,15 @@ pub fn write_dotenv(username: Option<&str>, password_hash: Option<&str>, api_key
 
     out.push_str("# External API Keys\n");
     out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
-    out.push_str(&format!("OSU_DAILY_API_KEY={}\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
+    out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
+
+    out.push_str("# Leaderboard Settings\n");
+    out.push_str("# Set to true to show PP instead of Score on leaderboards\n");
+    out.push_str(&format!("PP_LEADERBOARD={}\n", map.get("PP_LEADERBOARD").cloned().unwrap_or_else(|| "false".to_string())));
+    out.push_str("# Set to true to show PP for personal best panel\n");
+    out.push_str(&format!("SHOW_PP_FOR_PERSONAL_BEST={}\n", map.get("SHOW_PP_FOR_PERSONAL_BEST").cloned().unwrap_or_else(|| "false".to_string())));
+    out.push_str("# Number of scores shown on leaderboard (1-100)\n");
+    out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
 
     std::fs::write(env_path, out)?;
     Ok(())
@@ -238,14 +287,27 @@ pub fn setup_config() -> Config {
 
         config.osu_api_key = osu_api_key.clone();
         config.osu_daily_api_key = osu_daily_key.clone();
-
-        if let Err(e) = write_dotenv(username.as_deref(), password_hash.as_deref(), osu_api_key.as_deref(), osu_daily_key.as_deref()) {
-            crate::logger::warn(&format!("Could not write .env file: {}", e));
-        } else {
-            crate::logger::success("Credentials and API keys saved to .env");
-        }
     } else {
         println!("Skipping credentials. You can set them anytime in the .env file.");
+    }
+
+    // 4. Leaderboard Settings
+    println!("\n--- Leaderboard Settings ---");
+    config.pp_leaderboard = prompt_bool("Show PP instead of Score on leaderboards? (y/N) [default: no]", false);
+    config.show_pp_for_personal_best = prompt_bool("Show PP for personal best score panel? (y/N) [default: no]", false);
+
+    if let Err(e) = write_dotenv(
+        config.osu_username.as_deref(),
+        config.osu_password.as_deref(),
+        config.osu_api_key.as_deref(),
+        config.osu_daily_api_key.as_deref(),
+        Some(config.pp_leaderboard),
+        Some(config.show_pp_for_personal_best),
+        Some(config.amount_of_scores_on_lb),
+    ) {
+        crate::logger::warn(&format!("Could not write .env file: {}", e));
+    } else {
+        crate::logger::success("Configuration saved to .env");
     }
 
     println!("\nConfiguration complete!\n");
@@ -272,8 +334,8 @@ fn prompt_bool(prompt: &str, default_val: bool) -> bool {
 }
 
 fn prompt_optional_string(prompt: &str) -> Option<String> {
-    let input = prompt_input(&format!("{}:", prompt));
-    if input.is_empty() || input.eq_ignore_ascii_case("none") {
+    let input = prompt_input(prompt);
+    if input.is_empty() {
         None
     } else {
         Some(input)
@@ -282,8 +344,8 @@ fn prompt_optional_string(prompt: &str) -> Option<String> {
 
 fn prompt_optional_path(prompt: &str) -> Option<String> {
     loop {
-        let input = prompt_input(&format!("{}:", prompt));
-        if input.is_empty() || input.eq_ignore_ascii_case("none") {
+        let input = prompt_input(prompt);
+        if input.is_empty() {
             return None;
         }
         let p = PathBuf::from(&input);
@@ -325,13 +387,22 @@ mod tests {
         std::env::set_var("OSU_PASSWORD", "secret123");
         std::env::set_var("OSU_API_KEY", "apikey_xyz");
         std::env::set_var("OSU_DAILY_API_KEY", "dailykey_123");
+        std::env::set_var("PP_LEADERBOARD", "true");
+        std::env::set_var("SHOW_PP_FOR_PERSONAL_BEST", "true");
+        std::env::set_var("AMOUNT_OF_SCORES_ON_LB", "75");
 
         let mut config = Config::default();
+        assert!(!config.pp_leaderboard);
+        assert!(!config.show_pp_for_personal_best);
+
         config.apply_env_overrides();
 
         assert_eq!(config.osu_username.as_deref(), Some("testuser"));
         assert_eq!(config.osu_api_key.as_deref(), Some("apikey_xyz"));
         assert_eq!(config.osu_daily_api_key.as_deref(), Some("dailykey_123"));
+        assert!(config.pp_leaderboard);
+        assert!(config.show_pp_for_personal_best);
+        assert_eq!(config.amount_of_scores_on_lb, 75);
 
         let expected_hash = format!("{:x}", md5::Md5::digest(b"secret123"));
         assert_eq!(config.osu_password.as_deref(), Some(expected_hash.as_str()));
@@ -340,5 +411,8 @@ mod tests {
         std::env::remove_var("OSU_PASSWORD");
         std::env::remove_var("OSU_API_KEY");
         std::env::remove_var("OSU_DAILY_API_KEY");
+        std::env::remove_var("PP_LEADERBOARD");
+        std::env::remove_var("SHOW_PP_FOR_PERSONAL_BEST");
+        std::env::remove_var("AMOUNT_OF_SCORES_ON_LB");
     }
 }

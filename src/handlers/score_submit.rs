@@ -8,7 +8,6 @@ use crate::types::mods::Mods;
 use crate::types::replay::Replay;
 use crate::types::score::Score;
 use crate::utils;
-use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -76,50 +75,6 @@ pub fn build_charts(
     );
 
     format!("{}\n{}\n{}", meta, beatmap_chart, overall_chart).into_bytes()
-}
-
-/// Attempts to find a local .osu file in Songs folder matching beatmap ID
-pub fn find_local_osu_file(songs_dir: &Path, beatmap_id: i64, beatmapset_id: i64) -> Option<String> {
-    if !songs_dir.exists() {
-        return None;
-    }
-
-    // Try set folder first (e.g. "12345 Artist - Title")
-    let entries = std::fs::read_dir(songs_dir).ok()?;
-    let prefix = format!("{} ", beatmapset_id);
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if folder_name.starts_with(&prefix) || folder_name == beatmapset_id.to_string() {
-                if let Some(content) = check_dir_for_beatmap_id(&path, beatmap_id) {
-                    return Some(content);
-                }
-            }
-        }
-    }
-
-    None
-}
-
-fn check_dir_for_beatmap_id(dir: &Path, beatmap_id: i64) -> Option<String> {
-    let target_needle = format!("BeatmapID:{}", beatmap_id);
-    let target_needle_spaced = format!("BeatmapID: {}", beatmap_id);
-
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("osu") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if content.contains(&target_needle) || content.contains(&target_needle_spaced) {
-                        return Some(content);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// Processes a native HTTP score submission from /osu-submit-modular-selector.php
@@ -226,24 +181,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
     let mut score = sub.score;
 
-    let file_content = if let Some(ref content) = bmap.file_content {
-        Some(content.clone())
-    } else {
-        let local_song = s.config.songs_folder().and_then(|p| find_local_osu_file(&p, bmap.beatmap_id, bmap.beatmapset_id));
-
-        if let Some(local_c) = local_song {
-            let db_conn = s.db.lock().await;
-            let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, &local_c);
-            Some(local_c)
-        } else {
-            let fetched = utils::fetch_osu_file(&s.http, bmap.beatmap_id).await;
-            if let Some(ref fetched_c) = fetched {
-                let db_conn = s.db.lock().await;
-                let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, fetched_c);
-            }
-            fetched
-        }
-    };
+    let file_content = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await;
 
     let Some(content) = file_content else {
         drop(s);

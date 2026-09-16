@@ -247,6 +247,144 @@ pub async fn fetch_osu_file(http: &reqwest::Client, beatmap_id: i64) -> Option<S
     resp.text().await.ok()
 }
 
+pub fn find_local_osu_file(songs_dir: &std::path::Path, beatmap_id: i64, beatmapset_id: i64) -> Option<String> {
+    if !songs_dir.exists() {
+        return None;
+    }
+
+    let entries = std::fs::read_dir(songs_dir).ok()?;
+    let prefix = format!("{} ", beatmapset_id);
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if folder_name.starts_with(&prefix) || folder_name == beatmapset_id.to_string() {
+                if let Some(content) = check_dir_for_beatmap_id(&path, beatmap_id) {
+                    return Some(content);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn check_dir_for_beatmap_id(dir: &std::path::Path, beatmap_id: i64) -> Option<String> {
+    let target_needle = format!("BeatmapID:{}", beatmap_id);
+    let target_needle_spaced = format!("BeatmapID: {}", beatmap_id);
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("osu") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if content.contains(&target_needle) || content.contains(&target_needle_spaced) {
+                        return Some(content);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub async fn get_or_fetch_beatmap_content(
+    http: &reqwest::Client,
+    db: &tokio::sync::Mutex<rusqlite::Connection>,
+    config: &crate::types::config::Config,
+    bmap: &crate::types::beatmap::Beatmap,
+) -> Option<String> {
+    if let Some(ref content) = bmap.file_content {
+        return Some(content.clone());
+    }
+
+    if let Some(songs_dir) = config.songs_folder() {
+        if let Some(local_c) = find_local_osu_file(&songs_dir, bmap.beatmap_id, bmap.beatmapset_id) {
+            let conn = db.lock().await;
+            let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
+            return Some(local_c);
+        }
+    }
+
+    if let Some(fetched_c) = fetch_osu_file(http, bmap.beatmap_id).await {
+        let conn = db.lock().await;
+        let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &fetched_c);
+        return Some(fetched_c);
+    }
+
+    None
+}
+
+pub async fn fetch_scores_from_bancho(
+    http: &reqwest::Client,
+    api_key: &str,
+    beatmap_id: i64,
+    mode: i32,
+    mods: Option<u32>,
+    limit: i32,
+) -> Option<Vec<crate::types::score::BanchoScore>> {
+    let mut url = reqwest::Url::parse("https://osu.ppy.sh/api/get_scores").ok()?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("k", api_key);
+        pairs.append_pair("b", &beatmap_id.to_string());
+        pairs.append_pair("m", &mode.to_string());
+        pairs.append_pair("limit", &limit.clamp(1, 100).to_string());
+        if let Some(m) = mods {
+            pairs.append_pair("mods", &m.to_string());
+        }
+    }
+
+    let resp = http.get(url).send().await.ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let arr = json.as_array()?;
+
+    let scores: Vec<crate::types::score::BanchoScore> = arr
+        .iter()
+        .filter_map(crate::types::score::BanchoScore::from_json)
+        .collect();
+
+    Some(scores)
+}
+
+pub fn calculate_bancho_score_pp(parsed_map: &rosu_pp::Beatmap, mode: i32, score: &mut crate::types::score::BanchoScore) {
+    let game_mode = match mode {
+        0 => rosu_pp::model::mode::GameMode::Osu,
+        1 => rosu_pp::model::mode::GameMode::Taiko,
+        2 => rosu_pp::model::mode::GameMode::Catch,
+        3 => rosu_pp::model::mode::GameMode::Mania,
+        _ => rosu_pp::model::mode::GameMode::Osu,
+    };
+
+    let mods_u32: u32 = score.enabled_mods.parse().unwrap_or(0);
+    let n300: u32 = score.count300.parse().unwrap_or(0);
+    let n100: u32 = score.count100.parse().unwrap_or(0);
+    let n50: u32 = score.count50.parse().unwrap_or(0);
+    let nkatu: u32 = score.countkatu.parse().unwrap_or(0);
+    let ngeki: u32 = score.countgeki.parse().unwrap_or(0);
+    let nmiss: u32 = score.countmiss.parse().unwrap_or(0);
+    let combo: u32 = score.maxcombo.parse().unwrap_or(0);
+
+    let result = rosu_pp::Performance::new(parsed_map)
+        .mode_or_ignore(game_mode)
+        .mods(mods_u32)
+        .n300(n300)
+        .n100(n100)
+        .n50(n50)
+        .n_katu(nkatu)
+        .n_geki(ngeki)
+        .misses(nmiss)
+        .combo(combo)
+        .calculate();
+
+    score.pp = Some(result.pp());
+}
+
 pub async fn get_rank_from_daily(http: &reqwest::Client, api_key: &str, pp: i32, mode: u8) -> Option<i32> {
     let url = format!("https://osudaily.net/api/pp.php?k={}&t=pp&v={}&m={}", api_key, pp, mode);
     let resp = http.get(&url).send().await.ok()?;
@@ -321,5 +459,36 @@ mod tests {
         // Mania SS & A
         assert_eq!(get_grade(3, 50, 0, 0, 50, 0, 0, 0, 100.0), "SS");
         assert_eq!(get_grade(3, 40, 10, 0, 40, 5, 5, 0, 92.0), "A");
+    }
+
+    #[test]
+    fn test_calculate_bancho_score_pp() {
+        let osu_content = "osu file format v14\n[General]\nMode: 0\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n[TimingPoints]\n0,500,4,1,0,100,1,0\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n";
+        let parsed_map = rosu_pp::Beatmap::from_bytes(osu_content.as_bytes()).unwrap();
+
+        let json = serde_json::json!({
+            "score_id": "1",
+            "username": "TopPlayer",
+            "score": "1000000",
+            "maxcombo": "1",
+            "count50": "0",
+            "count100": "0",
+            "count300": "1",
+            "countmiss": "0",
+            "countkatu": "0",
+            "countgeki": "0",
+            "perfect": "1",
+            "enabled_mods": "0",
+            "user_id": "100",
+            "date": "2024-01-01 00:00:00",
+            "replay_available": "1"
+        });
+
+        let mut b_score = crate::types::score::BanchoScore::from_json(&json).unwrap();
+        assert!(b_score.pp.is_none());
+
+        calculate_bancho_score_pp(&parsed_map, 0, &mut b_score);
+        assert!(b_score.pp.is_some());
+        assert!(b_score.pp.unwrap() > 0.0);
     }
 }

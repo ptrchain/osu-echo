@@ -228,44 +228,136 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     let current_mode = s.mode;
     let mut lb = Leaderboard::new();
 
-    let bmap = {
+    let mut bmap = {
         let db_conn = s.db.lock().await;
         db::get_beatmap_by_md5(&db_conn, &md5).unwrap_or(None)
     };
 
-    if let Some(ref bmap) = bmap {
-        lb.bmap = Some(bmap.clone());
-
-        let status = api_to_server_status(bmap.approved);
-        if VALID_LB_STATUSES.contains(&status) {
-            let db_conn = s.db.lock().await;
-            let scores = db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default();
-
-            let filtered: Vec<&Score> = if let Some(fm) = current_mode {
-                scores.iter().filter(|sc| Mods::from_bits_truncate(sc.mods).intersects(fm)).collect()
-            } else {
-                scores.iter().filter(|sc| !Mods::from_bits_truncate(sc.mods).intersects(Mods::RELAX | Mods::AUTOPILOT)).collect()
-            };
-
-            let mut sorted = filtered;
-            if pp_leaderboard || current_mode.is_some() {
-                sorted.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
-            } else {
-                sorted.sort_by_key(|a| std::cmp::Reverse(a.score));
-            }
-
-            if let Some(best) = sorted.first() {
-                let entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
-                lb.personal_score = Some(entry.clone());
-                lb.scores.push(entry);
+    if bmap.is_none() && !md5.is_empty() {
+        if let Some(ref api_key) = s.config.osu_api_key {
+            if let Some(fetched) = utils::fetch_beatmap_from_api(&s.http, api_key, &[("h", md5.clone())]).await {
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, &fetched);
+                bmap = Some(fetched);
             }
         }
-    } else if !md5.is_empty() {
+    }
+
+    let Some(bmap) = bmap else {
+        utils::log_success(&format!("handled map of setid: {}", setid));
+        return Response::new(b"0|false".to_vec());
+    };
+
+    lb.bmap = Some(bmap.clone());
+
+    let status = api_to_server_status(bmap.approved);
+    if !VALID_LB_STATUSES.contains(&status) {
+        utils::log_success(&format!("handled map of setid: {}", setid));
+        return Response::new(lb.as_binary(amount, show_pp_pb));
+    }
+
+    let is_global = rank_type == LeaderboardTypes::Top || rank_type == LeaderboardTypes::Mods;
+
+    if is_global {
         if let Some(ref api_key) = s.config.osu_api_key {
-            if let Some(bmap) = utils::fetch_beatmap_from_api(&s.http, api_key, &[("h", md5.clone())]).await {
-                let db_conn = s.db.lock().await;
-                let _ = db::insert_beatmap(&db_conn, &bmap);
-                lb.bmap = Some(bmap);
+            let mods_filter = if rank_type == LeaderboardTypes::Mods {
+                Some(mods_val)
+            } else {
+                None
+            };
+
+            let bancho_scores = utils::fetch_scores_from_bancho(
+                &s.http,
+                api_key,
+                bmap.beatmap_id,
+                mode,
+                mods_filter,
+                amount,
+            )
+            .await;
+
+            if let Some(mut b_scores) = bancho_scores {
+                if pp_leaderboard || current_mode.is_some() {
+                    if let Some(content) = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await {
+                        if let Ok(parsed_map) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
+                            for sc in &mut b_scores {
+                                utils::calculate_bancho_score_pp(&parsed_map, mode, sc);
+                            }
+                        }
+                    }
+                    b_scores.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+                } else {
+                    b_scores.sort_by_key(|a| std::cmp::Reverse(a.score.parse::<i64>().unwrap_or(0)));
+                }
+
+                for sc in b_scores {
+                    lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard || current_mode.is_some()));
+                }
+            }
+        }
+    } else if rank_type == LeaderboardTypes::Local {
+        let db_conn = s.db.lock().await;
+        let scores = db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default();
+        drop(db_conn);
+
+        let filtered: Vec<&Score> = if let Some(fm) = current_mode {
+            scores.iter().filter(|sc| Mods::from_bits_truncate(sc.mods).intersects(fm)).collect()
+        } else {
+            scores.iter().filter(|sc| !Mods::from_bits_truncate(sc.mods).intersects(Mods::RELAX | Mods::AUTOPILOT)).collect()
+        };
+
+        let mut sorted = filtered;
+        if pp_leaderboard || current_mode.is_some() {
+            sorted.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            sorted.sort_by_key(|a| std::cmp::Reverse(a.score));
+        }
+
+        for sc in &sorted {
+            lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode));
+        }
+    }
+
+    // Personal score retrieval & integration
+    let local_scores = {
+        let db_conn = s.db.lock().await;
+        db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default()
+    };
+
+    let mut personal_candidates: Vec<&Score> = if let Some(fm) = current_mode {
+        local_scores.iter().filter(|sc| Mods::from_bits_truncate(sc.mods).intersects(fm)).collect()
+    } else {
+        local_scores.iter().filter(|sc| !Mods::from_bits_truncate(sc.mods).intersects(Mods::RELAX | Mods::AUTOPILOT)).collect()
+    };
+
+    if rank_type == LeaderboardTypes::Mods {
+        personal_candidates.retain(|sc| sc.mods == mods_val);
+    }
+
+    if pp_leaderboard || current_mode.is_some() {
+        personal_candidates.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+    } else {
+        personal_candidates.sort_by_key(|a| std::cmp::Reverse(a.score));
+    }
+
+    if let Some(best) = personal_candidates.first() {
+        let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
+        lb.personal_score = Some(personal_entry.clone());
+
+        if is_global {
+            let entry_for_list = if pp_leaderboard || current_mode.is_some() {
+                personal_entry
+            } else {
+                best.as_leaderboard_entry(false, false, current_mode)
+            };
+
+            lb.scores.push(entry_for_list);
+            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
+
+            if let Some(pos) = lb.scores.iter().position(|s| s.score_id == lb.personal_score.as_ref().unwrap().score_id && s.username == player_name) {
+                if pos >= 100 {
+                    lb.scores.remove(pos);
+                }
             }
         }
     }
@@ -435,5 +527,250 @@ mod tests {
         let s = shared_state.read().await;
         let p = s.player.as_ref().unwrap();
         assert_eq!(p.playcount, 1);
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_local_flow() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Bob").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "fedcba9876543210fedcba9876543210".to_string();
+        bmap.beatmap_id = 1234;
+        bmap.beatmapset_id = 5678;
+        bmap.approved = 1;
+        bmap.title = "Test Song".to_string();
+        bmap.artist = "Test Artist".to_string();
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let score = Score {
+            mode: 0,
+            md5: bmap.file_md5.clone(),
+            name: "Bob".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1_234_567,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(250.0),
+            replay_md5: None,
+            scoreid: Some(101),
+            replay_frames: Some("fake_frames".to_string()),
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &score, "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Bob".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), bmap.file_md5.clone());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "0".to_string()); // Local
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        let resp_str = String::from_utf8(resp.body).unwrap();
+        // Bancho format check: 2|false|1234|5678|...
+        assert!(resp_str.starts_with("2|false|1234|5678|1\n"));
+        assert!(resp_str.contains("Test Artist|Test Song"));
+        assert!(resp_str.contains("Bob"));
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_unranked_map() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Charlie").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "unranked_md5_hash_1234567890abcdef".to_string();
+        bmap.beatmap_id = 4321;
+        bmap.beatmapset_id = 8765;
+        bmap.approved = 0; // pending / unranked
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Charlie".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), bmap.file_md5.clone());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "1".to_string()); // Global
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        let resp_str = String::from_utf8(resp.body).unwrap();
+        assert_eq!(resp_str, "0|false");
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_selected_mods_filtering() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Dave").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "mods_test_md5_hash_1234567890abcdef".to_string();
+        bmap.beatmap_id = 777;
+        bmap.beatmapset_id = 888;
+        bmap.approved = 1;
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        // Insert score with HD (8)
+        let score_hd = Score {
+            mode: 0,
+            md5: bmap.file_md5.clone(),
+            name: "Dave".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1_000_000,
+            max_combo: 500,
+            perfect: true,
+            mods: 8,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(300.0),
+            replay_md5: None,
+            scoreid: Some(201),
+            replay_frames: Some("frames".to_string()),
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &score_hd, "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Dave".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Query with HR (16) on Selected Mods (v=2) - should not match HD score
+        let mut params_hr = std::collections::HashMap::new();
+        params_hr.insert("c".to_string(), bmap.file_md5.clone());
+        params_hr.insert("m".to_string(), "0".to_string());
+        params_hr.insert("v".to_string(), "2".to_string());
+        params_hr.insert("mods".to_string(), "16".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp_hr = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params_hr, &hyper::Method::GET, &headers, &[]).await;
+        let str_hr = String::from_utf8(resp_hr.body).unwrap();
+        // Should have 0 scores in count
+        assert!(str_hr.starts_with("2|false|777|888|0\n"));
+
+        // Query with HD (8) on Selected Mods (v=2) - should match!
+        let mut params_hd = std::collections::HashMap::new();
+        params_hd.insert("c".to_string(), bmap.file_md5.clone());
+        params_hd.insert("m".to_string(), "0".to_string());
+        params_hd.insert("v".to_string(), "2".to_string());
+        params_hd.insert("mods".to_string(), "8".to_string());
+
+        let resp_hd = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params_hd, &hyper::Method::GET, &headers, &[]).await;
+        let str_hd = String::from_utf8(resp_hd.body).unwrap();
+        assert!(str_hd.starts_with("2|false|777|888|1\n"));
+        assert!(str_hd.contains("Dave"));
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_binary_generation_with_bancho_scores() {
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.beatmap_id = 1001;
+        bmap.beatmapset_id = 2002;
+        bmap.approved = 1;
+        bmap.title = "Freedom Dive".to_string();
+        bmap.artist = "xi".to_string();
+
+        let mut lb = Leaderboard::new();
+        lb.bmap = Some(bmap);
+
+        let json_bancho = serde_json::json!({
+            "score_id": "999999",
+            "username": "Cookiezi",
+            "score": "9999999",
+            "maxcombo": "2000",
+            "count50": "0",
+            "count100": "0",
+            "count300": "1500",
+            "countmiss": "0",
+            "countkatu": "0",
+            "countgeki": "0",
+            "perfect": "1",
+            "enabled_mods": "24",
+            "user_id": "124",
+            "date": "2023-01-01 00:00:00",
+            "replay_available": "1",
+            "pp": "800.0"
+        });
+
+        let b_score = crate::types::score::BanchoScore::from_json(&json_bancho).unwrap();
+        let bancho_entry = b_score.as_leaderboard_entry(true);
+
+        let local_entry = crate::types::score::LeaderboardEntry {
+            score_id: -1,
+            username: "LocalPlayer".to_string(),
+            score: 750,
+            maxcombo: 1800,
+            count50: 0,
+            count100: 5,
+            count300: 1495,
+            countmiss: 0,
+            countkatu: 0,
+            countgeki: 0,
+            perfect: 1,
+            enabled_mods: 0,
+            user_id: 2,
+            time: 1700000000,
+            replay_available: 1,
+        };
+
+        lb.personal_score = Some(local_entry.clone());
+        lb.scores.push(bancho_entry);
+        lb.scores.push(local_entry);
+
+        lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
+
+        let bin = lb.as_binary(100, false);
+        let s = String::from_utf8(bin).unwrap();
+        let lines: Vec<&str> = s.lines().collect();
+
+        // Line 0: status header
+        assert_eq!(lines[0], "2|false|1001|2002|2");
+        // Line 1: offset
+        assert_eq!(lines[1], "0");
+        // Line 2: song title
+        assert_eq!(lines[2], "[bold:0,size:20]xi|Freedom Dive");
+        // Line 3: rating
+        assert_eq!(lines[3], "10.0");
+        // Line 4: personal score line (LocalPlayer should be rank 2)
+        assert!(lines[4].contains("LocalPlayer"));
+        assert!(lines[4].contains("|2|"));
+        // Line 5: first score on leaderboard (Cookiezi at rank 1)
+        assert!(lines[5].contains("Cookiezi"));
+        assert!(lines[5].contains("|1|"));
+        // Line 6: second score on leaderboard (LocalPlayer at rank 2)
+        assert!(lines[6].contains("LocalPlayer"));
+        assert!(lines[6].contains("|2|"));
     }
 }
