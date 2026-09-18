@@ -283,7 +283,7 @@ pub fn write_dotenv(
     Ok(())
 }
 
-pub fn setup_config() -> Config {
+pub fn setup_config(data_dir: &Path) -> Config {
     let mut config = Config::default();
 
     println!("\n=== osu! Local Server Quick Setup ===");
@@ -355,6 +355,31 @@ pub fn setup_config() -> Config {
     println!("\n--- Leaderboard Settings ---");
     config.pp_leaderboard = prompt_bool("Show PP instead of Score on leaderboards? (y/N) [default: no]", false);
     config.show_pp_for_personal_best = prompt_bool("Show PP for personal best score panel? (y/N) [default: no]", false);
+
+    #[cfg(target_os = "windows")]
+    {
+        println!("\n--- HTTPS Certificate Setup (-devserver localhost) ---");
+        println!("osu! requires a trusted certificate to connect using '-devserver localhost'.");
+        let install_cert = prompt_bool("Install & trust local certificate for osu! client? (Y/n) [default: yes]", true);
+        if install_cert {
+            match crate::server::tls::get_or_create_certificates(data_dir) {
+                Ok(paths) => {
+                    if let Err(e) = crate::server::tls::install_windows_trust(&paths.cert_der) {
+                        crate::logger::warn(&format!("Failed to install certificate: {}", e));
+                    }
+                }
+                Err(e) => {
+                    crate::logger::warn(&format!("Failed to generate certificate: {}", e));
+                }
+            }
+        } else {
+            println!("Skipping certificate installation. You can run with '--trust-cert' later.");
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = data_dir;
+    }
 
     if let Err(e) = write_dotenv(
         config.osu_username.as_deref(),
@@ -456,43 +481,40 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
         };
 
         if event::poll(poll_timeout).unwrap_or(false) {
-            match event::read() {
-                Ok(Event::Key(key)) => {
-                    if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
-                        continue;
-                    }
-
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
-                    {
-                        drop(_guard);
-                        println!();
-                        return None;
-                    }
-
-                    match key.code {
-                        KeyCode::Enter => {
-                            break;
-                        }
-                        KeyCode::Backspace => {
-                            password.pop();
-                            last_rendered_state.clear();
-                        }
-                        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
-                        | KeyCode::Tab => {
-                            if !password.is_empty() {
-                                reveal_until = Some(Instant::now() + Duration::from_millis(1500));
-                                last_rendered_state.clear();
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            password.push(c);
-                            last_rendered_state.clear();
-                        }
-                        _ => {}
-                    }
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+                    continue;
                 }
-                _ => {}
+
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
+                {
+                    drop(_guard);
+                    println!();
+                    return None;
+                }
+
+                match key.code {
+                    KeyCode::Enter => {
+                        break;
+                    }
+                    KeyCode::Backspace => {
+                        password.pop();
+                        last_rendered_state.clear();
+                    }
+                    KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
+                    | KeyCode::Tab => {
+                        if !password.is_empty() {
+                            reveal_until = Some(Instant::now() + Duration::from_millis(1500));
+                            last_rendered_state.clear();
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        password.push(c);
+                        last_rendered_state.clear();
+                    }
+                    _ => {}
+                }
             }
         }
     }

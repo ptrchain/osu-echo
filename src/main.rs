@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config
         }
         None => {
-            let config = types::config::setup_config();
+            let config = types::config::setup_config(&data_dir);
             db::save_config(&conn, &config)?;
             config
         }
