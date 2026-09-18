@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "osu-localserver"
-version = "1.6.3"
+version = "1.0.0"
 dependencies = [
  "base64",
  "bitflags 2.13.2",

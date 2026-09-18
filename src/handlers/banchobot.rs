@@ -709,10 +709,11 @@ pub async fn handle_config(state: &Arc<RwLock<AppState>>, target: &str) {
         let s = state.read().await;
         format!(
             "Server Config Summary:\n\
-            Version: 1.6.3 | PP Leaderboard: {}\n\
+            Version: {} | PP Leaderboard: {}\n\
             Leaderboard Size: {} | Show PP for PB: {}\n\
             Recent Feed (#recent): {} | Auto Update: {}\n\
-            osu! API Key Configured: {}",
+            osu! Legacy API Key Configured: {}",
+            crate::VERSION,
             s.config.pp_leaderboard,
             s.config.amount_of_scores_on_lb,
             s.config.show_pp_for_personal_best,

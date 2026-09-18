@@ -257,7 +257,7 @@ pub fn write_dotenv(
     out.push_str(&format!("OSU_USERNAME={}\n", map.get("OSU_USERNAME").cloned().unwrap_or_default()));
     out.push_str(&format!("OSU_PASSWORD_HASH={}\n\n", map.get("OSU_PASSWORD_HASH").cloned().unwrap_or_default()));
 
-    out.push_str("# External API Keys\n");
+    out.push_str("# External API Keys (osu! legacy API v1 & osu!daily)\n");
     out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
     out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
 
@@ -343,8 +343,8 @@ pub fn setup_config(data_dir: &Path) -> Config {
             config.osu_password = password_hash.clone();
         }
 
-        let osu_api_key = prompt_optional_string("osu! API key (https://old.ppy.sh/p/api/, or Enter to skip)");
-        let osu_daily_key = prompt_optional_string("osu! daily API key (https://osudaily.net/api/, or Enter to skip)");
+        let osu_api_key = prompt_optional_string("osu! legacy API key (v1, https://old.ppy.sh/p/api/, or Enter to skip)");
+        let osu_daily_key = prompt_optional_string("osu! daily API key (https://osudaily.net/api.php, or Enter to skip)");
 
         config.osu_api_key = osu_api_key.clone();
         config.osu_daily_api_key = osu_daily_key.clone();

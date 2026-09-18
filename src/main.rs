@@ -23,7 +23,7 @@ use server::response::Response;
 use server::router::{match_route, RouteMatch};
 use state::AppState;
 
-const VERSION: &str = "1.6.3";
+pub const VERSION: &str = "1.0";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

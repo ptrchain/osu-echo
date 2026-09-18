@@ -1,6 +1,6 @@
 [package]
 name = "osu-localserver"
-version = "1.6.3"
+version = "1.0.0"
 edition = "2021"
 description = "A local osu! private server written in Rust"
 
