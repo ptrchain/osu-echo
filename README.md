@@ -41,9 +41,9 @@ cargo run --release
 To connect your osu! client to the local server:
 
 1. Right-click your `osu!.exe` shortcut and select Properties.
-2. In the Target field, add `-devserver 127.0.0.1:5000` to the end.
+2. In the Target field, add `-devserver localhost` to the end.
    Example:
-   `"C:\Games\osu!\osu!.exe" -devserver 127.0.0.1:5000`
+   `"C:\Games\osu!\osu!.exe" -devserver localhost`
 3. Launch osu! using the shortcut.
 4. Log in with any username and password. The server will create your profile automatically.
 
