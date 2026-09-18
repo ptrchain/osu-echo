@@ -22,8 +22,14 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
     let is_pm = is_tillerino || is_banchobot || !target.starts_with('#');
     let reply_target = if is_pm { player_name.to_string() } else { target.to_string() };
 
-    if let Some(np_info) = parse_np_message(message) {
-        tillerino::handle_np(&state, player_name, &reply_target, np_info).await;
+    if !is_banchobot {
+        if let Some(np_info) = parse_np_message(message) {
+            tillerino::handle_np(&state, player_name, &reply_target, np_info).await;
+            return;
+        }
+    }
+
+    if trimmed.starts_with('\x01') {
         return;
     }
 
@@ -50,6 +56,11 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
 
     if is_tillerino {
         tillerino::handle_command(&state, player_name, &reply_target, &cmd, args).await;
+        return;
+    }
+
+    if is_banchobot {
+        banchobot::handle_command(&state, player_name, &reply_target, &cmd, args).await;
         return;
     }
 
@@ -190,6 +201,11 @@ mod tests {
             let packets = packets::split_packets(&q);
             assert!(!packets.is_empty());
             assert_eq!(packets[0].id, packets::PacketId::ChoSendMessage as u16);
+            let mut r = packets::PacketReader::new(packets[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(!msg.contains("/np : Tillerino PP calculations for current song"));
+            assert!(msg.contains("BanchoBot Commands:"));
         }
 
         handle_chat_message(shared_state.clone(), "PlayerTest", "!mode rx", "#osu").await;
@@ -452,6 +468,55 @@ mod tests {
             let msg = r.read_string().unwrap();
             assert!(msg.contains("FirstMap"), "Must switch back to first map via /np");
             assert_eq!(s.last_np_map.as_ref().unwrap().beatmap_id, 1001);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_banchobot_does_not_execute_tillerino_np() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PlayerBancho").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("PlayerBancho".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Sending /np to BanchoBot should NOT invoke Tillerino
+        handle_chat_message(shared_state.clone(), "PlayerBancho", "/np", "BanchoBot").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            if !pkts.is_empty() {
+                let mut r = packets::PacketReader::new(pkts[0].payload);
+                let sender = r.read_string().unwrap();
+                assert_ne!(sender, "Tillerino", "Tillerino must not respond to BanchoBot messages");
+            }
+        }
+
+        // Sending CTCP action to BanchoBot should also NOT invoke Tillerino
+        let action = "\x01ACTION is listening to [https://osu.ppy.sh/b/1001 Artist - Title [Diff]]\x01";
+        handle_chat_message(shared_state.clone(), "PlayerBancho", action, "BanchoBot").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            assert!(q.is_empty(), "BanchoBot should not respond to unhandled CTCP actions");
+        }
+
+        // Sending !r to BanchoBot invokes BanchoBot's recent command (sender is BanchoBot)
+        handle_chat_message(shared_state.clone(), "PlayerBancho", "!r", "BanchoBot").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let sender = r.read_string().unwrap();
+            assert_eq!(sender, "BanchoBot", "!r in PM to BanchoBot should be handled by BanchoBot");
         }
     }
 }

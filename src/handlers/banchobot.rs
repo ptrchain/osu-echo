@@ -59,7 +59,6 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
 
     let msg = format!(
         "BanchoBot Commands:\n\
-        /np : Tillerino PP calculations for current song\n\
         {p}status / {p}rank / {p}love / {p}unrank [id] : Manage beatmap status\n\
         {p}recent / {p}r : Show your recent play\n\
         {p}tops / {p}t : Show top 5 plays\n\
