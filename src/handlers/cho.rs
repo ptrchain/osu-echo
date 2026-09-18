@@ -447,7 +447,7 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     }
 
     body.extend_from_slice(&packets::user_id(player.userid));
-    body.extend_from_slice(&packets::notification("Welcome to the local osu! server (Rust edition)!\nSave replays to submit scores."));
+    body.extend_from_slice(&packets::notification("Welcome to local bancho! (^-^)/"));
     body.extend_from_slice(&packets::protocol_version(19));
     body.extend_from_slice(&packets::bancho_privs(player.bancho_privs));
     body.extend_from_slice(&packets::friends_list(&friend_ids));
@@ -459,11 +459,22 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         }
     }
 
+    let enable_recent = {
+        let s = state.read().await;
+        s.config.enable_recent_channel
+    };
+
     for (cname, cdesc) in CHANNELS {
+        if *cname == "#recent" && !enable_recent {
+            continue;
+        }
         body.extend_from_slice(&packets::channel_info(cname, cdesc, 1));
     }
     body.extend_from_slice(&packets::channel_info_end());
     for (cname, _) in CHANNELS {
+        if *cname == "#recent" && !enable_recent {
+            continue;
+        }
         body.extend_from_slice(&packets::channel_join(cname));
     }
 
@@ -578,6 +589,10 @@ mod tests {
         assert!(presence_user_ids.contains(&3), "Presence must include BanchoBot");
         assert!(presence_user_ids.contains(&4), "Presence must include Tillerino");
 
+        let notif_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoNotification as u16).expect("Notification packet present");
+        let mut r_notif = packets::PacketReader::new(notif_pkt.payload);
+        assert_eq!(r_notif.read_string().expect("notif string"), "Welcome to local bancho! (^-^)/");
+
         let last_msg_pkt = pkts.iter().rev().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Welcome message packet present");
         let mut r = packets::PacketReader::new(last_msg_pkt.payload);
         let client = r.read_string().expect("client");
@@ -588,6 +603,30 @@ mod tests {
         assert_eq!(target, "#osu");
         assert_eq!(uid, -1);
         assert!(msg.contains("BanchoBot and Tillerino are online"));
+    }
+
+    #[tokio::test]
+    async fn test_login_recent_channel_toggle() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let mut config = crate::types::config::Config::default();
+        config.enable_recent_channel = false;
+        let mut app_state = AppState::new(conn, config);
+        app_state.pending_login_name = Some("NoRecentTester".to_string());
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let (body, status) = login(shared_state, b"").await;
+        assert_eq!(status, "success");
+
+        let pkts = packets::split_packets(&body);
+        for p in &pkts {
+            if p.id == packets::PacketId::ChoChannelInfo as u16 || p.id == packets::PacketId::ChoChannelJoinSuccess as u16 {
+                let mut reader = packets::PacketReader::new(p.payload);
+                let cname = reader.read_string().expect("cname");
+                assert_ne!(cname, "#recent", "#recent channel must NOT be joined or listed when disabled");
+            }
+        }
     }
 
     #[tokio::test]

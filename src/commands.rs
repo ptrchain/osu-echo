@@ -136,7 +136,7 @@ async fn cmd_recalc(state: Arc<RwLock<AppState>>) -> Option<Vec<u8>> {
 
     let mut s = state.write().await;
     if let Some(ref mut p) = s.player {
-        p.queue.extend_from_slice(&packets::notification("Stats will be updated once recalculation is finished!"));
+        p.queue.extend_from_slice(&packets::notification("Stats recalculation started."));
     }
     None
 }
@@ -154,7 +154,7 @@ async fn cmd_wipe(state: Arc<RwLock<AppState>>) -> Option<Vec<u8>> {
 
     let mut s = state.write().await;
     if let Some(ref mut p) = s.player {
-        p.queue.extend_from_slice(&packets::notification("Profile was wiped!"));
+        p.queue.extend_from_slice(&packets::notification("Profile wiped."));
     }
     None
 }
@@ -172,7 +172,7 @@ async fn cmd_avatar(state: Arc<RwLock<AppState>>, args: Vec<String>) -> Option<V
 
     let mut s = state.write().await;
     if let Some(ref mut p) = s.player {
-        p.queue.extend_from_slice(&packets::notification(&format!("avatar was changed to: {}\nrestart your game for image to show!", img)));
+        p.queue.extend_from_slice(&packets::notification("Avatar updated. Restart osu! to apply."));
     }
     None
 }

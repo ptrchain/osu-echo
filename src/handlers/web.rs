@@ -55,7 +55,7 @@ async fn score_sub(state: Arc<RwLock<AppState>>, method: &hyper::Method, headers
     if *method != hyper::Method::POST {
         let mut s = state.write().await;
         if let Some(ref mut p) = s.player {
-            p.queue.extend_from_slice(&packets::notification("Score submission requires POST. Reconnect using -devserver localhost."));
+            p.queue.extend_from_slice(&packets::notification("Score submission requires POST (-devserver localhost)."));
         }
         return Response::new(b"error: no".to_vec());
     }
@@ -171,21 +171,21 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             s.invalid_mods = Mods::INVALID_RELAX;
             stats_need_update = true;
             if let Some(ref mut p) = s.player {
-                p.queue.extend_from_slice(&packets::notification("Mode was switched to rx!"));
+                p.queue.extend_from_slice(&packets::notification("Switched to Relax mode."));
             }
         } else if mods.contains(Mods::AUTOPILOT) && s.mode != Some(Mods::AUTOPILOT) {
             s.mode = Some(Mods::AUTOPILOT);
             s.invalid_mods = Mods::INVALID_AUTOPILOT;
             stats_need_update = true;
             if let Some(ref mut p) = s.player {
-                p.queue.extend_from_slice(&packets::notification("Mode was switched to ap!"));
+                p.queue.extend_from_slice(&packets::notification("Switched to Autopilot mode."));
             }
         } else if !mods.intersects(Mods::RELAX | Mods::AUTOPILOT) && s.mode.is_some() {
             s.mode = None;
             s.invalid_mods = Mods::INVALID_STANDARD;
             stats_need_update = true;
             if let Some(ref mut p) = s.player {
-                p.queue.extend_from_slice(&packets::notification("Mode was switched to vanilla!"));
+                p.queue.extend_from_slice(&packets::notification("Switched to Standard mode."));
             }
         }
     }
@@ -574,6 +574,20 @@ mod tests {
         let s = shared_state.read().await;
         let p = s.player.as_ref().unwrap();
         assert_eq!(p.playcount, 1);
+
+        let pkts = packets::split_packets(&p.queue);
+        let notif_pkt = pkts.iter().find(|pkt| pkt.id == packets::PacketId::ChoNotification as u16).expect("Score submission notification");
+        let mut r = packets::PacketReader::new(notif_pkt.payload);
+        let msg = r.read_string().expect("notif message");
+        assert!(msg.starts_with("Score submitted"), "Notification must be minimal score submitted format");
+        assert!(!msg.contains('\n'), "Notification must be a clean single line");
+
+        let recent_msg_pkt = pkts.iter().find(|pkt| pkt.id == packets::PacketId::ChoSendMessage as u16).expect("#recent message");
+        let mut r = packets::PacketReader::new(recent_msg_pkt.payload);
+        let _client = r.read_string().unwrap();
+        let _content = r.read_string().unwrap();
+        let target = r.read_string().unwrap();
+        assert_eq!(target, "#recent");
     }
 
     #[tokio::test]

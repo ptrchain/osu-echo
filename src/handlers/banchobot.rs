@@ -39,6 +39,7 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "recalc" => handle_recalc(state, player_name, reply_target).await,
         "wipe" => handle_wipe(state, player_name, reply_target).await,
         "avatar" => handle_avatar(state, player_name, reply_target, args).await,
+        "recentfeed" | "recentchannel" => handle_recent_channel_toggle(state, reply_target, args).await,
         "config" => handle_config(state, reply_target).await,
         "roll" => handle_roll(state, player_name, reply_target, args).await,
         "mode" => handle_mode(state, player_name, reply_target, args).await,
@@ -67,6 +68,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}leaderboard / {p}lb : Show top scores on current map\n\
         {p}friend <add/remove/list/sync> : Manage friends\n\
         {p}mode <vn/rx/ap> : Switch game mode\n\
+        {p}recentfeed [on/off] : Toggle #recent score channel feed\n\
         {p}country / {p}flag <code> : Set country flag (e.g. {p}country DE, {p}country US, {p}country AU)\n\
         {p}roll [max] : Roll a random number (default 100)\n\
         {p}recalc : Recalculate all profile stats\n\
@@ -673,6 +675,35 @@ pub async fn handle_avatar(state: &Arc<RwLock<AppState>>, player_name: &str, tar
     reply(state, target, &format!("Avatar updated to: {}\nRestart your osu! client for the changes to show!", url)).await;
 }
 
+pub async fn handle_recent_channel_toggle(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str]) {
+    let new_val = if let Some(arg) = args.first() {
+        match arg.to_lowercase().as_str() {
+            "on" | "true" | "1" | "enable" => true,
+            "off" | "false" | "0" | "disable" => false,
+            _ => {
+                reply(state, target, "Usage: !recentfeed <on / off / toggle>").await;
+                return;
+            }
+        }
+    } else {
+        let current = state.read().await.config.enable_recent_channel;
+        !current
+    };
+
+    {
+        let mut s = state.write().await;
+        s.config.enable_recent_channel = new_val;
+        let db_conn = s.db.lock().await;
+        let _ = db::save_config(&db_conn, &s.config);
+    }
+
+    if new_val {
+        reply(state, target, "Recent score feed (#recent) is now enabled.").await;
+    } else {
+        reply(state, target, "Recent score feed (#recent) is now disabled.").await;
+    }
+}
+
 pub async fn handle_config(state: &Arc<RwLock<AppState>>, target: &str) {
     let msg = {
         let s = state.read().await;
@@ -680,10 +711,12 @@ pub async fn handle_config(state: &Arc<RwLock<AppState>>, target: &str) {
             "Server Config Summary:\n\
             Version: 1.6.3 | PP Leaderboard: {}\n\
             Leaderboard Size: {} | Show PP for PB: {}\n\
-            Auto Update: {} | osu! API Key Configured: {}",
+            Recent Feed (#recent): {} | Auto Update: {}\n\
+            osu! API Key Configured: {}",
             s.config.pp_leaderboard,
             s.config.amount_of_scores_on_lb,
             s.config.show_pp_for_personal_best,
+            s.config.enable_recent_channel,
             s.config.auto_update,
             s.config.osu_api_key.is_some()
         )

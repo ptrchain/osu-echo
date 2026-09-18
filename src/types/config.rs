@@ -17,11 +17,17 @@ pub struct Paths {
     pub screenshots: Option<String>,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub paths: Paths,
     pub pp_leaderboard: bool,
     pub ping_user_when_recent_score: bool,
+    #[serde(default = "default_true")]
+    pub enable_recent_channel: bool,
     pub menu_icon: MenuIcon,
     pub command_prefix: String,
     pub show_pp_for_personal_best: bool,
@@ -42,6 +48,7 @@ impl Default for Config {
             paths: Paths { osu_path: None, songs: None, replay: None, screenshots: None },
             pp_leaderboard: false,
             ping_user_when_recent_score: false,
+            enable_recent_channel: true,
             menu_icon: MenuIcon { image_link: None, click_link: None },
             command_prefix: "!".to_string(),
             show_pp_for_personal_best: false,
@@ -128,6 +135,15 @@ impl Config {
         if let Ok(val) = std::env::var("AMOUNT_OF_SCORES_ON_LB") {
             if let Ok(amount) = val.trim().parse::<i32>() {
                 self.amount_of_scores_on_lb = amount.clamp(1, 100);
+            }
+        }
+
+        if let Ok(val) = std::env::var("ENABLE_RECENT_CHANNEL").or_else(|_| std::env::var("RECENT_CHANNEL")) {
+            let trimmed = val.trim().to_lowercase();
+            if trimmed == "true" || trimmed == "1" || trimmed == "yes" {
+                self.enable_recent_channel = true;
+            } else if trimmed == "false" || trimmed == "0" || trimmed == "no" {
+                self.enable_recent_channel = false;
             }
         }
 
@@ -424,10 +440,12 @@ mod tests {
         std::env::set_var("PP_LEADERBOARD", "true");
         std::env::set_var("SHOW_PP_FOR_PERSONAL_BEST", "true");
         std::env::set_var("AMOUNT_OF_SCORES_ON_LB", "75");
+        std::env::set_var("ENABLE_RECENT_CHANNEL", "false");
 
         let mut config = Config::default();
         assert!(!config.pp_leaderboard);
         assert!(!config.show_pp_for_personal_best);
+        assert!(config.enable_recent_channel);
 
         config.apply_env_overrides();
 
@@ -437,6 +455,7 @@ mod tests {
         assert!(config.pp_leaderboard);
         assert!(config.show_pp_for_personal_best);
         assert_eq!(config.amount_of_scores_on_lb, 75);
+        assert!(!config.enable_recent_channel);
 
         let expected_hash = format!("{:x}", md5::Md5::digest(b"secret123"));
         assert_eq!(config.osu_password.as_deref(), Some(expected_hash.as_str()));
@@ -448,5 +467,6 @@ mod tests {
         std::env::remove_var("PP_LEADERBOARD");
         std::env::remove_var("SHOW_PP_FOR_PERSONAL_BEST");
         std::env::remove_var("AMOUNT_OF_SCORES_ON_LB");
+        std::env::remove_var("ENABLE_RECENT_CHANNEL");
     }
 }

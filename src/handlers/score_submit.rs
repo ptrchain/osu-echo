@@ -84,7 +84,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     if sub.score.name != player.name {
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Can't submit another person's replay!"));
+            p.queue.extend_from_slice(&packets::notification("Cannot submit another player's replay."));
         }
         return Err("Player mismatch".to_string());
     }
@@ -118,17 +118,12 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Invalid mods to submit!"));
+            p.queue.extend_from_slice(&packets::notification("Cannot submit: invalid mods."));
         }
         return Err("Invalid mods".to_string());
     }
 
     if !sub.passed {
-        drop(s);
-        let mut s_write = state.write().await;
-        if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Can't submit failed plays!"));
-        }
         return Err("Failed play".to_string());
     }
 
@@ -136,7 +131,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Invalid game mode!"));
+            p.queue.extend_from_slice(&packets::notification("Cannot submit: invalid game mode."));
         }
         return Err("Invalid game mode".to_string());
     }
@@ -163,7 +158,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Map has to exist on bancho!"));
+            p.queue.extend_from_slice(&packets::notification("Beatmap must exist on Bancho to submit."));
         }
         return Err("Map not found on bancho".to_string());
     };
@@ -173,7 +168,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Map can't be unranked!"));
+            p.queue.extend_from_slice(&packets::notification("Cannot submit unranked beatmap."));
         }
         return Err("Unranked map".to_string());
     }
@@ -186,7 +181,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Can't seem to get .osu file for this map!"));
+            p.queue.extend_from_slice(&packets::notification("Failed to retrieve beatmap file (.osu)."));
         }
         return Err("Missing .osu file".to_string());
     };
@@ -231,6 +226,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     let player_name = player.name.clone();
     let mode = s.mode;
     let ping_recent = s.config.ping_user_when_recent_score;
+    let enable_recent = s.config.enable_recent_channel;
 
     let (previous, rank_before) = {
         let db_conn = s.db.lock().await;
@@ -299,39 +295,35 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let mods_str = score.mods_str.as_deref().unwrap_or("NM");
         let mode_prefix = if score.mode != 0 { format!("[{}] ", utils::get_mode_name(score.mode as u8)) } else { String::new() };
 
-        let score_str = format!(
-            "{}{} - {} [{}]\n+{} {:.2}%\n{} {:.0}PP {}x\nwas successfully submitted!",
-            mode_prefix,
-            bmap.artist,
-            bmap.title,
-            bmap.version,
-            mods_str,
-            score.acc.unwrap_or(0.0),
-            grade,
-            score.pp.unwrap_or(0.0),
-            score.nmiss,
-        );
-        player.queue.extend_from_slice(&packets::notification(&score_str));
+        let pp = score.pp.unwrap_or(0.0);
+        let notif = if pp > 0.0 {
+            format!("Score submitted! ({:.0}pp)", pp)
+        } else {
+            "Score submitted!".to_string()
+        };
+        player.queue.extend_from_slice(&packets::notification(&notif));
 
-        let msg = format!(
-            "{}{} - {} [{}]\n+{} {:.2}% {} {:.0}PP {}x/{}x {}X",
-            mode_prefix,
-            bmap.artist,
-            bmap.title,
-            bmap.version,
-            mods_str,
-            score.acc.unwrap_or(0.0),
-            grade,
-            score.pp.unwrap_or(0.0),
-            score.max_combo,
-            bmap.max_combo,
-            score.nmiss,
-        );
-        let mut full_msg = msg;
-        if ping_recent {
-            full_msg += &format!("\nachieved by {}", player.name);
+        if enable_recent {
+            let msg = format!(
+                "{}{} - {} [{}]\n+{} {:.2}% {} {:.0}PP {}x/{}x {}X",
+                mode_prefix,
+                bmap.artist,
+                bmap.title,
+                bmap.version,
+                mods_str,
+                score.acc.unwrap_or(0.0),
+                grade,
+                score.pp.unwrap_or(0.0),
+                score.max_combo,
+                bmap.max_combo,
+                score.nmiss,
+            );
+            let mut full_msg = msg;
+            if ping_recent {
+                full_msg += &format!("\nachieved by {}", player.name);
+            }
+            player.queue.extend_from_slice(&packets::local_message(&full_msg, "#recent"));
         }
-        player.queue.extend_from_slice(&packets::local_message(&full_msg, "#recent"));
         player.enqueue_stats();
 
         (after_stats, charts)
@@ -433,5 +425,60 @@ mod tests {
 
             assert!(result.pp() >= 0.0);
         }
+    }
+
+    #[tokio::test]
+    async fn test_failed_play_does_not_queue_notification() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("TestPlayer".to_string());
+        app_state.player = Some(player);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let sub_score = Score {
+            scoreid: None,
+            md5: "abc".to_string(),
+            name: "TestPlayer".to_string(),
+            score: 1000,
+            max_combo: 10,
+            mods: 0,
+            n300: 10,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 1,
+            time: 12345,
+            perfect: false,
+            pp: None,
+            acc: None,
+            mode: 0,
+            mods_str: None,
+            replay_md5: None,
+            replay_frames: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let sub = DecodedSubmission {
+            score: sub_score,
+            submission_checksum: String::new(),
+            passed: false,
+            date: String::new(),
+            osu_version: String::new(),
+            replay_frames: None,
+            identity: None,
+        };
+
+        let result = process_native_submission(shared_state.clone(), sub).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Failed play");
+
+        let s = shared_state.read().await;
+        let p = s.player.as_ref().unwrap();
+        assert!(p.queue.is_empty(), "Failed plays must NOT send notification popups to the player");
     }
 }
