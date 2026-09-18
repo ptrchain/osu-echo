@@ -163,13 +163,7 @@ impl BanchoScore {
             .map(chrono_parse_to_epoch)
             .unwrap_or_else(|| SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64);
 
-        let pp = json.get("pp").and_then(|v| {
-            if let Some(s) = v.as_str() {
-                s.parse::<f64>().ok()
-            } else {
-                v.as_f64()
-            }
-        });
+        let pp = json.get("pp").and_then(|v| if let Some(s) = v.as_str() { s.parse::<f64>().ok() } else { v.as_f64() });
 
         Some(Self {
             score_id: json_get_str(json, "score_id", "0"),

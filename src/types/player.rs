@@ -151,28 +151,24 @@ mod tests {
             dummy_score(3, "mania_map", 700.0, 98.0, 1_000_000),
         ];
 
-        // Mode 0: should only calculate standard
         player.mode = 0;
         player.calculate_stats(&scores, None, 10);
         assert!(player.pp >= 300);
         assert!((player.acc - 99.0).abs() < 1e-4);
         assert_eq!(player.ranked_score, 1_000_000);
 
-        // Mode 1: switch to Taiko, should only calculate taiko
         player.mode = 1;
         player.calculate_stats(&scores, None, 10);
         assert!(player.pp >= 500);
         assert!((player.acc - 95.0).abs() < 1e-4);
         assert_eq!(player.ranked_score, 2_000_000);
 
-        // Mode 2: switch to Catch (no plays yet), should have 0 stats
         player.mode = 2;
         player.calculate_stats(&scores, None, 10);
         assert_eq!(player.pp, 0);
         assert_eq!(player.acc, 0.0);
         assert_eq!(player.ranked_score, 0);
 
-        // Mode 3: switch to Mania
         player.mode = 3;
         player.calculate_stats(&scores, None, 10);
         assert!(player.pp >= 700);

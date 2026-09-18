@@ -41,9 +41,17 @@ fn parse_mode_and_mods(mode_str: &str) -> (u8, Option<Mods>, String) {
 
     let display_mode = if let Some(fm) = filter_mod {
         if fm == Mods::RELAX {
-            if game_mode == 0 { "rx".to_string() } else { format!("{}_rx", utils::get_mode_name(game_mode)) }
+            if game_mode == 0 {
+                "rx".to_string()
+            } else {
+                format!("{}_rx", utils::get_mode_name(game_mode))
+            }
         } else {
-            if game_mode == 0 { "ap".to_string() } else { format!("{}_ap", utils::get_mode_name(game_mode)) }
+            if game_mode == 0 {
+                "ap".to_string()
+            } else {
+                format!("{}_ap", utils::get_mode_name(game_mode))
+            }
         }
     } else {
         utils::get_mode_name(game_mode).to_string()

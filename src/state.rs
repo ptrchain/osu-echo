@@ -1,3 +1,4 @@
+use crate::types::beatmap::Beatmap;
 use crate::types::command::Command;
 use crate::types::config::Config;
 use crate::types::mods::Mods;
@@ -20,6 +21,7 @@ pub struct AppState {
     pub pending_login_name: Option<String>,
     pub commands: HashMap<String, Command>,
     pub default_avatar: Vec<u8>,
+    pub last_np_map: Option<Beatmap>,
 }
 
 impl AppState {
@@ -35,6 +37,7 @@ impl AppState {
             pending_login_name: None,
             commands: HashMap::new(),
             default_avatar: Vec::new(),
+            last_np_map: None,
         }
     }
 }

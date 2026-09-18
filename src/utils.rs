@@ -50,9 +50,7 @@ pub fn calculate_accuracy(mode: u8, n300: i32, n100: i32, n50: i32, ngeki: i32, 
         3 => {
             let total = (ngeki + n300 + nkatu + n100 + n50 + nmiss) as f64;
             if total > 0.0 {
-                (300.0 * (ngeki + n300) as f64 + 200.0 * nkatu as f64 + 100.0 * n100 as f64 + 50.0 * n50 as f64)
-                    / (300.0 * total)
-                    * 100.0
+                (300.0 * (ngeki + n300) as f64 + 200.0 * nkatu as f64 + 100.0 * n100 as f64 + 50.0 * n50 as f64) / (300.0 * total) * 100.0
             } else {
                 0.0
             }
@@ -62,17 +60,7 @@ pub fn calculate_accuracy(mode: u8, n300: i32, n100: i32, n50: i32, ngeki: i32, 
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn get_grade(
-    mode: u8,
-    n300: i32,
-    n100: i32,
-    n50: i32,
-    _ngeki: i32,
-    _nkatu: i32,
-    nmiss: i32,
-    mods: u32,
-    acc: f64,
-) -> &'static str {
+pub fn get_grade(mode: u8, n300: i32, n100: i32, n50: i32, _ngeki: i32, _nkatu: i32, nmiss: i32, mods: u32, acc: f64) -> &'static str {
     let using_hdfl = mods & 1032 != 0;
 
     match mode {
@@ -189,6 +177,10 @@ pub fn url_decode(s: &str) -> String {
     percent_encoding::percent_decode_str(s).decode_utf8_lossy().into_owned()
 }
 
+pub fn url_encode(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
+}
+
 pub fn parse_query_string(query: &str) -> std::collections::HashMap<String, String> {
     url::form_urlencoded::parse(query.as_bytes()).into_owned().collect()
 }
@@ -289,6 +281,196 @@ fn check_dir_for_beatmap_id(dir: &std::path::Path, beatmap_id: i64) -> Option<St
     None
 }
 
+pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, fallback_set_id: Option<i64>) -> Option<crate::types::beatmap::Beatmap> {
+    use md5::Digest;
+
+    let mut bmap = crate::types::beatmap::Beatmap::blank();
+    let mut found_title = false;
+    let mut found_version = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(val) = trimmed.strip_prefix("Title:") {
+            bmap.title = val.trim().to_string();
+            found_title = true;
+        } else if let Some(val) = trimmed.strip_prefix("TitleUnicode:") {
+            bmap.title_unicode = Some(val.trim().to_string());
+        } else if let Some(val) = trimmed.strip_prefix("Artist:") {
+            bmap.artist = val.trim().to_string();
+        } else if let Some(val) = trimmed.strip_prefix("ArtistUnicode:") {
+            bmap.artist_unicode = Some(val.trim().to_string());
+        } else if let Some(val) = trimmed.strip_prefix("Creator:") {
+            bmap.creator = val.trim().to_string();
+        } else if let Some(val) = trimmed.strip_prefix("Version:") {
+            bmap.version = val.trim().to_string();
+            found_version = true;
+        } else if let Some(val) = trimmed.strip_prefix("BeatmapID:") {
+            if let Ok(id) = val.trim().parse::<i64>() {
+                if id > 0 {
+                    bmap.beatmap_id = id;
+                }
+            }
+        } else if let Some(val) = trimmed.strip_prefix("BeatmapSetID:") {
+            if let Ok(id) = val.trim().parse::<i64>() {
+                if id > 0 {
+                    bmap.beatmapset_id = id;
+                }
+            }
+        } else if let Some(val) = trimmed.strip_prefix("Mode:") {
+            if let Ok(m) = val.trim().parse::<i32>() {
+                bmap.mode = m;
+            }
+        }
+    }
+
+    if !found_title || !found_version {
+        return None;
+    }
+
+    if bmap.beatmap_id == 0 {
+        bmap.beatmap_id = fallback_bmap_id.unwrap_or(0);
+    }
+    if bmap.beatmapset_id == 0 {
+        bmap.beatmapset_id = fallback_set_id.unwrap_or(0);
+    }
+
+    let md5_hash = format!("{:x}", md5::Md5::digest(content.as_bytes()));
+    bmap.file_md5 = md5_hash;
+    bmap.file_content = Some(content.to_string());
+
+    if let Ok(parsed) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
+        bmap.diff_approach = parsed.ar as f64;
+        bmap.diff_overall = parsed.od as f64;
+        bmap.diff_size = parsed.cs as f64;
+        bmap.diff_drain = parsed.hp as f64;
+        let diff = rosu_pp::Difficulty::new().calculate(&parsed);
+        bmap.difficultyrating = diff.stars();
+        bmap.max_combo = diff.max_combo() as i32;
+    }
+
+    Some(bmap)
+}
+
+pub fn find_and_parse_local_osu_file(
+    songs_dir: &std::path::Path,
+    set_id: Option<i64>,
+    map_id: Option<i64>,
+    map_md5: Option<&str>,
+    title_hint: Option<&str>,
+) -> Option<(crate::types::beatmap::Beatmap, String)> {
+    if !songs_dir.exists() {
+        return None;
+    }
+
+    if let Some(sid) = set_id {
+        let prefix = format!("{} ", sid);
+        if let Ok(entries) = std::fs::read_dir(songs_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if folder_name.starts_with(&prefix) || folder_name == sid.to_string() {
+                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, title_hint, Some(sid)) {
+                            return Some((b, c));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(hint) = title_hint {
+        let words: Vec<&str> = hint.split(&['-', ' ', '[', ']', '(', ')'][..]).filter(|w| w.len() >= 3).collect();
+        if let Ok(entries) = std::fs::read_dir(songs_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                    let matches_any = words.iter().any(|w| folder_name.contains(&w.to_lowercase()));
+                    if matches_any {
+                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, Some(hint), set_id) {
+                            return Some((b, c));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+pub fn resolve_songs_folder(config: &crate::types::config::Config) -> Option<std::path::PathBuf> {
+    if let Some(folder) = config.songs_folder() {
+        if folder.exists() {
+            return Some(folder);
+        }
+    }
+    let fallback_d = std::path::PathBuf::from("D:/osu!/Songs");
+    if fallback_d.exists() {
+        return Some(fallback_d);
+    }
+    if let Some(detected) = crate::types::config::detect_osu_path() {
+        let songs = detected.join("Songs");
+        if songs.exists() {
+            return Some(songs);
+        }
+    }
+    let fallback_c = std::path::PathBuf::from("C:/osu!/Songs");
+    if fallback_c.exists() {
+        return Some(fallback_c);
+    }
+    None
+}
+
+fn scan_dir_for_osu_file(
+    dir: &std::path::Path,
+    map_id: Option<i64>,
+    map_md5: Option<&str>,
+    title_hint: Option<&str>,
+    fallback_set_id: Option<i64>,
+) -> Option<(crate::types::beatmap::Beatmap, String)> {
+    let mut candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
+    let mut title_candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("osu") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(bmap) = parse_osu_file_to_beatmap(&content, map_id, fallback_set_id) {
+                        if let Some(md5) = map_md5 {
+                            if !md5.is_empty() && bmap.file_md5.eq_ignore_ascii_case(md5) {
+                                return Some((bmap, content));
+                            }
+                        }
+                        if let Some(mid) = map_id {
+                            if bmap.beatmap_id == mid && mid > 0 {
+                                return Some((bmap, content));
+                            }
+                        }
+                        if let Some(hint) = title_hint {
+                            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                            if fname.to_lowercase().contains(&hint.to_lowercase())
+                                || hint.to_lowercase().contains(&bmap.version.to_lowercase())
+                                || hint.to_lowercase().contains(&bmap.title.to_lowercase())
+                            {
+                                if title_candidate.is_none() {
+                                    title_candidate = Some((bmap.clone(), content.clone()));
+                                }
+                            }
+                        }
+                        if candidate.is_none() {
+                            candidate = Some((bmap, content));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    title_candidate.or(candidate)
+}
+
 pub async fn get_or_fetch_beatmap_content(
     http: &reqwest::Client,
     db: &tokio::sync::Mutex<rusqlite::Connection>,
@@ -299,8 +481,15 @@ pub async fn get_or_fetch_beatmap_content(
         return Some(content.clone());
     }
 
-    if let Some(songs_dir) = config.songs_folder() {
+    if let Some(songs_dir) = resolve_songs_folder(config) {
         if let Some(local_c) = find_local_osu_file(&songs_dir, bmap.beatmap_id, bmap.beatmapset_id) {
+            let conn = db.lock().await;
+            let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
+            return Some(local_c);
+        }
+        let sid = if bmap.beatmapset_id > 0 { Some(bmap.beatmapset_id) } else { None };
+        let mid = if bmap.beatmap_id > 0 { Some(bmap.beatmap_id) } else { None };
+        if let Some((_, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, Some(&bmap.file_md5), Some(&bmap.title)) {
             let conn = db.lock().await;
             let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
             return Some(local_c);
@@ -344,10 +533,7 @@ pub async fn fetch_scores_from_bancho(
     let json: serde_json::Value = resp.json().await.ok()?;
     let arr = json.as_array()?;
 
-    let scores: Vec<crate::types::score::BanchoScore> = arr
-        .iter()
-        .filter_map(crate::types::score::BanchoScore::from_json)
-        .collect();
+    let scores: Vec<crate::types::score::BanchoScore> = arr.iter().filter_map(crate::types::score::BanchoScore::from_json).collect();
 
     Some(scores)
 }
@@ -400,6 +586,89 @@ pub async fn get_rank_from_daily(http: &reqwest::Client, api_key: &str, pp: i32,
     json.get("rank").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).map(|r| r as i32).or(Some(1))
 }
 
+// MaxMind GeoIP legacy country code table required by the osu! client
+pub const COUNTRY_CODES: &[&str] = &[
+    "--", "AP", "EU", "AD", "AE", "AF", "AG", "AI", "AL", "AM", "CW", "AO", "AQ", "AR", "AS", "AT", "AU", "AW", "AZ", "BA", "BB", "BD", "BE", "BF", "BG", "BH",
+    "BI", "BJ", "BM", "BN", "BO", "BR", "BS", "BT", "BV", "BW", "BY", "BZ", "CA", "CC", "CD", "CF", "CG", "CH", "CI", "CK", "CL", "CM", "CN", "CO", "CR", "CU",
+    "CV", "CX", "CY", "CZ", "DE", "DJ", "DK", "DM", "DO", "DZ", "EC", "EE", "EG", "EH", "ER", "ES", "ET", "FI", "FJ", "FK", "FM", "FO", "FR", "SX", "GA", "GB",
+    "GD", "GE", "GF", "GH", "GI", "GL", "GM", "GN", "GP", "GQ", "GR", "GS", "GT", "GU", "GW", "GY", "HK", "HM", "HN", "HR", "HT", "HU", "ID", "IE", "IL", "IN",
+    "IO", "IQ", "IR", "IS", "IT", "JM", "JO", "JP", "KE", "KG", "KH", "KI", "KM", "KN", "KP", "KR", "KW", "KY", "KZ", "LA", "LB", "LC", "LI", "LK", "LR", "LS",
+    "LT", "LU", "LV", "LY", "MA", "MC", "MD", "MG", "MH", "MK", "ML", "MM", "MN", "MO", "MP", "MQ", "MR", "MS", "MT", "MU", "MV", "MW", "MX", "MY", "MZ", "NA",
+    "NC", "NE", "NF", "NG", "NI", "NL", "NO", "NP", "NR", "NU", "NZ", "OM", "PA", "PE", "PF", "PG", "PH", "PK", "PL", "PM", "PN", "PR", "PS", "PT", "PW", "PY",
+    "QA", "RE", "RO", "RU", "RW", "SA", "SB", "SC", "SD", "SE", "SG", "SH", "SI", "SJ", "SK", "SL", "SM", "SN", "SO", "SR", "ST", "SV", "SY", "SZ", "TC", "TD",
+    "TF", "TG", "TH", "TJ", "TK", "TM", "TN", "TO", "TL", "TR", "TT", "TV", "TW", "TZ", "UA", "UG", "UM", "US", "UY", "UZ", "VA", "VC", "VE", "VG", "VI", "VN",
+    "VU", "WF", "WS", "YE", "YT", "RS", "ZA", "ZM", "ME", "ZW", "A1", "A2", "O1", "AX", "GG", "IM", "JE", "BL", "MF", "BQ", "SS", "O1",
+];
+
+pub fn country_code_to_byte(code: &str) -> u8 {
+    let trimmed = code.trim();
+    if trimmed.is_empty() || trimmed == "--" {
+        return 0;
+    }
+    let target = if trimmed.eq_ignore_ascii_case("UK") { "GB" } else { trimmed };
+    COUNTRY_CODES.iter().position(|&c| c.eq_ignore_ascii_case(target)).unwrap_or(0) as u8
+}
+
+pub fn country_byte_to_code(byte: u8) -> &'static str {
+    match COUNTRY_CODES.get(byte as usize).copied() {
+        Some("--") | None => "Unknown",
+        Some(code) => code,
+    }
+}
+
+pub async fn fetch_user_stats_from_api(http: &reqwest::Client, api_key: &str, user_query: &str) -> Option<crate::db::FriendRecord> {
+    let trimmed = user_query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let is_numeric = trimmed.chars().all(|c| c.is_ascii_digit());
+    let param_type = if is_numeric { "id" } else { "string" };
+    let url = format!("https://osu.ppy.sh/api/get_user?k={}&u={}&type={}", api_key, url_encode(trimmed), param_type);
+
+    let resp = http.get(&url).send().await.ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+
+    let users: Vec<serde_json::Value> = resp.json().await.ok()?;
+    let u = users.first()?;
+
+    let friend_id = u.get("user_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<i32>().ok())?;
+    let friend_name = u.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let rank = u.get("pp_rank").and_then(|v| v.as_str()).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+    let pp = u.get("pp_raw").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).map(|f| f.round() as i32).unwrap_or(0);
+    let acc = u.get("accuracy").and_then(|v| v.as_str()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+    let country_str = u.get("country").and_then(|v| v.as_str()).unwrap_or("");
+    let country = country_code_to_byte(country_str);
+    let ranked_score = u.get("ranked_score").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let total_score = u.get("total_score").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+    let playcount = u.get("playcount").and_then(|v| v.as_str()).and_then(|s| s.parse::<i32>().ok()).unwrap_or(0);
+
+    Some(crate::db::FriendRecord { friend_id, friend_name, rank, pp, acc, country, ranked_score, total_score, playcount })
+}
+
+pub async fn fetch_user_scores_from_bancho(
+    http: &reqwest::Client,
+    api_key: &str,
+    beatmap_id: i64,
+    user_id: i32,
+    mode: i32,
+) -> Option<Vec<crate::types::score::BanchoScore>> {
+    let url = format!("https://osu.ppy.sh/api/get_scores?k={}&b={}&u={}&m={}&type=id", api_key, beatmap_id, user_id, mode);
+    let resp = http.get(&url).send().await.ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+    let json: Vec<serde_json::Value> = resp.json().await.ok()?;
+    let mut scores = Vec::new();
+    for item in json {
+        if let Some(s) = crate::types::score::BanchoScore::from_json(&item) {
+            scores.push(s);
+        }
+    }
+    Some(scores)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,25 +684,21 @@ mod tests {
 
     #[test]
     fn test_accuracy_calculation_modes() {
-        // Standard (mode 0)
         let acc_std = calculate_accuracy(0, 300, 0, 0, 0, 0, 0);
         assert!((acc_std - 100.0).abs() < 1e-6);
 
         let acc_std_half = calculate_accuracy(0, 0, 100, 0, 0, 0, 0);
         assert!((acc_std_half - (100.0 / 3.0)).abs() < 1e-4);
 
-        // Taiko (mode 1): 300 = 100%, 100 = 50%
         let acc_taiko = calculate_accuracy(1, 100, 100, 0, 0, 0, 0);
         assert!((acc_taiko - 75.0).abs() < 1e-6);
 
-        // Catch (mode 2): (n300 + n100 + n50) / (n300 + n100 + n50 + nmiss + nkatu)
         let acc_catch = calculate_accuracy(2, 100, 50, 50, 0, 0, 0);
         assert!((acc_catch - 100.0).abs() < 1e-6);
 
         let acc_catch_miss = calculate_accuracy(2, 90, 0, 0, 0, 5, 5);
         assert!((acc_catch_miss - 90.0).abs() < 1e-6);
 
-        // Mania (mode 3): (300*(ngeki+300) + 200*katu + 100*100 + 50*50) / (300 * total)
         let acc_mania_max = calculate_accuracy(3, 100, 0, 0, 100, 0, 0);
         assert!((acc_mania_max - 100.0).abs() < 1e-6);
 
@@ -443,20 +708,16 @@ mod tests {
 
     #[test]
     fn test_grade_calculation_modes() {
-        // Standard SS & SSH
         assert_eq!(get_grade(0, 300, 0, 0, 0, 0, 0, 0, 100.0), "SS");
-        assert_eq!(get_grade(0, 300, 0, 0, 0, 0, 0, 8, 100.0), "SSH"); // Hidden
+        assert_eq!(get_grade(0, 300, 0, 0, 0, 0, 0, 8, 100.0), "SSH");
 
-        // Taiko SS & S
         assert_eq!(get_grade(1, 100, 0, 0, 0, 0, 0, 0, 100.0), "SS");
         assert_eq!(get_grade(1, 95, 5, 0, 0, 0, 0, 0, 97.5), "S");
 
-        // Catch S & A
         assert_eq!(get_grade(2, 100, 0, 0, 0, 0, 0, 0, 100.0), "SS");
         assert_eq!(get_grade(2, 99, 0, 0, 0, 0, 1, 0, 99.0), "S");
         assert_eq!(get_grade(2, 96, 0, 0, 0, 0, 4, 0, 96.0), "A");
 
-        // Mania SS & A
         assert_eq!(get_grade(3, 50, 0, 0, 50, 0, 0, 0, 100.0), "SS");
         assert_eq!(get_grade(3, 40, 10, 0, 40, 5, 5, 0, 92.0), "A");
     }
@@ -490,5 +751,60 @@ mod tests {
         calculate_bancho_score_pp(&parsed_map, 0, &mut b_score);
         assert!(b_score.pp.is_some());
         assert!(b_score.pp.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn test_parse_osu_file_to_beatmap_metadata() {
+        let content = "osu file format v14\n\
+            [General]\nMode: 0\n\
+            [Metadata]\n\
+            Title:Sidetracked Day GAMMA\n\
+            Artist:VINXIS\n\
+            Creator:Seamob\n\
+            Version:270\n\
+            BeatmapID:2543274\n\
+            BeatmapSetID:1222729\n\
+            [Difficulty]\n\
+            HPDrainRate:6\n\
+            CircleSize:4\n\
+            OverallDifficulty:9.3\n\
+            ApproachRate:9.6\n\
+            SliderMultiplier:1.4\n\
+            SliderTickRate:1\n\
+            [TimingPoints]\n\
+            0,500,4,1,0,100,1,0\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n";
+
+        let bmap = parse_osu_file_to_beatmap(content, None, None).unwrap();
+        assert_eq!(bmap.beatmap_id, 2543274);
+        assert_eq!(bmap.beatmapset_id, 1222729);
+        assert_eq!(bmap.artist, "VINXIS");
+        assert_eq!(bmap.title, "Sidetracked Day GAMMA");
+        assert_eq!(bmap.version, "270");
+        assert!(!bmap.file_md5.is_empty());
+        assert_eq!(bmap.file_content, Some(content.to_string()));
+    }
+
+    #[test]
+    fn test_country_code_and_url_encoding() {
+        assert_eq!(country_code_to_byte("AD"), 3);
+        assert_eq!(country_code_to_byte("AU"), 16);
+        assert_eq!(country_code_to_byte("de"), 56);
+        assert_eq!(country_code_to_byte("DZ"), 61);
+        assert_eq!(country_code_to_byte("US"), 225);
+        assert_eq!(country_code_to_byte("GB"), 77);
+        assert_eq!(country_code_to_byte("UK"), 77);
+        assert_eq!(country_code_to_byte("SS"), 254);
+        assert_eq!(country_code_to_byte("UNKNOWN"), 0);
+        assert_eq!(country_code_to_byte(""), 0);
+
+        assert_eq!(country_byte_to_code(16), "AU");
+        assert_eq!(country_byte_to_code(56), "DE");
+        assert_eq!(country_byte_to_code(61), "DZ");
+        assert_eq!(country_byte_to_code(0), "Unknown");
+
+        assert_eq!(url_encode("mrekk"), "mrekk");
+        assert_eq!(url_encode("hello world"), "hello+world");
     }
 }

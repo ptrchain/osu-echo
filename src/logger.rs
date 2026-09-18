@@ -48,8 +48,9 @@ pub fn debug(message: &str) {
 }
 
 pub fn http_request(method: &str, path: &str, status: u16, duration: Duration) {
-    // Only log heartbeat polling if debug logging is desired
-    if path == "/c" && status == 200 {
+    // Suppress high-frequency Bancho heartbeat polling in console
+    let clean_path = path.split('?').next().unwrap_or(path);
+    if (clean_path == "/" || clean_path == "/c" || clean_path == "/c/") && status == 200 {
         return;
     }
 

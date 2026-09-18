@@ -101,6 +101,22 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
             player_name TEXT PRIMARY KEY,
             avatar_url TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS friends (
+            player_name TEXT NOT NULL,
+            friend_id INTEGER NOT NULL,
+            friend_name TEXT NOT NULL DEFAULT '',
+            rank INTEGER NOT NULL DEFAULT 1,
+            pp INTEGER NOT NULL DEFAULT 0,
+            acc REAL NOT NULL DEFAULT 0.0,
+            country INTEGER NOT NULL DEFAULT 0,
+            ranked_score INTEGER NOT NULL DEFAULT 0,
+            total_score INTEGER NOT NULL DEFAULT 0,
+            playcount INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (player_name, friend_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_friends_player ON friends(player_name);
     ",
     )?;
 
@@ -109,6 +125,13 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE scores ADD COLUMN submission_identity TEXT", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_checksum ON scores(submission_checksum)", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_identity ON scores(submission_identity)", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN rank INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN pp INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN acc REAL NOT NULL DEFAULT 0.0", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN country INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN ranked_score INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN total_score INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE friends ADD COLUMN playcount INTEGER NOT NULL DEFAULT 0", []);
 
     Ok(())
 }
@@ -246,7 +269,9 @@ pub fn get_ranked_scores(conn: &Connection, name: &str) -> SqlResult<Vec<Score>>
                 score, max_combo, perfect, mods, time, acc, pp,
                 replay_md5, replay_frames, mods_str, submission_checksum, submission_identity
          FROM scores
-         WHERE player_name = ?1 AND bmap_status IN ('ranked', 'approved')
+         WHERE player_name = ?1
+           AND (bmap_status IN ('ranked', 'approved')
+                OR md5 IN (SELECT file_md5 FROM beatmaps WHERE approved IN (1, 2)))
          ORDER BY pp DESC",
     )?;
 
@@ -571,6 +596,109 @@ pub fn ensure_avatar(conn: &Connection, name: &str) -> SqlResult<()> {
     Ok(())
 }
 
+pub fn add_friend(conn: &Connection, player_name: &str, friend_id: i32, friend_name: &str) -> SqlResult<()> {
+    conn.execute("INSERT OR REPLACE INTO friends (player_name, friend_id, friend_name) VALUES (?1, ?2, ?3)", params![player_name, friend_id, friend_name])?;
+    Ok(())
+}
+
+pub fn remove_friend(conn: &Connection, player_name: &str, friend_id: i32) -> SqlResult<()> {
+    conn.execute("DELETE FROM friends WHERE player_name = ?1 AND friend_id = ?2", params![player_name, friend_id])?;
+    Ok(())
+}
+
+pub fn get_friends(conn: &Connection, player_name: &str) -> SqlResult<Vec<(i32, String)>> {
+    let mut stmt = conn.prepare("SELECT friend_id, friend_name FROM friends WHERE player_name = ?1 ORDER BY friend_id ASC")?;
+    let rows = stmt.query_map(params![player_name], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
+}
+
+pub fn get_friend_ids(conn: &Connection, player_name: &str) -> SqlResult<Vec<i32>> {
+    let mut stmt = conn.prepare("SELECT friend_id FROM friends WHERE player_name = ?1 ORDER BY friend_id ASC")?;
+    let rows = stmt.query_map(params![player_name], |row| row.get(0))?;
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
+}
+
+#[derive(Debug, Clone)]
+pub struct FriendRecord {
+    pub friend_id: i32,
+    pub friend_name: String,
+    pub rank: i32,
+    pub pp: i32,
+    pub acc: f64,
+    pub country: u8,
+    pub ranked_score: i64,
+    pub total_score: i64,
+    pub playcount: i32,
+}
+
+pub fn save_friend_stats(conn: &Connection, player_name: &str, f: &FriendRecord) -> SqlResult<()> {
+    conn.execute(
+        "INSERT INTO friends (player_name, friend_id, friend_name, rank, pp, acc, country, ranked_score, total_score, playcount)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         ON CONFLICT(player_name, friend_id) DO UPDATE SET
+            friend_name = excluded.friend_name,
+            rank = excluded.rank,
+            pp = excluded.pp,
+            acc = excluded.acc,
+            country = excluded.country,
+            ranked_score = excluded.ranked_score,
+            total_score = excluded.total_score,
+            playcount = excluded.playcount",
+        params![player_name, f.friend_id, f.friend_name, f.rank, f.pp, f.acc, f.country as i32, f.ranked_score, f.total_score, f.playcount],
+    )?;
+    Ok(())
+}
+
+pub fn get_friend_records(conn: &Connection, player_name: &str) -> SqlResult<Vec<FriendRecord>> {
+    let mut stmt = conn.prepare(
+        "SELECT friend_id, friend_name, rank, pp, acc, country, ranked_score, total_score, playcount
+         FROM friends
+         WHERE player_name = ?1
+         ORDER BY friend_id ASC",
+    )?;
+    let rows = stmt.query_map(params![player_name], |row| {
+        Ok(FriendRecord {
+            friend_id: row.get(0)?,
+            friend_name: row.get(1)?,
+            rank: row.get(2)?,
+            pp: row.get(3)?,
+            acc: row.get(4)?,
+            country: row.get::<_, i32>(5)? as u8,
+            ranked_score: row.get(6)?,
+            total_score: row.get(7)?,
+            playcount: row.get(8)?,
+        })
+    })?;
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
+}
+
+pub fn set_beatmap_status(conn: &Connection, beatmap_id: i64, approved: i32) -> SqlResult<usize> {
+    let status_str = match approved {
+        1 | 2 => "ranked",
+        4 => "loved",
+        _ => "unranked",
+    };
+    let _ =
+        conn.execute("UPDATE scores SET bmap_status = ?1 WHERE md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmap_id = ?2)", params![status_str, beatmap_id]);
+    conn.execute("UPDATE beatmaps SET approved = ?1 WHERE beatmap_id = ?2", params![approved, beatmap_id])
+}
+
+pub fn set_beatmap_status_by_md5(conn: &Connection, md5: &str, approved: i32) -> SqlResult<usize> {
+    conn.execute("UPDATE beatmaps SET approved = ?1 WHERE file_md5 = ?2", params![approved, md5])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -657,16 +785,13 @@ mod tests {
             submission_identity: None,
         };
 
-        // Insert score for osu!standard (mode 0)
         insert_score(&conn, &score, "ranked").unwrap();
 
-        // Insert score for osu!taiko (mode 1)
         score.mode = 1;
         score.replay_md5 = Some("rep_mode1".to_string());
         score.score = 600000;
         insert_score(&conn, &score, "ranked").unwrap();
 
-        // Insert score for osu!mania (mode 3)
         score.mode = 3;
         score.replay_md5 = Some("rep_mode3".to_string());
         score.score = 900000;
@@ -690,5 +815,53 @@ mod tests {
         assert_eq!(mania_scores[0].mode, 3);
         assert_eq!(mania_scores[0].score, 900000);
     }
-}
 
+    #[test]
+    fn test_friends_crud() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        assert_eq!(get_friends(&conn, "Alice").unwrap().len(), 0);
+        assert_eq!(get_friend_ids(&conn, "Alice").unwrap().len(), 0);
+
+        add_friend(&conn, "Alice", 100, "Bob").unwrap();
+        add_friend(&conn, "Alice", 101, "Charlie").unwrap();
+
+        let friends = get_friends(&conn, "Alice").unwrap();
+        assert_eq!(friends.len(), 2);
+        assert_eq!(friends[0], (100, "Bob".to_string()));
+        assert_eq!(friends[1], (101, "Charlie".to_string()));
+
+        let friend_ids = get_friend_ids(&conn, "Alice").unwrap();
+        assert_eq!(friend_ids, vec![100, 101]);
+
+        remove_friend(&conn, "Alice", 100).unwrap();
+        let friend_ids_after = get_friend_ids(&conn, "Alice").unwrap();
+        assert_eq!(friend_ids_after, vec![101]);
+    }
+
+    #[test]
+    fn test_beatmap_status_updates() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "status_test_md5".to_string();
+        bmap.beatmap_id = 9999;
+        bmap.approved = 0;
+        insert_beatmap(&conn, &bmap).unwrap();
+
+        let loaded = get_beatmap_by_id(&conn, 9999).unwrap().unwrap();
+        assert_eq!(loaded.approved, 0);
+
+        let rows = set_beatmap_status(&conn, 9999, 1).unwrap();
+        assert_eq!(rows, 1);
+        let loaded_ranked = get_beatmap_by_id(&conn, 9999).unwrap().unwrap();
+        assert_eq!(loaded_ranked.approved, 1);
+
+        let rows_md5 = set_beatmap_status_by_md5(&conn, "status_test_md5", 4).unwrap();
+        assert_eq!(rows_md5, 1);
+        let loaded_loved = get_beatmap_by_md5(&conn, "status_test_md5").unwrap().unwrap();
+        assert_eq!(loaded_loved.approved, 4);
+    }
+}

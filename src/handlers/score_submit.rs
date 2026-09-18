@@ -77,7 +77,6 @@ pub fn build_charts(
     format!("{}\n{}\n{}", meta, beatmap_chart, overall_chart).into_bytes()
 }
 
-/// Processes a native HTTP score submission from /osu-submit-modular-selector.php
 pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: DecodedSubmission) -> Result<Vec<u8>, String> {
     let s = state.read().await;
     let player = s.player.as_ref().ok_or_else(|| "No player logged in".to_string())?;
@@ -214,15 +213,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             .calculate();
 
         score.pp = Some(result.pp());
-        let acc = utils::calculate_accuracy(
-            score.mode as u8,
-            score.n300,
-            score.n100,
-            score.n50,
-            score.ngeki,
-            score.nkatu,
-            score.nmiss,
-        );
+        let acc = utils::calculate_accuracy(score.mode as u8, score.n300, score.n100, score.n50, score.ngeki, score.nkatu, score.nmiss);
         score.acc = Some(acc);
     }
 
@@ -283,11 +274,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let p_mode = player.mode;
         drop(s_write);
 
-        let rank = if let Some(ref api_key) = daily_key {
-            utils::get_rank_from_daily(&http, api_key, pp, p_mode).await
-        } else {
-            None
-        };
+        let rank = if let Some(ref api_key) = daily_key { utils::get_rank_from_daily(&http, api_key, pp, p_mode).await } else { None };
 
         let mut s_write = state.write().await;
         let player = s_write.player.as_mut().unwrap();
@@ -307,23 +294,10 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let rank_after = 1;
         let charts = build_charts(&bmap, &score, &before_stats, &after_stats, previous.as_ref(), rank_before, rank_after, playcount);
 
-        let grade = utils::get_grade(
-            score.mode as u8,
-            score.n300,
-            score.n100,
-            score.n50,
-            score.ngeki,
-            score.nkatu,
-            score.nmiss,
-            score.mods,
-            score.acc.unwrap_or(0.0),
-        );
+        let grade =
+            utils::get_grade(score.mode as u8, score.n300, score.n100, score.n50, score.ngeki, score.nkatu, score.nmiss, score.mods, score.acc.unwrap_or(0.0));
         let mods_str = score.mods_str.as_deref().unwrap_or("NM");
-        let mode_prefix = if score.mode != 0 {
-            format!("[{}] ", utils::get_mode_name(score.mode as u8))
-        } else {
-            String::new()
-        };
+        let mode_prefix = if score.mode != 0 { format!("[{}] ", utils::get_mode_name(score.mode as u8)) } else { String::new() };
 
         let score_str = format!(
             "{}{} - {} [{}]\n+{} {:.2}%\n{} {:.0}PP {}x\nwas successfully submitted!",
@@ -367,7 +341,6 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     Ok(charts)
 }
 
-/// Existing score_submit function for local .osr replay watcher
 pub async fn score_submit(state: Arc<RwLock<AppState>>, score: Score, replay: &Replay) {
     let sub = DecodedSubmission {
         score,
@@ -456,14 +429,9 @@ mod tests {
                 _ => unreachable!(),
             };
 
-            let result = rosu_pp::Performance::new(&parsed_map)
-                .mode_or_ignore(game_mode)
-                .combo(4)
-                .n300(4)
-                .calculate();
+            let result = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).combo(4).n300(4).calculate();
 
             assert!(result.pp() >= 0.0);
         }
     }
 }
-

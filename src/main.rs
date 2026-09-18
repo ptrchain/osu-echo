@@ -217,7 +217,7 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
     let route = match_route(&normalized_path, &params);
 
     let resp = match route {
-        RouteMatch::Cho => handlers::cho::handle(state, osu_token.as_deref()).await,
+        RouteMatch::Cho => handlers::cho::handle(state, osu_token.as_deref(), &body_bytes).await,
         RouteMatch::Web(sub_path) => handlers::web::handle(state, &sub_path, &params, &method, &headers, &body_bytes).await,
         RouteMatch::Avatar(userid) => handlers::avatar::handle(state, userid).await,
         RouteMatch::Api(sub_path) => handlers::api::handle(state, &sub_path, &params).await,

@@ -54,11 +54,11 @@ impl<'de> serde::Deserialize<'de> for Mods {
 impl Mods {
     pub const SPEED_CHANGING: Mods = Self::DOUBLETIME.union(Self::NIGHTCORE).union(Self::HALFTIME);
 
-    pub const INVALID_STANDARD: Mods = Self::AUTOPILOT.union(Self::RELAX).union(Self::AUTOPLAY).union(Self::CINEMA).union(Self::TARGET);
+    pub const INVALID_STANDARD: Mods = Self::AUTOPLAY.union(Self::CINEMA);
 
-    pub const INVALID_AUTOPILOT: Mods = Self::RELAX.union(Self::AUTOPLAY).union(Self::CINEMA).union(Self::TARGET);
+    pub const INVALID_AUTOPILOT: Mods = Self::AUTOPLAY.union(Self::CINEMA);
 
-    pub const INVALID_RELAX: Mods = Self::AUTOPILOT.union(Self::AUTOPLAY).union(Self::CINEMA).union(Self::TARGET);
+    pub const INVALID_RELAX: Mods = Self::AUTOPLAY.union(Self::CINEMA);
 
     pub fn short_name(self) -> String {
         if self.is_empty() {

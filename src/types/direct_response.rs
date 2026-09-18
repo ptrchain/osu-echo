@@ -60,17 +60,7 @@ impl DirectResponse {
         let mut resp = Self::new();
 
         for (idx, play) in plays.iter().enumerate() {
-            let grade = crate::utils::get_grade(
-                play.mode as u8,
-                play.n300,
-                play.n100,
-                play.n50,
-                play.ngeki,
-                play.nkatu,
-                play.nmiss,
-                play.mods,
-                play.acc,
-            );
+            let grade = crate::utils::get_grade(play.mode as u8, play.n300, play.n100, play.n50, play.ngeki, play.nkatu, play.nmiss, play.mods, play.acc);
 
             let title = format!(
                 "{} [{}] {:.0}PP +{} {:.2}% {} {}x/{}x {}X",

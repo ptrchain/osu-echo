@@ -84,11 +84,12 @@ impl Leaderboard {
         let mut buffer = base.into_bytes();
 
         if let Some(ps) = &self.personal_score {
-            let num = if !self.scores.iter().any(|s| s.score_id == ps.score_id) {
-                amount_of_scores + 1
-            } else {
-                self.scores.iter().position(|s| s.score_id == ps.score_id).map(|i| i as i32 + 1).unwrap_or(1)
-            };
+            let num = self
+                .scores
+                .iter()
+                .position(|s| if s.score_id != 0 && ps.score_id != 0 { s.score_id == ps.score_id } else { s.username.eq_ignore_ascii_case(&ps.username) })
+                .map(|i| i as i32 + 1)
+                .unwrap_or(amount_of_scores + 1);
             buffer.extend_from_slice(ps.format(num).as_bytes());
             buffer.push(b'\n');
         } else {

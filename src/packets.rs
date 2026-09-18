@@ -15,16 +15,149 @@ pub enum PacketId {
     ChoUserLogout = 12,
     ChoVersionUpdate = 19,
     ChoNotification = 24,
-    ChoProtocolVersion = 75,
-    ChoMainMenuIcon = 76,
-    ChoFriendsList = 72,
-    ChoChannelInfoEnd = 89,
+    OsuSendPrivateMessage = 25,
     ChoChannelJoinSuccess = 64,
     ChoChannelInfo = 65,
     ChoPrivileges = 71,
+    ChoFriendsList = 72,
+    OsuFriendAdd = 73,
+    OsuFriendRemove = 74,
+    ChoProtocolVersion = 75,
+    ChoMainMenuIcon = 76,
+    OsuChannelJoin = 63,
+    OsuChannelPart = 78,
     ChoUserPresence = 83,
+    OsuUserStatsRequest = 85,
     ChoRestart = 86,
+    ChoChannelInfoEnd = 89,
     ChoUserSilenced = 94,
+    ChoUserPresenceBundle = 96,
+    OsuUserPresenceRequest = 97,
+    OsuUserPresenceRequestAll = 98,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InPacket<'a> {
+    pub id: u16,
+    pub payload: &'a [u8],
+}
+
+pub struct PacketReader<'a> {
+    data: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> PacketReader<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.data.len().saturating_sub(self.pos)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pos >= self.data.len()
+    }
+
+    pub fn take(&mut self, len: usize) -> Result<&'a [u8], &'static str> {
+        if self.pos + len > self.data.len() {
+            return Err("Unexpected end of packet buffer");
+        }
+        let slice = &self.data[self.pos..self.pos + len];
+        self.pos += len;
+        Ok(slice)
+    }
+
+    pub fn read_u8(&mut self) -> Result<u8, &'static str> {
+        let b = self.take(1)?;
+        Ok(b[0])
+    }
+
+    pub fn read_i8(&mut self) -> Result<i8, &'static str> {
+        Ok(self.read_u8()? as i8)
+    }
+
+    pub fn read_u16(&mut self) -> Result<u16, &'static str> {
+        let b = self.take(2)?;
+        Ok(u16::from_le_bytes([b[0], b[1]]))
+    }
+
+    pub fn read_i16(&mut self) -> Result<i16, &'static str> {
+        let b = self.take(2)?;
+        Ok(i16::from_le_bytes([b[0], b[1]]))
+    }
+
+    pub fn read_u32(&mut self) -> Result<u32, &'static str> {
+        let b = self.take(4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_i32(&mut self) -> Result<i32, &'static str> {
+        let b = self.take(4)?;
+        Ok(i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_f32(&mut self) -> Result<f32, &'static str> {
+        let b = self.take(4)?;
+        Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
+    pub fn read_uleb128(&mut self) -> Result<usize, &'static str> {
+        let mut result = 0usize;
+        let mut shift = 0;
+        loop {
+            let byte = self.read_u8()?;
+            result |= ((byte & 0x7F) as usize) << shift;
+            if (byte & 0x80) == 0 {
+                break;
+            }
+            shift += 7;
+            if shift >= 35 {
+                return Err("ULEB128 overflow");
+            }
+        }
+        Ok(result)
+    }
+
+    pub fn read_string(&mut self) -> Result<String, &'static str> {
+        let marker = self.read_u8()?;
+        if marker == 0x00 {
+            return Ok(String::new());
+        }
+        if marker != 0x0b {
+            return Err("Invalid string marker, expected 0x00 or 0x0b");
+        }
+        let len = self.read_uleb128()?;
+        let bytes = self.take(len)?;
+        String::from_utf8(bytes.to_vec()).map_err(|_| "Invalid UTF-8 in string")
+    }
+
+    pub fn read_i32_list(&mut self) -> Result<Vec<i32>, &'static str> {
+        let count = self.read_i16()?;
+        if count < 0 {
+            return Err("Negative list count");
+        }
+        let mut list = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            list.push(self.read_i32()?);
+        }
+        Ok(list)
+    }
+}
+
+pub fn split_packets(mut data: &[u8]) -> Vec<InPacket<'_>> {
+    let mut packets = Vec::new();
+    while data.len() >= 7 {
+        let id = u16::from_le_bytes([data[0], data[1]]);
+        let len = u32::from_le_bytes([data[3], data[4], data[5], data[6]]) as usize;
+        if data.len() < 7 + len {
+            break;
+        }
+        packets.push(InPacket { id, payload: &data[7..7 + len] });
+        data = &data[7 + len..];
+    }
+    packets
 }
 
 fn write_uleb128(num: u32) -> Vec<u8> {
@@ -101,6 +234,10 @@ fn write_packet(packet_id: u16, data: &[u8]) -> Vec<u8> {
     p
 }
 
+pub fn pong() -> Vec<u8> {
+    write_packet(PacketId::ChoPong as u16, &[])
+}
+
 pub fn user_id(id: i32) -> Vec<u8> {
     let data = if id > 0 { write_u32(id as u32) } else { write_i32(id) };
     write_packet(PacketId::ChoUserId as u16, &data)
@@ -118,13 +255,17 @@ pub fn bancho_privs(privs: i32) -> Vec<u8> {
     write_packet(PacketId::ChoPrivileges as u16, &write_i32(privs))
 }
 
+pub fn user_presence_bundle(user_ids: &[i32]) -> Vec<u8> {
+    write_packet(PacketId::ChoUserPresenceBundle as u16, &write_list32(user_ids))
+}
+
 pub fn user_presence(p: &Player) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&write_i32(p.userid));
     data.extend_from_slice(&write_string(&p.name));
     data.extend_from_slice(&write_u8(p.utc_offset + 24));
     data.extend_from_slice(&write_u8(p.country));
-    data.extend_from_slice(&write_u8((p.bancho_privs as u8) | (p.mode << 5)));
+    data.extend_from_slice(&write_u8((p.bancho_privs as u8 & 0x1f) | (p.mode << 5)));
     data.extend_from_slice(&write_f32(p.location.0));
     data.extend_from_slice(&write_f32(p.location.1));
     data.extend_from_slice(&write_i32(p.rank));
@@ -230,5 +371,58 @@ mod tests {
         assert_eq!(pkt[2], 0);
         assert_eq!(&pkt[3..7], &4i32.to_le_bytes());
         assert_eq!(&pkt[7..11], &2i32.to_le_bytes());
+    }
+
+    #[test]
+    fn test_packet_reader_primitives_and_strings() {
+        let mut buf = Vec::new();
+        buf.push(42u8);
+        buf.push(-5i8 as u8);
+        buf.extend_from_slice(&1234u16.to_le_bytes());
+        buf.extend_from_slice(&(-999i16).to_le_bytes());
+        buf.extend_from_slice(&50000u32.to_le_bytes());
+        buf.extend_from_slice(&(-123456i32).to_le_bytes());
+        buf.extend_from_slice(&1.25f32.to_le_bytes());
+        buf.extend_from_slice(&write_string("test string"));
+        buf.extend_from_slice(&write_string(""));
+        buf.extend_from_slice(&write_list32(&[10, 20, 30]));
+
+        let mut reader = PacketReader::new(&buf);
+        assert_eq!(reader.read_u8().unwrap(), 42);
+        assert_eq!(reader.read_i8().unwrap(), -5);
+        assert_eq!(reader.read_u16().unwrap(), 1234);
+        assert_eq!(reader.read_i16().unwrap(), -999);
+        assert_eq!(reader.read_u32().unwrap(), 50000);
+        assert_eq!(reader.read_i32().unwrap(), -123456);
+        assert_eq!(reader.read_f32().unwrap(), 1.25);
+        assert_eq!(reader.read_string().unwrap(), "test string");
+        assert_eq!(reader.read_string().unwrap(), "");
+        assert_eq!(reader.read_i32_list().unwrap(), vec![10, 20, 30]);
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn test_split_packets_roundtrip() {
+        let p1 = write_packet(PacketId::OsuPing as u16, &[]);
+        let p2 = write_packet(PacketId::OsuSendPublicMessage as u16, b"payload123");
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&p1);
+        combined.extend_from_slice(&p2);
+
+        let split = split_packets(&combined);
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].id, PacketId::OsuPing as u16);
+        assert_eq!(split[0].payload, &[] as &[u8]);
+        assert_eq!(split[1].id, PacketId::OsuSendPublicMessage as u16);
+        assert_eq!(split[1].payload, b"payload123");
+    }
+
+    #[test]
+    fn test_pong_packet() {
+        let pkt = pong();
+        assert_eq!(pkt[0], 8);
+        assert_eq!(pkt[1], 0);
+        assert_eq!(pkt[2], 0);
+        assert_eq!(&pkt[3..7], &0u32.to_le_bytes());
     }
 }

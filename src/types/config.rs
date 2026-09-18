@@ -33,6 +33,7 @@ pub struct Config {
     pub seasonal_bgs: Vec<String>,
     pub osu_username: Option<String>,
     pub osu_password: Option<String>,
+    pub country: Option<String>,
 }
 
 impl Default for Config {
@@ -52,6 +53,7 @@ impl Default for Config {
             seasonal_bgs: vec![],
             osu_username: None,
             osu_password: None,
+            country: None,
         }
     }
 }
@@ -69,7 +71,6 @@ impl Config {
         self.paths.screenshots.as_ref().map(PathBuf::from).or_else(|| self.paths.osu_path.as_ref().map(|osu| PathBuf::from(osu).join("Screenshots")))
     }
 
-    /// Overrides credentials and API keys with values from environment variables / .env
     pub fn apply_env_overrides(&mut self) {
         if let Ok(val) = std::env::var("OSU_USERNAME") {
             let trimmed = val.trim();
@@ -129,6 +130,13 @@ impl Config {
                 self.amount_of_scores_on_lb = amount.clamp(1, 100);
             }
         }
+
+        if let Ok(val) = std::env::var("COUNTRY") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                self.country = Some(trimmed.to_uppercase());
+            }
+        }
     }
 }
 
@@ -142,7 +150,38 @@ pub fn detect_osu_path() -> Option<PathBuf> {
     None
 }
 
-/// Helper to write credentials & API keys directly to .env
+pub fn write_dotenv_country(country: &str) -> std::io::Result<()> {
+    let env_path = Path::new(".env");
+    let mut map = std::collections::BTreeMap::new();
+
+    if env_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(env_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('#') || trimmed.is_empty() {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    map.insert(k.trim().to_string(), v.trim().to_string());
+                }
+            }
+        }
+    }
+
+    map.insert("COUNTRY".to_string(), country.to_uppercase());
+
+    map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
+    map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
+
+    let mut out = String::from("# osu! Local Server - Environment Configuration\n");
+    for (k, v) in &map {
+        out.push_str(&format!("{}={}\n", k, v));
+    }
+
+    std::fs::write(env_path, out)?;
+    Ok(())
+}
+
 pub fn write_dotenv(
     username: Option<&str>,
     password_hash: Option<&str>,
@@ -218,14 +257,12 @@ pub fn write_dotenv(
     Ok(())
 }
 
-/// Streamlined interactive setup flow
 pub fn setup_config() -> Config {
     let mut config = Config::default();
 
     println!("\n=== osu! Local Server Quick Setup ===");
     println!("Press Enter to accept recommended defaults.\n");
 
-    // 1. osu! folder path with auto-detection
     let detected_osu = detect_osu_path();
     let prompt = match &detected_osu {
         Some(path) => format!("osu! folder path [default: {}]:", path.to_string_lossy()),
@@ -253,7 +290,6 @@ pub fn setup_config() -> Config {
         break;
     }
 
-    // 2. Custom subfolders (only prompt if user wants to customize)
     if config.paths.osu_path.is_some() {
         let customize_subfolders = prompt_bool("Customize Songs/Replays/Screenshots subfolders? (y/N) [default: no]", false);
         if customize_subfolders {
@@ -263,7 +299,6 @@ pub fn setup_config() -> Config {
         }
     }
 
-    // 3. Credentials & API Keys for .env
     println!("\n--- Credentials & API Keys (.env) ---");
     let setup_creds = prompt_bool("Configure osu! credentials & API keys now? (Y/n) [default: yes]", true);
 
@@ -291,7 +326,6 @@ pub fn setup_config() -> Config {
         println!("Skipping credentials. You can set them anytime in the .env file.");
     }
 
-    // 4. Leaderboard Settings
     println!("\n--- Leaderboard Settings ---");
     config.pp_leaderboard = prompt_bool("Show PP instead of Score on leaderboards? (y/N) [default: no]", false);
     config.show_pp_for_personal_best = prompt_bool("Show PP for personal best score panel? (y/N) [default: no]", false);
