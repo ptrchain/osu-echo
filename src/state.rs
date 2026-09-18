@@ -22,6 +22,7 @@ pub struct AppState {
     pub commands: HashMap<String, Command>,
     pub default_avatar: Vec<u8>,
     pub last_np_map: Option<Beatmap>,
+    pub recent_recommendations: Vec<String>,
 }
 
 impl AppState {
@@ -38,6 +39,7 @@ impl AppState {
             commands: HashMap::new(),
             default_avatar: Vec::new(),
             last_np_map: None,
+            recent_recommendations: Vec::new(),
         }
     }
 }

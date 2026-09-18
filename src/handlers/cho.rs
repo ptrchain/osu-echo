@@ -7,6 +7,25 @@ use crate::utils;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+pub const BANCHOBOT_ID: i32 = 3;
+pub const TILLERINO_ID: i32 = 4;
+
+pub fn create_bot_player(name: &str, userid: i32) -> Player {
+    let mut bot = Player::new(name.to_string());
+    bot.userid = userid;
+    bot.bancho_privs = 1;
+    bot.rank = 0;
+    bot.pp = 0;
+    bot.acc = 0.0;
+    bot.country = 0;
+    bot.ranked_score = 0;
+    bot.total_score = 0;
+    bot.playcount = 0;
+    bot.action = 0;
+    bot.info_text = String::new();
+    bot
+}
+
 const CHANNELS: &[(&str, &str)] = &[("#osu", "x"), ("#recent", "shows recently submitted scores!"), ("#tops", "shows top plays, as well as updates them!")];
 
 pub async fn bancho_connect(state: Arc<RwLock<AppState>>, params: &std::collections::HashMap<String, String>) -> Response {
@@ -90,7 +109,6 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 p.mods = mods;
                                 p.mode = mode;
                                 p.map_id = map_id;
-                                // Prevent client re-poll loops
                             }
                         }
                     }
@@ -111,9 +129,10 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 
                         let mut s = state.write().await;
                         if let Some(ref mut p) = s.player {
-                            let mut all_ids = Vec::with_capacity(2 + friend_records.len());
+                            let mut all_ids = Vec::with_capacity(3 + friend_records.len());
                             all_ids.push(p.userid);
-                            all_ids.push(3);
+                            all_ids.push(BANCHOBOT_ID);
+                            all_ids.push(TILLERINO_ID);
                             for f in &friend_records {
                                 all_ids.push(f.friend_id);
                             }
@@ -122,17 +141,12 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             p.queue.extend_from_slice(&packets::user_presence(p));
                             p.enqueue_stats();
 
-                            let mut bot = Player::new("BanchoBot".to_string());
-                            bot.userid = 3;
-                            bot.bancho_privs = 1;
-                            bot.rank = 0;
-                            bot.pp = 0;
-                            bot.acc = 0.0;
-                            bot.country = 0;
-                            bot.action = 0;
-                            bot.info_text = String::new();
-                            p.queue.extend_from_slice(&packets::user_presence(&bot));
-                            p.queue.extend_from_slice(&packets::user_stats(&bot));
+                            let bancho = create_bot_player("BanchoBot", BANCHOBOT_ID);
+                            let tillerino = create_bot_player("Tillerino", TILLERINO_ID);
+                            p.queue.extend_from_slice(&packets::user_presence(&bancho));
+                            p.queue.extend_from_slice(&packets::user_stats(&bancho));
+                            p.queue.extend_from_slice(&packets::user_presence(&tillerino));
+                            p.queue.extend_from_slice(&packets::user_stats(&tillerino));
 
                             for f in friend_records {
                                 let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name };
@@ -167,16 +181,11 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 for target_id in requested_ids {
                                     if target_id == p.userid {
                                         p.queue.extend_from_slice(&packets::user_presence(p));
-                                    } else if target_id == 3 {
-                                        let mut bot = Player::new("BanchoBot".to_string());
-                                        bot.userid = 3;
-                                        bot.bancho_privs = 1;
-                                        bot.rank = 0;
-                                        bot.pp = 0;
-                                        bot.acc = 0.0;
-                                        bot.country = 0;
-                                        bot.action = 0;
-                                        bot.info_text = String::new();
+                                    } else if target_id == BANCHOBOT_ID {
+                                        let bot = create_bot_player("BanchoBot", BANCHOBOT_ID);
+                                        p.queue.extend_from_slice(&packets::user_presence(&bot));
+                                    } else if target_id == TILLERINO_ID {
+                                        let bot = create_bot_player("Tillerino", TILLERINO_ID);
                                         p.queue.extend_from_slice(&packets::user_presence(&bot));
                                     } else if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
                                         let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
@@ -212,16 +221,11 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 for target_id in requested_ids {
                                     if target_id == p.userid {
                                         p.enqueue_stats();
-                                    } else if target_id == 3 {
-                                        let mut bot = Player::new("BanchoBot".to_string());
-                                        bot.userid = 3;
-                                        bot.bancho_privs = 1;
-                                        bot.rank = 0;
-                                        bot.pp = 0;
-                                        bot.acc = 0.0;
-                                        bot.country = 0;
-                                        bot.action = 0;
-                                        bot.info_text = String::new();
+                                    } else if target_id == BANCHOBOT_ID {
+                                        let bot = create_bot_player("BanchoBot", BANCHOBOT_ID);
+                                        p.queue.extend_from_slice(&packets::user_stats(&bot));
+                                    } else if target_id == TILLERINO_ID {
+                                        let bot = create_bot_player("Tillerino", TILLERINO_ID);
                                         p.queue.extend_from_slice(&packets::user_stats(&bot));
                                     } else if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
                                         let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
@@ -361,7 +365,6 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
-    // Fallback: extract username from line 0 of login body
     if name.is_none() {
         if let Ok(body_str) = std::str::from_utf8(body_bytes) {
             let mut lines = body_str.lines();
@@ -476,9 +479,10 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         }
     }
 
-    let mut all_ids = Vec::with_capacity(2 + friend_records.len());
+    let mut all_ids = Vec::with_capacity(3 + friend_records.len());
     all_ids.push(player.userid);
-    all_ids.push(3);
+    all_ids.push(BANCHOBOT_ID);
+    all_ids.push(TILLERINO_ID);
     for f in &friend_records {
         if !all_ids.contains(&f.friend_id) {
             all_ids.push(f.friend_id);
@@ -489,17 +493,13 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     body.extend_from_slice(&packets::user_presence(&player));
     body.extend_from_slice(&packets::user_stats(&player));
 
-    let mut bot = Player::new("BanchoBot".to_string());
-    bot.userid = 3;
-    bot.bancho_privs = 1;
-    bot.rank = 0;
-    bot.pp = 0;
-    bot.acc = 0.0;
-    bot.country = 0;
-    bot.action = 0;
-    bot.info_text = String::new();
-    body.extend_from_slice(&packets::user_presence(&bot));
-    body.extend_from_slice(&packets::user_stats(&bot));
+    let bancho = create_bot_player("BanchoBot", BANCHOBOT_ID);
+    body.extend_from_slice(&packets::user_presence(&bancho));
+    body.extend_from_slice(&packets::user_stats(&bancho));
+
+    let tillerino = create_bot_player("Tillerino", TILLERINO_ID);
+    body.extend_from_slice(&packets::user_presence(&tillerino));
+    body.extend_from_slice(&packets::user_stats(&tillerino));
 
     for f in &friend_records {
         let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
@@ -519,7 +519,7 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         body.extend_from_slice(&packets::user_stats(&fp));
     }
 
-    body.extend_from_slice(&packets::local_message("Welcome! BanchoBot is online. Type !help in chat or PM BanchoBot to see commands.", "#osu"));
+    body.extend_from_slice(&packets::local_message("Welcome! BanchoBot and Tillerino are online. Type !help in chat or PM BanchoBot/Tillerino to see commands.", "#osu"));
 
     utils::log_success(&format!("{} successfully logged in!", profile_name));
 
@@ -561,6 +561,7 @@ mod tests {
         let bundled_ids = bundle_reader.read_i32_list().expect("Valid bundled ids");
         assert!(bundled_ids.contains(&2), "Bundle must include local player");
         assert!(bundled_ids.contains(&3), "Bundle must include BanchoBot");
+        assert!(bundled_ids.contains(&4), "Bundle must include Tillerino");
 
         let mut presence_user_ids = Vec::new();
         for p in &pkts {
@@ -573,6 +574,7 @@ mod tests {
 
         assert!(presence_user_ids.contains(&2), "Presence must include local player");
         assert!(presence_user_ids.contains(&3), "Presence must include BanchoBot");
+        assert!(presence_user_ids.contains(&4), "Presence must include Tillerino");
 
         let last_msg_pkt = pkts.iter().rev().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Welcome message packet present");
         let mut r = packets::PacketReader::new(last_msg_pkt.payload);
@@ -583,7 +585,7 @@ mod tests {
         assert_eq!(client, "local");
         assert_eq!(target, "#osu");
         assert_eq!(uid, -1);
-        assert!(msg.contains("BanchoBot is online"));
+        assert!(msg.contains("BanchoBot and Tillerino are online"));
     }
 
     #[tokio::test]
@@ -643,5 +645,30 @@ mod tests {
         assert!(!pkts85.iter().any(|p| p.id == packets::PacketId::ChoUserPresenceBundle as u16), "Packet 85 must NOT send presence bundle");
         let stats85 = pkts85.iter().find(|p| p.id == packets::PacketId::ChoUserStats as u16);
         assert!(stats85.is_some(), "Packet 85 must return stats for requested user");
+    }
+
+    #[test]
+    fn test_create_bot_player_stats() {
+        let tillerino = create_bot_player("Tillerino", TILLERINO_ID);
+        assert_eq!(tillerino.userid, 4);
+        assert_eq!(tillerino.country, 0);
+        assert_eq!(tillerino.acc, 0.0);
+        assert_eq!(tillerino.rank, 0);
+        assert_eq!(tillerino.playcount, 0);
+        assert_eq!(tillerino.ranked_score, 0);
+        assert_eq!(tillerino.total_score, 0);
+        assert_eq!(tillerino.info_text, "");
+        assert_eq!(tillerino.bancho_privs, 1);
+
+        let bancho = create_bot_player("BanchoBot", BANCHOBOT_ID);
+        assert_eq!(bancho.userid, 3);
+        assert_eq!(bancho.country, 0);
+        assert_eq!(bancho.acc, 0.0);
+        assert_eq!(bancho.rank, 0);
+        assert_eq!(bancho.playcount, 0);
+        assert_eq!(bancho.ranked_score, 0);
+        assert_eq!(bancho.total_score, 0);
+        assert_eq!(bancho.info_text, "");
+        assert_eq!(bancho.bancho_privs, 1);
     }
 }

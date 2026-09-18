@@ -464,6 +464,25 @@ pub fn get_beatmap_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Beatmap
     }
 }
 
+pub fn get_candidate_beatmaps(conn: &Connection, mode: i32) -> SqlResult<Vec<Beatmap>> {
+    let mut stmt = conn.prepare("SELECT * FROM beatmaps WHERE mode = ?1 ORDER BY playcount DESC, difficultyrating ASC")?;
+    let mut maps: Vec<Beatmap> = stmt
+        .query_map(params![mode], |row| Ok(row_to_beatmap(row)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    // Fallback: if no maps match the specific mode, retrieve any available beatmaps
+    if maps.is_empty() {
+        let mut fallback_stmt = conn.prepare("SELECT * FROM beatmaps ORDER BY playcount DESC, difficultyrating ASC")?;
+        maps = fallback_stmt
+            .query_map([], |row| Ok(row_to_beatmap(row)))?
+            .filter_map(|r| r.ok())
+            .collect();
+    }
+
+    Ok(maps)
+}
+
 pub fn insert_beatmap(conn: &Connection, bmap: &Beatmap) -> SqlResult<()> {
     conn.execute(
         "INSERT OR REPLACE INTO beatmaps (

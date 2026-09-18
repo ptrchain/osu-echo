@@ -5,12 +5,19 @@ use crate::utils;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
-    let s = state.read().await;
+const TILLERINO_AVATAR: &[u8] = include_bytes!("../../assets/tillerino.png");
+const BANCHOBOT_AVATAR: &[u8] = include_bytes!("../../assets/banchobot.png");
 
-    if s.player.is_none() {
-        return Response::empty().with_status(hyper::StatusCode::NOT_FOUND);
+pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
+    if userid == 4 || userid == 2070907 {
+        return Response::image(TILLERINO_AVATAR.to_vec(), "png");
     }
+
+    if userid == 3 {
+        return Response::image(BANCHOBOT_AVATAR.to_vec(), "png");
+    }
+
+    let s = state.read().await;
 
     if userid != 2 {
         let url = format!("https://a.ppy.sh/{}?.png", userid);
@@ -54,4 +61,34 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
     }
 
     Response::image(s.default_avatar.clone(), "png")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::config::Config;
+    use crate::types::player::Player;
+
+    #[tokio::test]
+    async fn test_bot_avatars_and_tillerino_pfp() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut app_state = AppState::new(conn, Config::default());
+        app_state.player = Some(Player::new("PlayerTest".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Tillerino ID 4
+        let resp_tillerino = handle(shared_state.clone(), 4).await;
+        assert_eq!(resp_tillerino.status, hyper::StatusCode::OK);
+        assert_eq!(resp_tillerino.body, TILLERINO_AVATAR);
+
+        // Tillerino official user ID 2070907
+        let resp_tillerino_official = handle(shared_state.clone(), 2070907).await;
+        assert_eq!(resp_tillerino_official.status, hyper::StatusCode::OK);
+        assert_eq!(resp_tillerino_official.body, TILLERINO_AVATAR);
+
+        // BanchoBot ID 3
+        let resp_bancho = handle(shared_state.clone(), 3).await;
+        assert_eq!(resp_bancho.status, hyper::StatusCode::OK);
+        assert_eq!(resp_bancho.body, BANCHOBOT_AVATAR);
+    }
 }

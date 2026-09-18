@@ -442,6 +442,9 @@ async fn get_friends(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     if !friend_ids.contains(&3) {
         friend_ids.push(3);
     }
+    if !friend_ids.contains(&4) {
+        friend_ids.push(4);
+    }
 
     let mut resp_str = String::new();
     for id in friend_ids {
@@ -459,7 +462,7 @@ async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::
     let s = state.read().await;
 
     if query.starts_with(&s.config.command_prefix) {
-        let msg = "Commands have moved to in-game chat!\nType your command in #osu or PM BanchoBot (e.g. !help, /np, !recent).";
+        let msg = "Commands have moved to in-game chat!\nType your command in #osu or PM BanchoBot/Tillerino (e.g. !help, /np, !r).";
         let resp = DirectResponse::from_str(msg, -2);
         return Response::new(resp.as_binary());
     }
@@ -828,6 +831,7 @@ mod tests {
         let resp = handle(shared_state, "/osu-getfriends.php", &params, &hyper::Method::GET, &headers, &[]).await;
         let body_str = String::from_utf8(resp.body).unwrap();
         assert!(body_str.contains("3\n"), "BanchoBot (3) must be in friends response");
+        assert!(body_str.contains("4\n"), "Tillerino (4) must be in friends response");
         assert!(body_str.contains("12345\n"));
         assert!(body_str.contains("67890\n"));
     }

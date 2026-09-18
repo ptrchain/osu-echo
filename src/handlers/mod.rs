@@ -1,7 +1,9 @@
 pub mod api;
 pub mod avatar;
+pub mod banchobot;
 pub mod chat_commands;
 pub mod cho;
 pub mod score_decode;
 pub mod score_submit;
+pub mod tillerino;
 pub mod web;
