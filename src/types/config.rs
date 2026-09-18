@@ -333,7 +333,7 @@ pub fn setup_config(data_dir: &Path) -> Config {
         let mut password_hash = None;
 
         if let Some(ref u) = username {
-            let raw_pw = prompt_password("osu! password (will be MD5-hashed, or Enter to skip) [Press Shift to reveal]:");
+            let raw_pw = prompt_password("osu! password (will be MD5-hashed, or Enter to skip) [Hold Tab to reveal]:");
             if let Some(pw) = raw_pw {
                 let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
                 password_hash = Some(hash);
@@ -425,8 +425,23 @@ impl Drop for RawModeGuard {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn is_tab_down() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(v_key: i32) -> i16;
+    }
+    // 0x09 = VK_TAB
+    unsafe { (GetAsyncKeyState(0x09) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_tab_down() -> bool {
+    false
+}
+
 pub fn prompt_password(prompt: &str) -> Option<String> {
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, ModifierKeyCode};
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
     use std::io::{stdout, IsTerminal, Write};
     use std::time::{Duration, Instant};
 
@@ -443,8 +458,8 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
     let _guard = RawModeGuard;
 
     let mut password = String::new();
-    let mut reveal_until: Option<Instant> = None;
     let mut last_rendered_state = String::new();
+    let mut tab_held_until: Option<Instant> = None;
 
     let render = |pw: &str, is_revealed: bool| {
         let mut out = stdout();
@@ -461,7 +476,9 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
 
     loop {
         let now = Instant::now();
-        let is_revealed = reveal_until.is_some_and(|until| now < until);
+
+        let is_revealed = !password.is_empty()
+            && (is_tab_down() || tab_held_until.is_some_and(|until| now < until));
 
         let state_key = format!("{}:{}", password, is_revealed);
         if state_key != last_rendered_state {
@@ -469,23 +486,14 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
             last_rendered_state = state_key;
         }
 
-        let poll_timeout = if let Some(until) = reveal_until {
-            if until > now {
-                (until - now).min(Duration::from_millis(50))
-            } else {
-                reveal_until = None;
-                Duration::from_millis(10)
-            }
+        let poll_timeout = if is_revealed {
+            Duration::from_millis(20)
         } else {
-            Duration::from_millis(100)
+            Duration::from_millis(30)
         };
 
         if event::poll(poll_timeout).unwrap_or(false) {
             if let Ok(Event::Key(key)) = event::read() {
-                if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
-                    continue;
-                }
-
                 if key.modifiers.contains(KeyModifiers::CONTROL)
                     && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
                 {
@@ -495,23 +503,29 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
                 }
 
                 match key.code {
+                    KeyCode::Tab | KeyCode::BackTab => {
+                        if key.kind == KeyEventKind::Release {
+                            tab_held_until = None;
+                        } else {
+                            tab_held_until = Some(now + Duration::from_millis(150));
+                        }
+                    }
                     KeyCode::Enter => {
-                        break;
+                        if key.kind == KeyEventKind::Press {
+                            break;
+                        }
                     }
                     KeyCode::Backspace => {
-                        password.pop();
-                        last_rendered_state.clear();
-                    }
-                    KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
-                    | KeyCode::Tab => {
-                        if !password.is_empty() {
-                            reveal_until = Some(Instant::now() + Duration::from_millis(1500));
+                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                            password.pop();
                             last_rendered_state.clear();
                         }
                     }
                     KeyCode::Char(c) => {
-                        password.push(c);
-                        last_rendered_state.clear();
+                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
+                            password.push(c);
+                            last_rendered_state.clear();
+                        }
                     }
                     _ => {}
                 }
