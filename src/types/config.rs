@@ -269,6 +269,16 @@ pub fn write_dotenv(
     out.push_str("# Number of scores shown on leaderboard (1-100)\n");
     out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
 
+    if let Some(country) = map.get("COUNTRY") {
+        out.push_str("\n# Player Profile Settings\n");
+        out.push_str(&format!("COUNTRY={}\n", country));
+    }
+
+    if let Some(recent) = map.get("ENABLE_RECENT_CHANNEL") {
+        out.push_str("\n# Chat Feed Settings\n");
+        out.push_str(&format!("ENABLE_RECENT_CHANNEL={}\n", recent));
+    }
+
     std::fs::write(env_path, out)?;
     Ok(())
 }
@@ -323,7 +333,7 @@ pub fn setup_config() -> Config {
         let mut password_hash = None;
 
         if let Some(ref u) = username {
-            let raw_pw = prompt_optional_string("osu! password (will be MD5-hashed, or Enter to skip)");
+            let raw_pw = prompt_password("osu! password (will be MD5-hashed, or Enter to skip) [Press Shift to reveal]:");
             if let Some(pw) = raw_pw {
                 let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
                 password_hash = Some(hash);
@@ -381,6 +391,121 @@ fn prompt_bool(prompt: &str, default_val: bool) -> bool {
     }
     let lower = input.to_lowercase();
     lower.starts_with('y')
+}
+
+struct RawModeGuard;
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+}
+
+pub fn prompt_password(prompt: &str) -> Option<String> {
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, ModifierKeyCode};
+    use std::io::{stdout, IsTerminal, Write};
+    use std::time::{Duration, Instant};
+
+    if !std::io::stdin().is_terminal() {
+        return prompt_optional_string(prompt);
+    }
+
+    print!("{} ", prompt);
+    let _ = stdout().flush();
+
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return prompt_optional_string(prompt);
+    }
+    let _guard = RawModeGuard;
+
+    let mut password = String::new();
+    let mut reveal_until: Option<Instant> = None;
+    let mut last_rendered_state = String::new();
+
+    let render = |pw: &str, is_revealed: bool| {
+        let mut out = stdout();
+        let display = if is_revealed {
+            format!("{} (revealed)", pw)
+        } else {
+            "*".repeat(pw.chars().count())
+        };
+        let _ = write!(out, "\r\x1b[2K{} {}", prompt, display);
+        let _ = out.flush();
+    };
+
+    render(&password, false);
+
+    loop {
+        let now = Instant::now();
+        let is_revealed = reveal_until.is_some_and(|until| now < until);
+
+        let state_key = format!("{}:{}", password, is_revealed);
+        if state_key != last_rendered_state {
+            render(&password, is_revealed);
+            last_rendered_state = state_key;
+        }
+
+        let poll_timeout = if let Some(until) = reveal_until {
+            if until > now {
+                (until - now).min(Duration::from_millis(50))
+            } else {
+                reveal_until = None;
+                Duration::from_millis(10)
+            }
+        } else {
+            Duration::from_millis(100)
+        };
+
+        if event::poll(poll_timeout).unwrap_or(false) {
+            match event::read() {
+                Ok(Event::Key(key)) => {
+                    if key.kind != KeyEventKind::Press && key.kind != KeyEventKind::Repeat {
+                        continue;
+                    }
+
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
+                    {
+                        drop(_guard);
+                        println!();
+                        return None;
+                    }
+
+                    match key.code {
+                        KeyCode::Enter => {
+                            break;
+                        }
+                        KeyCode::Backspace => {
+                            password.pop();
+                            last_rendered_state.clear();
+                        }
+                        KeyCode::Modifier(ModifierKeyCode::LeftShift | ModifierKeyCode::RightShift)
+                        | KeyCode::Tab => {
+                            if !password.is_empty() {
+                                reveal_until = Some(Instant::now() + Duration::from_millis(1500));
+                                last_rendered_state.clear();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            password.push(c);
+                            last_rendered_state.clear();
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    drop(_guard);
+    println!();
+
+    let trimmed = password.trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 fn prompt_optional_string(prompt: &str) -> Option<String> {

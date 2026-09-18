@@ -26,20 +26,6 @@ pub fn get_or_create_certificates(data_dir: &Path) -> Result<TlsSetupPaths, Box<
         return Ok(TlsSetupPaths { cert_pem, key_pem, cert_der });
     }
 
-    // Check if localhostosu astra already has them on this machine
-    let astra_dir = PathBuf::from(r"E:\! Python\localhostosu astra\.data\local-tls");
-    if astra_dir.exists() {
-        let astra_cert = astra_dir.join("localhost.pem");
-        let astra_key = astra_dir.join("localhost-key.pem");
-        let astra_der = astra_dir.join("localhost.cer");
-        if astra_cert.exists() && astra_key.exists() && astra_der.exists() {
-            std::fs::copy(&astra_cert, &cert_pem)?;
-            std::fs::copy(&astra_key, &key_pem)?;
-            std::fs::copy(&astra_der, &cert_der)?;
-            crate::logger::info("Reused existing trusted TLS certificates from localhostosu astra.");
-            return Ok(TlsSetupPaths { cert_pem, key_pem, cert_der });
-        }
-    }
 
     crate::logger::info("Generating self-signed TLS certificates for localhost...");
 
