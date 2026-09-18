@@ -202,11 +202,22 @@ pub async fn handle_mybest(state: &Arc<RwLock<AppState>>, player_name: &str, tar
         let mut title = String::new();
         let mode = s.player.as_ref().map(|p| p.mode).unwrap_or(0);
 
-        if let Some(ref b) = s.last_np_map {
-            md5 = b.file_md5.clone();
-            title = format!("{} - {} [{}]", b.artist, b.title, b.version);
-        } else if let Some(ref p) = s.player {
-            md5 = p.map_md5.clone();
+        if let Some(ref p) = s.player {
+            if !p.map_md5.is_empty() {
+                md5 = p.map_md5.clone();
+                title = p.info_text.clone();
+                if let Some(ref b) = s.last_np_map {
+                    if b.file_md5 == md5 {
+                        title = format!("{} - {} [{}]", b.artist, b.title, b.version);
+                    }
+                }
+            }
+        }
+        if md5.is_empty() {
+            if let Some(ref b) = s.last_np_map {
+                md5 = b.file_md5.clone();
+                title = format!("{} - {} [{}]", b.artist, b.title, b.version);
+            }
         }
         (md5, title, mode)
     };
@@ -251,11 +262,22 @@ pub async fn handle_leaderboard(state: &Arc<RwLock<AppState>>, _player_name: &st
         let mode = s.player.as_ref().map(|p| p.mode).unwrap_or(0);
         let name = s.player.as_ref().map(|p| p.name.clone()).unwrap_or_default();
 
-        if let Some(ref b) = s.last_np_map {
-            md5 = b.file_md5.clone();
-            title = format!("{} - {} [{}]", b.artist, b.title, b.version);
-        } else if let Some(ref p) = s.player {
-            md5 = p.map_md5.clone();
+        if let Some(ref p) = s.player {
+            if !p.map_md5.is_empty() {
+                md5 = p.map_md5.clone();
+                title = p.info_text.clone();
+                if let Some(ref b) = s.last_np_map {
+                    if b.file_md5 == md5 {
+                        title = format!("{} - {} [{}]", b.artist, b.title, b.version);
+                    }
+                }
+            }
+        }
+        if md5.is_empty() {
+            if let Some(ref b) = s.last_np_map {
+                md5 = b.file_md5.clone();
+                title = format!("{} - {} [{}]", b.artist, b.title, b.version);
+            }
         }
         (md5, title, mode, name)
     };

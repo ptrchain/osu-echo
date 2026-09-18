@@ -397,6 +397,19 @@ pub fn find_and_parse_local_osu_file(
         }
     }
 
+    if map_id.is_some() || map_md5.is_some() {
+        if let Ok(entries) = std::fs::read_dir(songs_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, title_hint, set_id) {
+                        return Some((b, c));
+                    }
+                }
+            }
+        }
+    }
+
     None
 }
 

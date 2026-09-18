@@ -335,4 +335,123 @@ mod tests {
             assert_eq!(sender_id, 4);
         }
     }
+
+    #[test]
+    fn test_parse_np_message_editing_and_slash_format() {
+        let edit_msg = "\x01ACTION is editing [https://osu.ppy.sh/b/54321 MapArtist - EditTitle [Insane]] +HD\x01";
+        let info = parse_np_message(edit_msg).unwrap();
+        assert_eq!(info.map_id, Some(54321));
+        assert_eq!(info.mods, Some(Mods::HIDDEN.bits()));
+
+        let slash_msg = "\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/123456/789012 Artist - SlashTitle [Hard]]\x01";
+        let info2 = parse_np_message(slash_msg).unwrap();
+        assert_eq!(info2.set_id, Some(123456));
+        assert_eq!(info2.map_id, Some(789012));
+    }
+
+    #[tokio::test]
+    async fn test_tillerino_np_switch_map() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PlayerNP").unwrap();
+
+        let map1_content = "osu file format v14\n\
+            [General]\nMode: 0\n\
+            [Metadata]\nTitle:FirstMap\nArtist:Artist1\nCreator:Mapper\nVersion:Normal\nBeatmapID:1001\nBeatmapSetID:2001\n\
+            [Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\nSliderMultiplier:1.4\nSliderTickRate:1\n\
+            [TimingPoints]\n0,500,4,2,0,100,1,0\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n\
+            300,200,2000,1,0,0:0:0:0:\n";
+
+        let map2_content = "osu file format v14\n\
+            [General]\nMode: 0\n\
+            [Metadata]\nTitle:SecondMap\nArtist:Artist2\nCreator:Mapper\nVersion:Hard\nBeatmapID:1002\nBeatmapSetID:2002\n\
+            [Difficulty]\nHPDrainRate:6\nCircleSize:4.5\nOverallDifficulty:8.5\nApproachRate:9.3\nSliderMultiplier:1.5\nSliderTickRate:1\n\
+            [TimingPoints]\n0,400,4,2,0,100,1,0\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n\
+            300,200,2000,1,0,0:0:0:0:\n";
+
+        let mut bmap1 = utils::parse_osu_file_to_beatmap(map1_content, Some(1001), Some(2001)).unwrap();
+        bmap1.file_content = Some(map1_content.to_string());
+        db::insert_beatmap(&conn, &bmap1).unwrap();
+        db::update_beatmap_file_content(&conn, &bmap1.file_md5, map1_content).unwrap();
+
+        let mut bmap2 = utils::parse_osu_file_to_beatmap(map2_content, Some(1002), Some(2002)).unwrap();
+        bmap2.file_content = Some(map2_content.to_string());
+        db::insert_beatmap(&conn, &bmap2).unwrap();
+        db::update_beatmap_file_content(&conn, &bmap2.file_md5, map2_content).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("PlayerNP".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let np1 = "\x01ACTION is listening to [https://osu.ppy.sh/b/1001 Artist1 - FirstMap [Normal]]\x01";
+        handle_chat_message(shared_state.clone(), "PlayerNP", np1, "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("FirstMap"), "Must calculate first map");
+            assert_eq!(s.last_np_map.as_ref().unwrap().beatmap_id, 1001);
+        }
+
+        let np2 = "\x01ACTION is listening to [https://osu.ppy.sh/b/1002 Artist2 - SecondMap [Hard]]\x01";
+        handle_chat_message(shared_state.clone(), "PlayerNP", np2, "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("SecondMap"), "Must switch to and calculate second map! Got: {}", msg);
+            assert_eq!(s.last_np_map.as_ref().unwrap().beatmap_id, 1002);
+        }
+
+        handle_chat_message(shared_state.clone(), "PlayerNP", "!with HR", "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("SecondMap"), "Must calculate HR on second map");
+            assert!(msg.contains("+HR"));
+        }
+
+        {
+            let mut s = shared_state.write().await;
+            if let Some(ref mut p) = s.player {
+                p.map_id = 1001;
+                p.map_md5 = bmap1.file_md5.clone();
+                p.info_text = "Artist1 - FirstMap [Normal]".to_string();
+            }
+        }
+        handle_chat_message(shared_state.clone(), "PlayerNP", "/np", "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("FirstMap"), "Must switch back to first map via /np");
+            assert_eq!(s.last_np_map.as_ref().unwrap().beatmap_id, 1001);
+        }
+    }
 }

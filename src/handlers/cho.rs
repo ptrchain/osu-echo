@@ -101,6 +101,8 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             let mut s = state.write().await;
                             if let Some(b) = resolved_bmap {
                                 s.last_np_map = Some(b);
+                            } else if !map_md5.is_empty() && s.last_np_map.as_ref().map(|b| &b.file_md5) != Some(&map_md5) {
+                                s.last_np_map = None;
                             }
                             if let Some(ref mut p) = s.player {
                                 p.action = action as i8;
