@@ -6,6 +6,10 @@ use rusqlite::{params, Connection, Result as SqlResult};
 pub fn init_db(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
         "
+        PRAGMA journal_mode = WAL;
+        PRAGMA busy_timeout = 5000;
+        PRAGMA synchronous = NORMAL;
+
         CREATE TABLE IF NOT EXISTS config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL

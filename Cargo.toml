@@ -33,3 +33,10 @@ rustls-pemfile = "2"
 rustls-pki-types = "1"
 rcgen = "0.13"
 crossterm = "0.29.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
