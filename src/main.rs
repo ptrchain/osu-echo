@@ -152,21 +152,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut app_state = AppState::new(conn, config.clone());
 
-    let http = &app_state.http;
-    match http.get("https://a.ppy.sh/").send().await {
-        Ok(resp) if resp.status() == 200 => {
-            if let Ok(bytes) = resp.bytes().await {
-                app_state.default_avatar = bytes.to_vec();
-            }
-        }
-        _ => {
-            logger::warn("Failed to fetch default avatar from https://a.ppy.sh/");
-        }
-    }
-
     commands::register_commands(&mut app_state);
 
     let shared_state: state::SharedState = Arc::new(RwLock::new(app_state));
+
+    let avatar_http = {
+        let s = shared_state.read().await;
+        s.http.clone()
+    };
+    let state_avatar = shared_state.clone();
+    tokio::spawn(async move {
+        let req = avatar_http
+            .get("https://a.ppy.sh/")
+            .timeout(std::time::Duration::from_secs(2));
+        if let Ok(resp) = req.send().await {
+            if resp.status() == 200 {
+                if let Ok(bytes) = resp.bytes().await {
+                    let mut s = state_avatar.write().await;
+                    s.default_avatar = bytes.to_vec();
+                }
+            }
+        }
+    });
 
     if let Some(replay_folder) = config.replay_folder() {
         let state_clone = shared_state.clone();

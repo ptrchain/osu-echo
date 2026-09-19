@@ -20,10 +20,20 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
     let s = state.read().await;
 
     if userid != 2 {
+        let avatar_cache_dir = std::path::Path::new(".data").join("avatars");
+        let cached_file = avatar_cache_dir.join(format!("{}.png", userid));
+        if cached_file.exists() {
+            if let Ok(bytes) = std::fs::read(&cached_file) {
+                return Response::image(bytes, "png");
+            }
+        }
+
         let url = format!("https://a.ppy.sh/{}?.png", userid);
         match s.http.get(&url).send().await {
             Ok(resp) if resp.status() == 200 => {
                 if let Ok(bytes) = resp.bytes().await {
+                    let _ = std::fs::create_dir_all(&avatar_cache_dir);
+                    let _ = std::fs::write(&cached_file, &bytes);
                     return Response::image(bytes.to_vec(), "png");
                 }
             }
@@ -32,10 +42,19 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
         return Response::image(s.default_avatar.clone(), "png");
     }
 
-    let player_name = s.player.as_ref().unwrap().name.clone();
-    let db_conn = s.db.lock().await;
-    let avatar_url: Option<String> = db::get_avatar(&db_conn, &player_name).unwrap_or(None);
-    drop(db_conn);
+    let player_name = s
+        .player
+        .as_ref()
+        .map(|p| p.name.clone())
+        .or_else(|| s.pending_login_name.clone())
+        .or_else(|| s.config.osu_username.clone());
+
+    let avatar_url = if let Some(ref name) = player_name {
+        let db_conn = s.db.lock().await;
+        db::get_avatar(&db_conn, name).unwrap_or(None)
+    } else {
+        None
+    };
 
     let Some(pfp) = avatar_url else {
         return Response::image(s.default_avatar.clone(), "png");
@@ -90,5 +109,19 @@ mod tests {
         let resp_bancho = handle(shared_state.clone(), 3).await;
         assert_eq!(resp_bancho.status, hyper::StatusCode::OK);
         assert_eq!(resp_bancho.body, BANCHOBOT_AVATAR);
+    }
+
+    #[tokio::test]
+    async fn test_avatar_pre_login_safety() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut app_state = AppState::new(conn, Config::default());
+        app_state.player = None; // Pre-login state
+        app_state.default_avatar = vec![1, 2, 3, 4];
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Requesting local player (ID 2) when player is not yet set must not panic
+        let resp = handle(shared_state, 2).await;
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        assert_eq!(resp.body, vec![1, 2, 3, 4]);
     }
 }

@@ -23,6 +23,7 @@ pub struct AppState {
     pub default_avatar: Vec<u8>,
     pub last_np_map: Option<Beatmap>,
     pub recent_recommendations: Vec<String>,
+    pub bancho_score_cache: HashMap<(i64, i32, Option<u32>, i32), (std::time::Instant, Vec<crate::types::score::BanchoScore>)>,
 }
 
 impl AppState {
@@ -45,6 +46,7 @@ impl AppState {
             default_avatar: Vec::new(),
             last_np_map: None,
             recent_recommendations: Vec::new(),
+            bancho_score_cache: HashMap::new(),
         }
     }
 }

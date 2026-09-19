@@ -130,9 +130,24 @@ async fn get_replay(state: Arc<RwLock<AppState>>, params: &std::collections::Has
 }
 
 async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::HashMap<String, String>) -> Response {
-    let s_read = state.read().await;
-    if s_read.player.is_none() {
-        return Response::empty().with_status(hyper::StatusCode::NOT_FOUND);
+    let username_from_params = params.get("us").cloned().or_else(|| params.get("u").cloned());
+    if let Some(ref u) = username_from_params {
+        if !u.is_empty() {
+            let mut s = state.write().await;
+            if s.pending_login_name.is_none() {
+                s.pending_login_name = Some(u.clone());
+            }
+        }
+    }
+
+    // If player is not yet set in state (e.g. concurrent login), wait briefly for in-flight login to complete
+    if state.read().await.player.is_none() {
+        for _ in 0..40 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if state.read().await.player.is_some() {
+                break;
+            }
+        }
     }
 
     let mods_val: u32 = params.get("mods").and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -146,11 +161,19 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         return Response::text("0|false");
     }
 
-    let player_name = s_read.player.as_ref().unwrap().name.clone();
+    let s_read = state.read().await;
+    let player_name = s_read
+        .player
+        .as_ref()
+        .map(|p| p.name.clone())
+        .or_else(|| username_from_params.clone())
+        .or_else(|| s_read.pending_login_name.clone())
+        .or_else(|| s_read.config.osu_username.clone())
+        .unwrap_or_default();
     let pp_leaderboard = s_read.config.pp_leaderboard;
     let show_pp_pb = s_read.config.show_pp_for_personal_best;
     let amount = s_read.config.amount_of_scores_on_lb;
-    let prev_game_mode = s_read.player.as_ref().map(|p| p.mode).unwrap_or(0);
+    let prev_game_mode = s_read.player.as_ref().map(|p| p.mode).unwrap_or(mode as u8);
     drop(s_read);
 
     let target_game_mode = mode as u8;
@@ -190,7 +213,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    if stats_need_update || target_game_mode != prev_game_mode {
+    if !player_name.is_empty() && (stats_need_update || target_game_mode != prev_game_mode) {
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let scores = db::get_ranked_scores(&db_conn, &player_name).unwrap_or_default();
@@ -262,7 +285,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    let s = state.read().await;
+    let mut s = state.read().await;
     let current_mode = s.mode;
 
     let status = api_to_server_status(bmap.approved);
@@ -274,28 +297,53 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     let is_global = rank_type == LeaderboardTypes::Top || rank_type == LeaderboardTypes::Mods || rank_type == LeaderboardTypes::Country;
 
     if is_global {
-        if let Some(ref api_key) = s.config.osu_api_key {
-            let mods_filter = if rank_type == LeaderboardTypes::Mods { Some(mods_val) } else { None };
+        let api_key_opt = s.config.osu_api_key.clone();
+        let mods_filter = if rank_type == LeaderboardTypes::Mods { Some(mods_val) } else { None };
+        let cache_key = (bmap.beatmap_id, mode, mods_filter, amount);
 
-            let bancho_scores = utils::fetch_scores_from_bancho(&s.http, api_key, bmap.beatmap_id, mode, mods_filter, amount).await;
+        let cached_scores = s.bancho_score_cache.get(&cache_key).and_then(|(instant, scores)| {
+            if instant.elapsed() < std::time::Duration::from_secs(180) {
+                Some(scores.clone())
+            } else {
+                None
+            }
+        });
 
-            if let Some(mut b_scores) = bancho_scores {
-                if pp_leaderboard || current_mode.is_some() {
-                    if let Some(content) = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await {
-                        if let Ok(parsed_map) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
-                            for sc in &mut b_scores {
-                                utils::calculate_bancho_score_pp(&parsed_map, mode, sc);
-                            }
+        let bancho_scores = if let Some(cs) = cached_scores {
+            Some(cs)
+        } else if let Some(ref api_key) = api_key_opt {
+            let fetched = utils::fetch_scores_from_bancho(&s.http, api_key, bmap.beatmap_id, mode, mods_filter, amount).await;
+            if let Some(ref sc) = fetched {
+                drop(s);
+                let mut s_write = state.write().await;
+                s_write.bancho_score_cache.insert(cache_key, (std::time::Instant::now(), sc.clone()));
+                if s_write.bancho_score_cache.len() > 200 {
+                    s_write.bancho_score_cache.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(180));
+                }
+                drop(s_write);
+                s = state.read().await;
+            }
+            fetched
+        } else {
+            None
+        };
+
+        if let Some(mut b_scores) = bancho_scores {
+            if pp_leaderboard || current_mode.is_some() {
+                if let Some(content) = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await {
+                    if let Ok(parsed_map) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
+                        for sc in &mut b_scores {
+                            utils::calculate_bancho_score_pp(&parsed_map, mode, sc);
                         }
                     }
-                    b_scores.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
-                } else {
-                    b_scores.sort_by_key(|a| std::cmp::Reverse(a.score.parse::<i64>().unwrap_or(0)));
                 }
+                b_scores.sort_by(|a, b| b.pp.unwrap_or(0.0).partial_cmp(&a.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
+            } else {
+                b_scores.sort_by_key(|a| std::cmp::Reverse(a.score.parse::<i64>().unwrap_or(0)));
+            }
 
-                for sc in b_scores {
-                    lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard || current_mode.is_some()));
-                }
+            for sc in b_scores {
+                lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard || current_mode.is_some()));
             }
         }
     } else if rank_type == LeaderboardTypes::Friends {
@@ -385,9 +433,12 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
         lb.scores = deduped;
     } else if rank_type == LeaderboardTypes::Local {
-        let db_conn = s.db.lock().await;
-        let scores = db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default();
-        drop(db_conn);
+        let scores = if !player_name.is_empty() {
+            let db_conn = s.db.lock().await;
+            db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
 
         let filtered: Vec<&Score> = if let Some(fm) = current_mode {
             scores.iter().filter(|sc| Mods::from_bits_truncate(sc.mods).intersects(fm)).collect()
@@ -407,9 +458,11 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    let local_scores = {
+    let local_scores = if !player_name.is_empty() {
         let db_conn = s.db.lock().await;
         db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default()
+    } else {
+        Vec::new()
     };
 
     let mut personal_candidates: Vec<&Score> = if let Some(fm) = current_mode {
@@ -1341,6 +1394,107 @@ mod tests {
                 assert!(status == 0 || status == -1, "Pending maps must have status 0 or -1, got {}", status);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_pre_login_instant_load() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.beatmap_id = 9991;
+        bmap.beatmapset_id = 9992;
+        bmap.artist = "PreLoginArtist".to_string();
+        bmap.title = "PreLoginTitle".to_string();
+        bmap.version = "Normal".to_string();
+        bmap.file_md5 = "prelogin_md5".to_string();
+        bmap.approved = 1;
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        // Specifically leave player as None (unauthenticated / pre-login)
+        app_state.player = None;
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "prelogin_md5".to_string());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "1".to_string());
+        params.insert("us".to_string(), "PreLoginUser".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        // MUST be OK (HTTP 200) instead of 404!
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        let body_str = String::from_utf8(resp.body).unwrap();
+        assert!(!body_str.starts_with("0|false"));
+        assert!(body_str.contains("PreLoginArtist"));
+        assert!(body_str.contains("PreLoginTitle"));
+
+        // Verify pending_login_name was recorded from "us" query parameter
+        let s = shared_state.read().await;
+        assert_eq!(s.pending_login_name.as_deref(), Some("PreLoginUser"));
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_bancho_score_cache() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.beatmap_id = 8881;
+        bmap.beatmapset_id = 8882;
+        bmap.artist = "CachedArtist".to_string();
+        bmap.title = "CachedTitle".to_string();
+        bmap.version = "Hard".to_string();
+        bmap.file_md5 = "cached_md5".to_string();
+        bmap.approved = 1;
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let mut config = crate::types::config::Config::default();
+        config.amount_of_scores_on_lb = 50;
+        let mut app_state = AppState::new(conn, config);
+
+        // Pre-populate bancho_score_cache for map 8881
+        let dummy_cached_score = crate::types::score::BanchoScore {
+            score_id: "77777".to_string(),
+            username: "CacheHitUser".to_string(),
+            score: "999999".to_string(),
+            maxcombo: "500".to_string(),
+            count50: "0".to_string(),
+            count100: "0".to_string(),
+            count300: "300".to_string(),
+            countmiss: "0".to_string(),
+            countkatu: "0".to_string(),
+            countgeki: "50".to_string(),
+            perfect: "1".to_string(),
+            enabled_mods: "0".to_string(),
+            user_id: "555".to_string(),
+            time: 1700000000,
+            replay_available: "0".to_string(),
+            pp: Some(400.0),
+        };
+        app_state.bancho_score_cache.insert(
+            (8881, 0, None, 50),
+            (std::time::Instant::now(), vec![dummy_cached_score]),
+        );
+        app_state.player = Some(crate::types::player::Player::new("TestPlayer".to_string()));
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "cached_md5".to_string());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "1".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state, "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        let body_str = String::from_utf8(resp.body).unwrap();
+        assert!(body_str.contains("CacheHitUser"), "Leaderboard must include cached score");
     }
 }
 

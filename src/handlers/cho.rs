@@ -82,22 +82,6 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 }
                             }
 
-                            if resolved_bmap.is_none() {
-                                let s = state.read().await;
-                                if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
-                                    let mid = if map_id > 0 { Some(map_id as i64) } else { None };
-                                    let md5 = if !map_md5.is_empty() { Some(map_md5.as_str()) } else { None };
-                                    let hint = if !info_text.is_empty() { Some(info_text.as_str()) } else { None };
-                                    if let Some((bmap, content)) = utils::find_and_parse_local_osu_file(&songs_dir, None, mid, md5, hint) {
-                                        let db_conn = s.db.lock().await;
-                                        let _ = db::insert_beatmap(&db_conn, &bmap);
-                                        let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, &content);
-                                        drop(db_conn);
-                                        resolved_bmap = Some(bmap);
-                                    }
-                                }
-                            }
-
                             let mut s = state.write().await;
                             if let Some(b) = resolved_bmap {
                                 s.last_np_map = Some(b);
