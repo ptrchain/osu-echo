@@ -512,7 +512,13 @@ struct CatboyBeatmapSet {
     children_beatmaps: Option<Vec<CatboyBeatmap>>,
 }
 
-async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_status: i32) -> Option<Vec<u8>> {
+async fn search_catboy(
+    http: &reqwest::Client,
+    query: &str,
+    mode: i32,
+    ranking_status: i32,
+    page: i32,
+) -> Option<Vec<u8>> {
     let mut url = reqwest::Url::parse("https://catboy.best/api/search").ok()?;
     {
         let mut pairs = url.query_pairs_mut();
@@ -522,10 +528,28 @@ async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_s
         if mode != -1 {
             pairs.append_pair("mode", &mode.to_string());
         }
-        if ranking_status == 3 {
-            pairs.append_pair("status", "3");
-        } else if ranking_status == 8 {
-            pairs.append_pair("status", "-2");
+        match ranking_status {
+            0 | 7 => {
+                pairs.append_pair("status", "1");
+                pairs.append_pair("status", "2");
+            }
+            2 => {
+                pairs.append_pair("status", "0");
+                pairs.append_pair("status", "-1");
+            }
+            3 => {
+                pairs.append_pair("status", "3");
+            }
+            5 => {
+                pairs.append_pair("status", "-2");
+            }
+            8 => {
+                pairs.append_pair("status", "4");
+            }
+            _ => {}
+        }
+        if page > 0 {
+            pairs.append_pair("offset", &(page * 100).to_string());
         }
         pairs.append_pair("amount", "100");
     }
@@ -557,15 +581,7 @@ async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_s
             .trim_end_matches('Z')
             .to_string();
 
-        let ranked = match set.ranked_status {
-            1 => 4,  // Ranked
-            2 => 5,  // Approved
-            3 => 6,  // Qualified
-            4 => 7,  // Loved
-            0 => 2,  // Pending
-            -1 => 1, // WIP
-            _ => 0,  // Graveyard
-        };
+        let ranked = set.ranked_status;
 
         direct_resp.entries.push(crate::types::direct_response::DirectEntry {
             id: set.set_id,
@@ -585,6 +601,7 @@ async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::
     let query = params.get("q").map(|q| utils::url_decode(q)).unwrap_or_default();
     let mode: i32 = params.get("m").and_then(|v| v.parse().ok()).unwrap_or(-1);
     let ranking_status: i32 = params.get("r").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let page: i32 = params.get("p").and_then(|v| v.parse().ok()).unwrap_or(0);
 
     let (prefix, http, osu_username, osu_password) = {
         let s = state.read().await;
@@ -598,7 +615,7 @@ async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::
     }
 
     // Catboy as main search mirror
-    if let Some(body) = search_catboy(&http, &query, mode, ranking_status).await {
+    if let Some(body) = search_catboy(&http, &query, mode, ranking_status, page).await {
         utils::log_success(&format!("Catboy mirror: maps loaded for query: `{}`!", query));
         return Response::new(body);
     }
@@ -617,6 +634,9 @@ async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::
                     pairs.append_pair("m", &mode.to_string());
                 }
                 pairs.append_pair("r", &ranking_status.to_string());
+                if page > 0 {
+                    pairs.append_pair("p", &page.to_string());
+                }
             }
 
             if let Ok(resp) = http.get(url).send().await {
@@ -1221,4 +1241,106 @@ mod tests {
         // In unit test environment, might be OK if online or 404 if offline, but shouldn't panic
         assert!(resp_thumb.status == hyper::StatusCode::OK || resp_thumb.status == hyper::StatusCode::NOT_FOUND);
     }
+
+    #[test]
+    fn test_direct_response_status_reporting() {
+        use crate::types::direct_response::{DirectEntry, DirectResponse};
+
+        // osu!direct response line uses osu! API / beatmapset status:
+        // 1 = Ranked, 2 = Approved, 3 = Qualified, 4 = Loved, 0 = Pending, -1 = WIP, -2 = Graveyard
+        let mut resp = DirectResponse::new();
+        resp.entries.push(DirectEntry {
+            id: 100,
+            artist: "Test Artist".to_string(),
+            title: "Test Title".to_string(),
+            creator: "Mapper".to_string(),
+            ranked: 1, // Ranked
+            last_updated: "2026-09-19 12:00:00".to_string(),
+            diffs: vec!["Normal@0".to_string()],
+        });
+        resp.entries.push(DirectEntry {
+            id: 101,
+            artist: "Test Artist".to_string(),
+            title: "Pending Title".to_string(),
+            creator: "Mapper".to_string(),
+            ranked: 0, // Pending
+            last_updated: "2026-09-19 12:00:00".to_string(),
+            diffs: vec!["Hard@0".to_string()],
+        });
+
+        let binary = resp.as_binary();
+        let text = String::from_utf8(binary).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "2"); // 2 entries
+
+        let fields_ranked: Vec<&str> = lines[1].split('|').collect();
+        assert_eq!(fields_ranked[0], "100.osz");
+        assert_eq!(fields_ranked[4], "1", "Ranked beatmap must have status 1 in osu!direct line");
+
+        let fields_pending: Vec<&str> = lines[2].split('|').collect();
+        assert_eq!(fields_pending[0], "101.osz");
+        assert_eq!(fields_pending[4], "0", "Pending beatmap must have status 0 in osu!direct line");
+    }
+
+    #[test]
+    fn test_direct_from_plays_status() {
+        use crate::types::direct_response::{DirectResponse, PlayEntry};
+
+        let play = PlayEntry {
+            bmap_title: "Title".to_string(),
+            bmap_version: "Insane".to_string(),
+            bmap_artist: "Artist".to_string(),
+            bmap_creator: "Creator".to_string(),
+            bmap_setid: 500,
+            bmap_approved: 1, // Ranked
+            bmap_max_combo: 1000,
+            pp: 300.0,
+            acc: 99.5,
+            mods_str: "HDDT".to_string(),
+            max_combo: 1000,
+            nmiss: 0,
+            n300: 500,
+            n100: 5,
+            n50: 0,
+            ngeki: 100,
+            nkatu: 10,
+            mods: 72,
+            mode: 0,
+            time_str: "2026-09-19 12:00:00".to_string(),
+        };
+
+        let resp = DirectResponse::from_plays(&[play]);
+        assert_eq!(resp.entries[0].ranked, 1, "PlayEntry ranked field must be 1 for Ranked maps");
+    }
+
+    #[tokio::test]
+    async fn test_search_catboy_ranked_filtering() {
+        let http = reqwest::Client::new();
+        // Test ranked status search (ranking_status = 0 -> status=1&status=2)
+        if let Some(body) = search_catboy(&http, "Newest", -1, 0, 0).await {
+            let text = String::from_utf8_lossy(&body);
+            let lines: Vec<&str> = text.lines().collect();
+            let count: usize = lines[0].parse().unwrap_or(0);
+            assert!(count > 0, "Catboy mirror must return maps when Ranked (r=0) is selected");
+            if lines.len() > 1 {
+                let fields: Vec<&str> = lines[1].split('|').collect();
+                let status: i32 = fields[4].parse().unwrap_or(-99);
+                assert!(status == 1 || status == 2, "Ranked maps must have status 1 or 2, got {}", status);
+            }
+        }
+
+        // Test pending status search (ranking_status = 2 -> status=0&status=-1)
+        if let Some(body) = search_catboy(&http, "Newest", -1, 2, 0).await {
+            let text = String::from_utf8_lossy(&body);
+            let lines: Vec<&str> = text.lines().collect();
+            let count: usize = lines[0].parse().unwrap_or(0);
+            assert!(count > 0, "Catboy mirror must return maps when Pending (r=2) is selected");
+            if lines.len() > 1 {
+                let fields: Vec<&str> = lines[1].split('|').collect();
+                let status: i32 = fields[4].parse().unwrap_or(-99);
+                assert!(status == 0 || status == -1, "Pending maps must have status 0 or -1, got {}", status);
+            }
+        }
+    }
 }
+
