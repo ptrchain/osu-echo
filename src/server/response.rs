@@ -15,6 +15,14 @@ impl Response {
         Self::new(Vec::new())
     }
 
+    pub fn no_content() -> Self {
+        Self::empty().with_status(StatusCode::NO_CONTENT)
+    }
+
+    pub fn html(s: &str) -> Self {
+        Self::new(s.as_bytes().to_vec()).with_header("Content-Type", "text/html; charset=utf-8")
+    }
+
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self

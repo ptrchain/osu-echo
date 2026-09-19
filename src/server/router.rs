@@ -1,6 +1,14 @@
 use std::collections::HashMap;
 
 pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
+    if path.is_empty() || path == "/" {
+        return RouteMatch::Status;
+    }
+
+    if path == "/favicon.ico" {
+        return RouteMatch::Favicon;
+    }
+
     let cho_prefixes = ["/c4", "/c5", "/c6", "/ce", "/c"];
     for prefix in &cho_prefixes {
         if path.starts_with(prefix) {
@@ -83,6 +91,8 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
 
 #[derive(Debug, PartialEq)]
 pub enum RouteMatch {
+    Status,
+    Favicon,
     Cho,
     Web(String),
     Avatar(i32),

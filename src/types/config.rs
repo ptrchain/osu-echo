@@ -370,6 +370,9 @@ pub fn setup_config(data_dir: &Path) -> Config {
                     if let Err(e) = crate::server::tls::install_windows_trust(&paths.cert_der) {
                         crate::logger::warn(&format!("Failed to install certificate: {}", e));
                     }
+                    if let Err(e) = crate::server::tls::setup_windows_hosts() {
+                        crate::logger::warn(&format!("Failed to configure hosts file: {}", e));
+                    }
                 }
                 Err(e) => {
                     crate::logger::warn(&format!("Failed to generate certificate: {}", e));

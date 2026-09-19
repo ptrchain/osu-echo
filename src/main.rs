@@ -181,9 +181,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         if let Ok(ref paths) = tls_paths {
             let _ = server::tls::install_windows_trust(&paths.cert_der);
         }
+        #[cfg(target_os = "windows")]
+        let _ = server::tls::setup_windows_hosts();
     }
 
     if let Ok(ref paths) = tls_paths {
+        #[cfg(target_os = "windows")]
+        let _ = server::tls::setup_windows_hosts();
+
         if let Ok(acceptor) = server::tls::create_tls_acceptor(&paths.cert_pem, &paths.key_pem) {
             let https_state = shared_state.clone();
             tokio::spawn(async move {
@@ -356,6 +361,60 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
     let route = match_route(&normalized_path, &params);
 
     let resp = match route {
+        RouteMatch::Status => {
+            let html = r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>osu-echo</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background: #121016;
+            color: #f0edf6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .card {
+            background: #1e1a24;
+            padding: 2.5rem 3rem;
+            border-radius: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+            border: 1px solid #332b3d;
+            text-align: center;
+            max-width: 480px;
+        }
+        h1 { margin: 0 0 0.5rem; color: #ff66aa; font-size: 2.2rem; letter-spacing: -0.5px; }
+        p { color: #a39cb0; font-size: 1.05rem; line-height: 1.5; margin: 0.5rem 0; }
+        .badge {
+            display: inline-block;
+            background: #1c3d25;
+            color: #4ade80;
+            padding: 0.4rem 1rem;
+            border-radius: 9999px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            margin-top: 1.25rem;
+            border: 1px solid #225e34;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>osu-echo</h1>
+        <p>A local osu! private server written in Rust.</p>
+        <p>The server is running and ready for osu! client connections.</p>
+        <div class="badge">&#10003; Server Online</div>
+    </div>
+</body>
+</html>"#;
+            Response::html(html)
+        }
+        RouteMatch::Favicon => Response::no_content().with_header("Content-Type", "image/x-icon"),
         RouteMatch::Cho => handlers::cho::handle(state, osu_token.as_deref(), &body_bytes).await,
         RouteMatch::Web(sub_path) => handlers::web::handle(state, &sub_path, &params, &method, &headers, &body_bytes).await,
         RouteMatch::Avatar(userid) => handlers::avatar::handle(state, userid).await,
