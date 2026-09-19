@@ -38,7 +38,6 @@ crossterm = "0.29.0"
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
 
 [target."cfg(windows)".build-dependencies]
