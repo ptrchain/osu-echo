@@ -1,6 +1,6 @@
 [package]
 name = "osu-echo"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2021"
 description = "A local osu! private server written in Rust"
 
