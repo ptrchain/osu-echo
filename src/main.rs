@@ -25,7 +25,7 @@ use server::response::Response;
 use server::router::{match_route, RouteMatch};
 use state::AppState;
 
-pub const VERSION: &str = "1.0";
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const LOGO: &str = r#"                      ,───.                             
                       │   │            ,──.             
@@ -53,8 +53,33 @@ fn print_banner() {
     println!("  {}\n", "A local osu! server written in Rust".dimmed());
 }
 
+fn print_help() {
+    print_banner();
+    println!("Usage: osu-echo [OPTIONS]\n");
+    println!("Options:");
+    println!("  -h, --help           Print help information");
+    println!("  -v, --version        Print version information");
+    println!("      --setup          Run or re-run the interactive setup wizard");
+    println!("      --reconfigure    Alias for --setup");
+    println!("      --trust-cert     Install and trust the local TLS certificate in Windows Root store");
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        print_help();
+        return Ok(());
+    }
+
+    if args.iter().any(|arg| arg == "-v" || arg == "--version") {
+        println!("osu-echo v{}", VERSION);
+        return Ok(());
+    }
+
+    let force_setup = args.iter().any(|arg| arg == "--setup" || arg == "--reconfigure");
+
     dotenvy::dotenv().ok();
 
     let data_dir = std::env::current_dir()?.join(".data");
@@ -64,18 +89,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let conn = rusqlite::Connection::open(&db_path)?;
     db::init_db(&conn)?;
 
-    let mut config = match db::load_config(&conn)? {
-        Some(config) => {
-            print_banner();
-            logger::info("Found existing server configuration.");
-            config
-        }
-        None => {
-            let config = types::config::setup_config(&data_dir);
-            db::save_config(&conn, &config)?;
-            clear_console();
-            print_banner();
-            config
+    let mut config = if force_setup {
+        let config = types::config::setup_config(&data_dir);
+        db::save_config(&conn, &config)?;
+        clear_console();
+        print_banner();
+        config
+    } else {
+        match db::load_config(&conn)? {
+            Some(config) => {
+                print_banner();
+                logger::info("Found existing server configuration.");
+                config
+            }
+            None => {
+                let config = types::config::setup_config(&data_dir);
+                db::save_config(&conn, &config)?;
+                clear_console();
+                print_banner();
+                config
+            }
         }
     };
 
@@ -186,7 +219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     logger::success(&format!("Server listening on http://{}", addr));
-    logger::info(&format!("osu! version target: {}", VERSION));
+    logger::info(&format!("osu-echo version: v{}", VERSION));
 
     tokio::select! {
         _ = async {
