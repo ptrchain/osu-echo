@@ -64,8 +64,40 @@ fn print_help() {
     println!("      --trust-cert     Install and trust the local TLS certificate in Windows Root store");
 }
 
+#[cfg(target_os = "windows")]
+fn is_launched_from_explorer() -> bool {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetConsoleProcessList(process_list: *mut u32, count: u32) -> u32;
+    }
+    let mut pids = [0u32; 2];
+    let count = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), 2) };
+    count <= 1
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_launched_from_explorer() -> bool {
+    false
+}
+
+fn pause_if_double_clicked() {
+    if is_launched_from_explorer() {
+        println!("\nPress Enter to exit...");
+        let mut buffer = String::new();
+        let _ = std::io::stdin().read_line(&mut buffer);
+    }
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() {
+    if let Err(e) = run().await {
+        logger::error(&format!("Fatal error: {}", e));
+        pause_if_double_clicked();
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
     if args.iter().any(|arg| arg == "-h" || arg == "--help") {
@@ -202,6 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(a) => a,
         Err(e) => {
             logger::error(&format!("Invalid SERVER_HOST or SERVER_PORT ({}:{}): {}", host, port, e));
+            pause_if_double_clicked();
             return Ok(());
         }
     };
@@ -214,6 +247,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 logger::error(&format!("Failed to bind server on {}: {}", addr, e));
             }
+            pause_if_double_clicked();
             return Ok(());
         }
     };
