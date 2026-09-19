@@ -230,6 +230,44 @@ mod tests {
             assert!(friends.contains(&9988));
         }
 
+        handle_chat_message(shared_state.clone(), "PlayerTest", "!friend add Tillerino", "BanchoBot").await;
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friends(&db_conn, "PlayerTest").unwrap();
+            assert!(friends.iter().any(|(id, name)| *id == 4 && name == "Tillerino"));
+            // Ensure friend packet queued for player has bot IDs
+            let p = s.player.as_ref().unwrap();
+            assert!(!p.queue.is_empty());
+        }
+
+        handle_chat_message(shared_state.clone(), "PlayerTest", "!friend add 2070907", "BanchoBot").await;
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friends(&db_conn, "PlayerTest").unwrap();
+            // Should map to 4, not insert 2070907
+            assert!(friends.iter().any(|(id, name)| *id == 4 && name == "Tillerino"));
+            assert!(!friends.iter().any(|(id, _)| *id == 2070907));
+        }
+
+        handle_chat_message(shared_state.clone(), "PlayerTest", "!friend add BanchoBot", "BanchoBot").await;
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friends(&db_conn, "PlayerTest").unwrap();
+            assert!(friends.iter().any(|(id, name)| *id == 3 && name == "BanchoBot"));
+        }
+
+        handle_chat_message(shared_state.clone(), "PlayerTest", "!friend remove Tillerino", "BanchoBot").await;
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friend_ids(&db_conn, "PlayerTest").unwrap();
+            assert!(!friends.contains(&4));
+            assert!(!friends.contains(&2070907));
+        }
+
         handle_chat_message(shared_state.clone(), "PlayerTest", "!country DE", "#osu").await;
         {
             let s = shared_state.read().await;

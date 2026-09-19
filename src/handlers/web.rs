@@ -324,7 +324,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 };
 
                 for f in &friend_records {
-                    if f.friend_id > 0 {
+                    if f.friend_id > 0 && f.friend_id != 3 && f.friend_id != 4 && f.friend_id != 2070907 {
                         if let Some(mut b_scores) = utils::fetch_user_scores_from_bancho(&s.http, api_key, bmap.beatmap_id, f.friend_id, mode).await {
                             for sc in &mut b_scores {
                                 if sc.username.is_empty() && !f.friend_name.is_empty() {

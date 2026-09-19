@@ -137,6 +137,10 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN total_score INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN playcount INTEGER NOT NULL DEFAULT 0", []);
 
+    let _ = conn.execute("DELETE FROM friends WHERE friend_id <= 2 OR friend_id = 2070907", []);
+    let _ = conn.execute("DELETE FROM profiles WHERE name = 'Friend 2'", []);
+    let _ = conn.execute("DELETE FROM avatars WHERE player_name = 'Friend 2'", []);
+
     Ok(())
 }
 
@@ -620,7 +624,13 @@ pub fn ensure_avatar(conn: &Connection, name: &str) -> SqlResult<()> {
 }
 
 pub fn add_friend(conn: &Connection, player_name: &str, friend_id: i32, friend_name: &str) -> SqlResult<()> {
-    conn.execute("INSERT OR REPLACE INTO friends (player_name, friend_id, friend_name) VALUES (?1, ?2, ?3)", params![player_name, friend_id, friend_name])?;
+    conn.execute(
+        "INSERT INTO friends (player_name, friend_id, friend_name)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(player_name, friend_id) DO UPDATE SET
+            friend_name = CASE WHEN excluded.friend_name != '' THEN excluded.friend_name ELSE friends.friend_name END",
+        params![player_name, friend_id, friend_name],
+    )?;
     Ok(())
 }
 
@@ -631,7 +641,7 @@ pub fn remove_friend(conn: &Connection, player_name: &str, friend_id: i32) -> Sq
 
 pub fn get_friends(conn: &Connection, player_name: &str) -> SqlResult<Vec<(i32, String)>> {
     let mut stmt = conn.prepare("SELECT friend_id, friend_name FROM friends WHERE player_name = ?1 ORDER BY friend_id ASC")?;
-    let rows = stmt.query_map(params![player_name], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    let rows = stmt.query_map(params![player_name], |row| Ok((row.get(0)?, row.get::<_, Option<String>>(1)?.unwrap_or_default())))?;
     let mut list = Vec::new();
     for r in rows {
         list.push(r?);
@@ -690,14 +700,14 @@ pub fn get_friend_records(conn: &Connection, player_name: &str) -> SqlResult<Vec
     let rows = stmt.query_map(params![player_name], |row| {
         Ok(FriendRecord {
             friend_id: row.get(0)?,
-            friend_name: row.get(1)?,
-            rank: row.get(2)?,
-            pp: row.get(3)?,
-            acc: row.get(4)?,
-            country: row.get::<_, i32>(5)? as u8,
-            ranked_score: row.get(6)?,
-            total_score: row.get(7)?,
-            playcount: row.get(8)?,
+            friend_name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            rank: row.get::<_, Option<i32>>(2)?.unwrap_or(1),
+            pp: row.get::<_, Option<i32>>(3)?.unwrap_or(0),
+            acc: row.get::<_, Option<f64>>(4)?.unwrap_or(0.0),
+            country: row.get::<_, Option<i32>>(5)?.unwrap_or(0) as u8,
+            ranked_score: row.get::<_, Option<i64>>(6)?.unwrap_or(0),
+            total_score: row.get::<_, Option<i64>>(7)?.unwrap_or(0),
+            playcount: row.get::<_, Option<i32>>(8)?.unwrap_or(0),
         })
     })?;
     let mut list = Vec::new();
@@ -861,6 +871,11 @@ mod tests {
         remove_friend(&conn, "Alice", 100).unwrap();
         let friend_ids_after = get_friend_ids(&conn, "Alice").unwrap();
         assert_eq!(friend_ids_after, vec![101]);
+
+        // Calling add_friend with an empty name must not overwrite existing name
+        add_friend(&conn, "Alice", 101, "").unwrap();
+        let friends_preserved = get_friends(&conn, "Alice").unwrap();
+        assert_eq!(friends_preserved[0].1, "Charlie");
     }
 
     #[test]

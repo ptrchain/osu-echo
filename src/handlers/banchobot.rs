@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::db;
+use crate::handlers::tillerino;
 use crate::packets;
 use crate::state::AppState;
 use crate::types::mods::Mods;
@@ -403,12 +404,41 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 (s.config.osu_api_key.clone(), s.http.clone())
             };
 
+            let is_tillerino_query = user_query.eq_ignore_ascii_case("tillerino") || user_query == "4" || user_query == "2070907";
+            let is_banchobot_query = user_query.eq_ignore_ascii_case("banchobot") || user_query == "3";
+
             let mut fetched_friend: Option<db::FriendRecord> = None;
-            if let Some(ref key) = api_key {
-                fetched_friend = utils::fetch_user_stats_from_api(&http, key, &user_query).await;
+            if !is_tillerino_query && !is_banchobot_query {
+                if let Some(ref key) = api_key {
+                    fetched_friend = utils::fetch_user_stats_from_api(&http, key, &user_query).await;
+                }
             }
 
-            let friend_rec = if let Some(rec) = fetched_friend {
+            let friend_rec = if is_tillerino_query {
+                db::FriendRecord {
+                    friend_id: tillerino::BOT_ID,
+                    friend_name: tillerino::BOT_NAME.to_string(),
+                    rank: 1,
+                    pp: 0,
+                    acc: 0.0,
+                    country: 0,
+                    ranked_score: 0,
+                    total_score: 0,
+                    playcount: 0,
+                }
+            } else if is_banchobot_query {
+                db::FriendRecord {
+                    friend_id: BOT_ID,
+                    friend_name: BOT_NAME.to_string(),
+                    rank: 1,
+                    pp: 0,
+                    acc: 0.0,
+                    country: 0,
+                    ranked_score: 0,
+                    total_score: 0,
+                    playcount: 0,
+                }
+            } else if let Some(rec) = fetched_friend {
                 rec
             } else if let Ok(uid) = user_query.parse::<i32>() {
                 db::FriendRecord {
@@ -427,14 +457,28 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 return;
             };
 
+            let player_userid = {
+                let s = state.read().await;
+                s.player.as_ref().map(|p| p.userid).unwrap_or(2)
+            };
+
+            if friend_rec.friend_id <= 2 || friend_rec.friend_id == player_userid {
+                reply(state, target, "You cannot add yourself to your friends list!").await;
+                return;
+            }
+
             let mut friend_ids = {
                 let s = state.read().await;
                 let db_conn = s.db.lock().await;
                 let _ = db::save_friend_stats(&db_conn, player_name, &friend_rec);
                 db::get_friend_ids(&db_conn, player_name).unwrap_or_default()
             };
-            if friend_ids.is_empty() {
-                friend_ids.push(0);
+            friend_ids.retain(|&id| id > 2 && id != player_userid);
+            if !friend_ids.contains(&BOT_ID) {
+                friend_ids.push(BOT_ID);
+            }
+            if !friend_ids.contains(&tillerino::BOT_ID) {
+                friend_ids.push(tillerino::BOT_ID);
             }
 
             {
@@ -442,20 +486,22 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 if let Some(ref mut p) = s.player {
                     p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
 
-                    let mut fp = Player::new(friend_rec.friend_name.clone());
-                    fp.userid = friend_rec.friend_id;
-                    fp.bancho_privs = 1;
-                    fp.rank = friend_rec.rank;
-                    fp.pp = friend_rec.pp;
-                    fp.acc = friend_rec.acc;
-                    fp.country = friend_rec.country;
-                    fp.ranked_score = friend_rec.ranked_score;
-                    fp.total_score = friend_rec.total_score;
-                    fp.playcount = friend_rec.playcount;
-                    fp.action = 0;
-                    fp.info_text = String::new();
-                    p.queue.extend_from_slice(&packets::user_presence(&fp));
-                    p.queue.extend_from_slice(&packets::user_stats(&fp));
+                    if friend_rec.friend_id != BOT_ID && friend_rec.friend_id != tillerino::BOT_ID && friend_rec.friend_id != tillerino::OFFICIAL_BOT_ID && friend_rec.friend_id > 2 && friend_rec.friend_id != p.userid {
+                        let mut fp = Player::new(friend_rec.friend_name.clone());
+                        fp.userid = friend_rec.friend_id;
+                        fp.bancho_privs = 1;
+                        fp.rank = friend_rec.rank;
+                        fp.pp = friend_rec.pp;
+                        fp.acc = friend_rec.acc;
+                        fp.country = friend_rec.country;
+                        fp.ranked_score = friend_rec.ranked_score;
+                        fp.total_score = friend_rec.total_score;
+                        fp.playcount = friend_rec.playcount;
+                        fp.action = 0;
+                        fp.info_text = String::new();
+                        p.queue.extend_from_slice(&packets::user_presence(&fp));
+                        p.queue.extend_from_slice(&packets::user_stats(&fp));
+                    }
                 }
             }
 
@@ -479,61 +525,91 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 db::get_friends(&db_conn, player_name).unwrap_or_default()
             };
 
-            let mut target_id: Option<i32> = user_query.parse().ok();
-            if target_id.is_none() {
-                for (id, name) in &friends {
-                    if name.eq_ignore_ascii_case(&user_query) {
-                        target_id = Some(*id);
-                        break;
-                    }
-                }
-            }
+            let is_tillerino_query = user_query.eq_ignore_ascii_case("tillerino") || user_query == "4" || user_query == "2070907";
+            let is_banchobot_query = user_query.eq_ignore_ascii_case("banchobot") || user_query == "3";
+
+            let target_id = if is_tillerino_query {
+                Some(tillerino::BOT_ID)
+            } else if is_banchobot_query {
+                Some(BOT_ID)
+            } else if let Ok(uid) = user_query.parse::<i32>() {
+                Some(uid)
+            } else {
+                friends.iter().find(|(_, name)| name.eq_ignore_ascii_case(&user_query)).map(|(id, _)| *id)
+            };
 
             let Some(friend_id) = target_id else {
                 reply(state, target, &format!("'{}' is not in your friends list.", user_query)).await;
                 return;
             };
 
+            if friend_id <= 2 {
+                reply(state, target, "Invalid friend ID.").await;
+                return;
+            }
+
             let mut friend_ids = {
                 let s = state.read().await;
                 let db_conn = s.db.lock().await;
                 let _ = db::remove_friend(&db_conn, player_name, friend_id);
+                if is_tillerino_query {
+                    let _ = db::remove_friend(&db_conn, player_name, tillerino::OFFICIAL_BOT_ID);
+                }
                 db::get_friend_ids(&db_conn, player_name).unwrap_or_default()
             };
-            if friend_ids.is_empty() {
-                friend_ids.push(0);
+            friend_ids.retain(|&id| id > 2);
+            if !friend_ids.contains(&BOT_ID) {
+                friend_ids.push(BOT_ID);
+            }
+            if !friend_ids.contains(&tillerino::BOT_ID) {
+                friend_ids.push(tillerino::BOT_ID);
             }
 
             {
                 let mut s = state.write().await;
                 if let Some(ref mut p) = s.player {
                     p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
-                    p.queue.extend_from_slice(&packets::logout(friend_id));
+                    if friend_id != BOT_ID && friend_id != tillerino::BOT_ID {
+                        p.queue.extend_from_slice(&packets::logout(friend_id));
+                    }
                 }
             }
 
             reply(state, target, &format!("Removed friend ID: {} from your friends list.", friend_id)).await;
         }
         "list" | "" => {
-            let friends = {
+            let mut friends = {
                 let s = state.read().await;
                 let db_conn = s.db.lock().await;
                 db::get_friends(&db_conn, player_name).unwrap_or_default()
             };
+            friends.retain(|(id, _)| *id > 2);
 
             if friends.is_empty() {
                 reply(state, target, "Your friends list is currently empty. Use !friend add <username> or !friend sync.").await;
             } else {
-                let list_str: Vec<String> =
-                    friends.iter().map(|(id, name)| if name.is_empty() { id.to_string() } else { format!("{} ({})", name, id) }).collect();
+                let list_str: Vec<String> = friends
+                    .iter()
+                    .map(|(id, name)| {
+                        if (*id == tillerino::BOT_ID && (name.is_empty() || name == "Friend 4")) || *id == tillerino::OFFICIAL_BOT_ID {
+                            "Tillerino (4)".to_string()
+                        } else if *id == BOT_ID && (name.is_empty() || name == "Friend 3") {
+                            "BanchoBot (3)".to_string()
+                        } else if name.is_empty() {
+                            id.to_string()
+                        } else {
+                            format!("{} ({})", name, id)
+                        }
+                    })
+                    .collect();
                 reply(state, target, &format!("Friends ({}): {}", friends.len(), list_str.join(", "))).await;
             }
         }
         "sync" => {
-            let (uname, pword, http) = {
+            let (uname, pword, http, api_key) = {
                 let s = state.read().await;
                 match (&s.config.osu_username, &s.config.osu_password) {
-                    (Some(u), Some(p)) => (u.clone(), p.clone(), s.http.clone()),
+                    (Some(u), Some(p)) => (u.clone(), p.clone(), s.http.clone(), s.config.osu_api_key.clone()),
                     _ => {
                         reply(state, target, "Please configure OSU_USERNAME and OSU_PASSWORD in .env or config to sync friends with official Bancho.").await;
                         return;
@@ -550,34 +626,96 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 }
             };
 
-            let mut synced_count = 0;
-            let mut friend_ids = {
-                let s = state.read().await;
-                let db_conn = s.db.lock().await;
-                for line in resp.lines() {
-                    if let Ok(id) = line.trim().parse::<i32>() {
-                        let _ = db::add_friend(&db_conn, player_name, id, "");
-                        synced_count += 1;
+            let mut regular_ids = Vec::new();
+            let mut has_tillerino = false;
+            let mut has_banchobot = false;
+            for line in resp.lines() {
+                if let Ok(id) = line.trim().parse::<i32>() {
+                    if id <= 2 {
+                        // ID <= 2 collides with local player ID 2
+                        continue;
+                    } else if tillerino::is_tillerino_id(id) {
+                        has_tillerino = true;
+                    } else if id == BOT_ID {
+                        has_banchobot = true;
+                    } else {
+                        regular_ids.push(id);
                     }
                 }
-                db::get_friend_ids(&db_conn, player_name).unwrap_or_default()
-            };
-            if friend_ids.is_empty() {
-                friend_ids.push(0);
             }
 
-            let friends = {
+            reply(state, target, &format!("Syncing {} friends from official Bancho... Fetching profiles...", regular_ids.len())).await;
+
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(5));
+            let mut join_set = tokio::task::JoinSet::new();
+
+            for id in regular_ids {
+                let http = http.clone();
+                let key = api_key.clone();
+                let sem = sem.clone();
+                join_set.spawn(async move {
+                    let _permit = sem.acquire().await.ok();
+                    let rec = if let Some(ref k) = key {
+                        utils::fetch_user_stats_from_api(&http, k, &id.to_string()).await
+                    } else {
+                        None
+                    };
+                    (id, rec)
+                });
+            }
+
+            let mut fetched_results = Vec::new();
+            while let Some(res) = join_set.join_next().await {
+                if let Ok(item) = res {
+                    fetched_results.push(item);
+                }
+            }
+
+            let (friend_ids, friends) = {
                 let s = state.read().await;
                 let db_conn = s.db.lock().await;
-                db::get_friend_records(&db_conn, player_name).unwrap_or_default()
+
+                let _ = db::remove_friend(&db_conn, player_name, 2);
+                let _ = db::remove_friend(&db_conn, player_name, tillerino::OFFICIAL_BOT_ID);
+
+                if has_tillerino {
+                    let _ = db::add_friend(&db_conn, player_name, tillerino::BOT_ID, tillerino::BOT_NAME);
+                }
+                if has_banchobot {
+                    let _ = db::add_friend(&db_conn, player_name, BOT_ID, BOT_NAME);
+                }
+
+                for (id, rec_opt) in fetched_results {
+                    if let Some(rec) = rec_opt {
+                        let _ = db::save_friend_stats(&db_conn, player_name, &rec);
+                    } else {
+                        let _ = db::add_friend(&db_conn, player_name, id, "");
+                    }
+                }
+
+                let mut ids = db::get_friend_ids(&db_conn, player_name).unwrap_or_default();
+                ids.retain(|&id| id > 2);
+                if !ids.contains(&BOT_ID) {
+                    ids.push(BOT_ID);
+                }
+                if !ids.contains(&tillerino::BOT_ID) {
+                    ids.push(tillerino::BOT_ID);
+                }
+                let friends = db::get_friend_records(&db_conn, player_name).unwrap_or_default();
+                (ids, friends)
             };
 
             {
                 let mut s = state.write().await;
                 if let Some(ref mut p) = s.player {
-                    p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
+                    let player_id = p.userid;
+                    let filtered_ids: Vec<i32> = friend_ids.iter().copied().filter(|&id| id != player_id && id > 2).collect();
+                    p.queue.extend_from_slice(&packets::friends_list(&filtered_ids));
 
                     for f in friends {
+                        if f.friend_id <= 2 || f.friend_id == player_id || f.friend_id == BOT_ID || tillerino::is_tillerino_id(f.friend_id) {
+                            continue;
+                        }
                         let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name };
                         let mut fp = Player::new(display_name);
                         fp.userid = f.friend_id;
@@ -597,7 +735,7 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 }
             }
 
-            reply(state, target, &format!("Synced {} friends from official Bancho server!", synced_count)).await;
+            reply(state, target, &format!("Synced {} friends from official Bancho with updated profiles and stats!", friend_ids.len())).await;
         }
         _ => {
             reply(state, target, "Usage: !friend <add/remove/list/sync> [user]").await;
@@ -831,4 +969,150 @@ pub async fn handle_country(state: &Arc<RwLock<AppState>>, _player_name: &str, t
     let _ = crate::types::config::write_dotenv_country(&trimmed);
 
     reply(state, target, &format!("Country flag set to {}! Your user panel flag in osu! is updated.", trimmed)).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[tokio::test]
+    async fn test_friend_sync_mapping_and_presence_safety() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        db::add_friend(&conn, "SyncPlayer", 2070907, "LegacyTillerino").unwrap();
+
+        let resp_lines = "2070907\n3\n5555\n";
+
+        let mut synced_count = 0;
+        let mut friend_ids = {
+            let _ = db::remove_friend(&conn, "SyncPlayer", tillerino::OFFICIAL_BOT_ID);
+
+            for line in resp_lines.lines() {
+                if let Ok(id) = line.trim().parse::<i32>() {
+                    if tillerino::is_tillerino_id(id) {
+                        let _ = db::add_friend(&conn, "SyncPlayer", tillerino::BOT_ID, tillerino::BOT_NAME);
+                    } else if id == BOT_ID {
+                        let _ = db::add_friend(&conn, "SyncPlayer", BOT_ID, BOT_NAME);
+                    } else {
+                        let _ = db::add_friend(&conn, "SyncPlayer", id, "");
+                    }
+                    synced_count += 1;
+                }
+            }
+            db::get_friend_ids(&conn, "SyncPlayer").unwrap_or_default()
+        };
+        if !friend_ids.contains(&BOT_ID) {
+            friend_ids.push(BOT_ID);
+        }
+        if !friend_ids.contains(&tillerino::BOT_ID) {
+            friend_ids.push(tillerino::BOT_ID);
+        }
+
+        assert_eq!(synced_count, 3);
+        assert!(friend_ids.contains(&3), "Must include BanchoBot");
+        assert!(friend_ids.contains(&4), "Must include Tillerino");
+        assert!(friend_ids.contains(&5555), "Must include synced friend 5555");
+        assert!(!friend_ids.contains(&2070907), "Must not include raw 2070907");
+
+        let friends = db::get_friends(&conn, "SyncPlayer").unwrap();
+        assert_eq!(friends.len(), 3);
+        assert!(friends.iter().any(|(id, name)| *id == 4 && name == "Tillerino"));
+        assert!(friends.iter().any(|(id, name)| *id == 3 && name == "BanchoBot"));
+        assert!(friends.iter().any(|(id, _)| *id == 5555));
+        assert!(!friends.iter().any(|(id, _)| *id == 2070907));
+
+        let friend_records = db::get_friend_records(&conn, "SyncPlayer").unwrap();
+        let mut presence_uids = Vec::new();
+        for f in friend_records {
+            if f.friend_id <= 2 || f.friend_id == BOT_ID || tillerino::is_tillerino_id(f.friend_id) {
+                continue;
+            }
+            presence_uids.push(f.friend_id);
+        }
+        assert_eq!(presence_uids, vec![5555]);
+    }
+
+    #[tokio::test]
+    async fn test_friend_sync_filters_out_peppy_and_local_player_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        db::add_friend(&conn, "Hero", 2, "CorruptPeppy").unwrap();
+
+        let resp_lines = "2\n2070907\n3\n12345\n";
+
+        let mut regular_ids = Vec::new();
+        let mut has_tillerino = false;
+        let mut has_banchobot = false;
+        for line in resp_lines.lines() {
+            if let Ok(id) = line.trim().parse::<i32>() {
+                if id <= 2 {
+                    continue;
+                } else if tillerino::is_tillerino_id(id) {
+                    has_tillerino = true;
+                } else if id == BOT_ID {
+                    has_banchobot = true;
+                } else {
+                    regular_ids.push(id);
+                }
+            }
+        }
+
+        assert_eq!(regular_ids, vec![12345]);
+        assert!(has_tillerino);
+        assert!(has_banchobot);
+
+        let _ = db::remove_friend(&conn, "Hero", 2);
+        let _ = db::remove_friend(&conn, "Hero", tillerino::OFFICIAL_BOT_ID);
+
+        if has_tillerino {
+            let _ = db::add_friend(&conn, "Hero", tillerino::BOT_ID, tillerino::BOT_NAME);
+        }
+        if has_banchobot {
+            let _ = db::add_friend(&conn, "Hero", BOT_ID, BOT_NAME);
+        }
+        for id in &regular_ids {
+            let _ = db::add_friend(&conn, "Hero", *id, "CoolFriend");
+        }
+
+        let mut ids = db::get_friend_ids(&conn, "Hero").unwrap();
+        ids.retain(|&id| id > 2);
+
+        assert!(!ids.contains(&2), "Friend IDs must NEVER contain user ID 2!");
+        assert!(ids.contains(&3));
+        assert!(ids.contains(&4));
+        assert!(ids.contains(&12345));
+
+        let records = db::get_friend_records(&conn, "Hero").unwrap();
+        let presence_ids: Vec<i32> = records
+            .iter()
+            .filter(|f| f.friend_id > 2 && f.friend_id != BOT_ID && !tillerino::is_tillerino_id(f.friend_id))
+            .map(|f| f.friend_id)
+            .collect();
+        assert_eq!(presence_ids, vec![12345]);
+    }
+
+    #[tokio::test]
+    async fn test_db_init_purges_friend_id_2_and_friend_2_profile() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        conn.execute("INSERT INTO profiles (name) VALUES ('Friend 2')", []).unwrap();
+        conn.execute("INSERT INTO avatars (player_name) VALUES ('Friend 2')", []).unwrap();
+        conn.execute("INSERT INTO friends (player_name, friend_id, friend_name) VALUES ('MyHero', 2, '')", []).unwrap();
+        conn.execute("INSERT INTO friends (player_name, friend_id, friend_name) VALUES ('MyHero', 2070907, 'Tillerino')", []).unwrap();
+
+        db::init_db(&conn).unwrap();
+
+        let friends = db::get_friends(&conn, "MyHero").unwrap();
+        assert!(friends.is_empty(), "Corrupt friend_id 2 and 2070907 must be purged on init_db");
+
+        let p_count: i32 = conn.query_row("SELECT COUNT(*) FROM profiles WHERE name = 'Friend 2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(p_count, 0, "Friend 2 profile must be purged");
+
+        let a_count: i32 = conn.query_row("SELECT COUNT(*) FROM avatars WHERE player_name = 'Friend 2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(a_count, 0, "Friend 2 avatar must be purged");
+    }
 }

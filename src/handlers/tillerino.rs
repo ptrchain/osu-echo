@@ -8,7 +8,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 pub const BOT_ID: i32 = 4;
+pub const OFFICIAL_BOT_ID: i32 = 2070907;
 pub const BOT_NAME: &str = "Tillerino";
+
+pub fn is_tillerino_id(id: i32) -> bool {
+    id == BOT_ID || id == OFFICIAL_BOT_ID
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NpInfo {

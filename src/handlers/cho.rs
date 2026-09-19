@@ -131,12 +131,15 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 
                         let mut s = state.write().await;
                         if let Some(ref mut p) = s.player {
+                            let player_id = p.userid;
                             let mut all_ids = Vec::with_capacity(3 + friend_records.len());
-                            all_ids.push(p.userid);
+                            all_ids.push(player_id);
                             all_ids.push(BANCHOBOT_ID);
                             all_ids.push(TILLERINO_ID);
                             for f in &friend_records {
-                                all_ids.push(f.friend_id);
+                                if f.friend_id > 2 && f.friend_id != player_id && f.friend_id != 2070907 && !all_ids.contains(&f.friend_id) {
+                                    all_ids.push(f.friend_id);
+                                }
                             }
                             p.queue.extend_from_slice(&packets::user_presence_bundle(&all_ids));
 
@@ -151,6 +154,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             p.queue.extend_from_slice(&packets::user_stats(&tillerino));
 
                             for f in friend_records {
+                                if f.friend_id <= 2 || f.friend_id == player_id || f.friend_id == BANCHOBOT_ID || f.friend_id == TILLERINO_ID || f.friend_id == 2070907 {
+                                    continue;
+                                }
                                 let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name };
                                 let mut fp = Player::new(display_name);
                                 fp.userid = f.friend_id;
@@ -186,24 +192,26 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                     } else if target_id == BANCHOBOT_ID {
                                         let bot = create_bot_player("BanchoBot", BANCHOBOT_ID);
                                         p.queue.extend_from_slice(&packets::user_presence(&bot));
-                                    } else if target_id == TILLERINO_ID {
+                                    } else if target_id == TILLERINO_ID || target_id == 2070907 {
                                         let bot = create_bot_player("Tillerino", TILLERINO_ID);
                                         p.queue.extend_from_slice(&packets::user_presence(&bot));
-                                    } else if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
-                                        let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
-                                        let mut fp = Player::new(display_name);
-                                        fp.userid = f.friend_id;
-                                        fp.bancho_privs = 1;
-                                        fp.rank = f.rank;
-                                        fp.pp = f.pp;
-                                        fp.acc = f.acc;
-                                        fp.country = f.country;
-                                        fp.ranked_score = f.ranked_score;
-                                        fp.total_score = f.total_score;
-                                        fp.playcount = f.playcount;
-                                        fp.action = 0;
-                                        fp.info_text = String::new();
-                                        p.queue.extend_from_slice(&packets::user_presence(&fp));
+                                    } else if target_id > 2 {
+                                        if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
+                                            let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
+                                            let mut fp = Player::new(display_name);
+                                            fp.userid = f.friend_id;
+                                            fp.bancho_privs = 1;
+                                            fp.rank = f.rank;
+                                            fp.pp = f.pp;
+                                            fp.acc = f.acc;
+                                            fp.country = f.country;
+                                            fp.ranked_score = f.ranked_score;
+                                            fp.total_score = f.total_score;
+                                            fp.playcount = f.playcount;
+                                            fp.action = 0;
+                                            fp.info_text = String::new();
+                                            p.queue.extend_from_slice(&packets::user_presence(&fp));
+                                        }
                                     }
                                 }
                             }
@@ -226,24 +234,26 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                     } else if target_id == BANCHOBOT_ID {
                                         let bot = create_bot_player("BanchoBot", BANCHOBOT_ID);
                                         p.queue.extend_from_slice(&packets::user_stats(&bot));
-                                    } else if target_id == TILLERINO_ID {
+                                    } else if target_id == TILLERINO_ID || target_id == 2070907 {
                                         let bot = create_bot_player("Tillerino", TILLERINO_ID);
                                         p.queue.extend_from_slice(&packets::user_stats(&bot));
-                                    } else if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
-                                        let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
-                                        let mut fp = Player::new(display_name);
-                                        fp.userid = f.friend_id;
-                                        fp.bancho_privs = 1;
-                                        fp.rank = f.rank;
-                                        fp.pp = f.pp;
-                                        fp.acc = f.acc;
-                                        fp.country = f.country;
-                                        fp.ranked_score = f.ranked_score;
-                                        fp.total_score = f.total_score;
-                                        fp.playcount = f.playcount;
-                                        fp.action = 0;
-                                        fp.info_text = String::new();
-                                        p.queue.extend_from_slice(&packets::user_stats(&fp));
+                                    } else if target_id > 2 {
+                                        if let Some(f) = friend_records.iter().find(|fr| fr.friend_id == target_id) {
+                                            let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
+                                            let mut fp = Player::new(display_name);
+                                            fp.userid = f.friend_id;
+                                            fp.bancho_privs = 1;
+                                            fp.rank = f.rank;
+                                            fp.pp = f.pp;
+                                            fp.acc = f.acc;
+                                            fp.country = f.country;
+                                            fp.ranked_score = f.ranked_score;
+                                            fp.total_score = f.total_score;
+                                            fp.playcount = f.playcount;
+                                            fp.action = 0;
+                                            fp.info_text = String::new();
+                                            p.queue.extend_from_slice(&packets::user_stats(&fp));
+                                        }
                                     }
                                 }
                             }
@@ -252,31 +262,67 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                     x if x == packets::PacketId::OsuFriendAdd as u16 => {
                         let mut reader = packets::PacketReader::new(in_pkt.payload);
                         if let Ok(friend_id) = reader.read_i32() {
+                            let player_id = {
+                                let s = state.read().await;
+                                s.player.as_ref().map(|p| p.userid).unwrap_or(2)
+                            };
+                            if friend_id <= 2 || friend_id == player_id {
+                                continue;
+                            }
                             let (api_key, http) = {
                                 let s = state.read().await;
                                 (s.config.osu_api_key.clone(), s.http.clone())
                             };
 
-                            let mut friend_rec =
-                                if let Some(ref key) = api_key { utils::fetch_user_stats_from_api(&http, key, &friend_id.to_string()).await } else { None };
+                            let f_rec = if friend_id == TILLERINO_ID || friend_id == 2070907 {
+                                db::FriendRecord {
+                                    friend_id: TILLERINO_ID,
+                                    friend_name: "Tillerino".to_string(),
+                                    rank: 1,
+                                    pp: 0,
+                                    acc: 0.0,
+                                    country: 0,
+                                    ranked_score: 0,
+                                    total_score: 0,
+                                    playcount: 0,
+                                }
+                            } else if friend_id == BANCHOBOT_ID {
+                                db::FriendRecord {
+                                    friend_id: BANCHOBOT_ID,
+                                    friend_name: "BanchoBot".to_string(),
+                                    rank: 1,
+                                    pp: 0,
+                                    acc: 0.0,
+                                    country: 0,
+                                    ranked_score: 0,
+                                    total_score: 0,
+                                    playcount: 0,
+                                }
+                            } else {
+                                let mut friend_rec =
+                                    if let Some(ref key) = api_key { utils::fetch_user_stats_from_api(&http, key, &friend_id.to_string()).await } else { None };
+                                friend_rec.take().unwrap_or_else(|| db::FriendRecord {
+                                    friend_id,
+                                    friend_name: format!("Friend {}", friend_id),
+                                    rank: 1,
+                                    pp: 0,
+                                    acc: 0.0,
+                                    country: 0,
+                                    ranked_score: 0,
+                                    total_score: 0,
+                                    playcount: 0,
+                                })
+                            };
 
                             let s = state.read().await;
                             let db_conn = s.db.lock().await;
-                            let f_rec = friend_rec.take().unwrap_or_else(|| db::FriendRecord {
-                                friend_id,
-                                friend_name: format!("Friend {}", friend_id),
-                                rank: 1,
-                                pp: 0,
-                                acc: 0.0,
-                                country: 0,
-                                ranked_score: 0,
-                                total_score: 0,
-                                playcount: 0,
-                            });
                             let _ = db::save_friend_stats(&db_conn, &player_name, &f_rec);
                             let mut friend_ids = db::get_friend_ids(&db_conn, &player_name).unwrap_or_default();
-                            if !friend_ids.contains(&3) {
-                                friend_ids.push(3);
+                            if !friend_ids.contains(&BANCHOBOT_ID) {
+                                friend_ids.push(BANCHOBOT_ID);
+                            }
+                            if !friend_ids.contains(&TILLERINO_ID) {
+                                friend_ids.push(TILLERINO_ID);
                             }
                             drop(db_conn);
                             drop(s);
@@ -285,32 +331,45 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             if let Some(ref mut p) = s.player {
                                 p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
 
-                                let mut fp = Player::new(f_rec.friend_name.clone());
-                                fp.userid = f_rec.friend_id;
-                                fp.bancho_privs = 1;
-                                fp.rank = f_rec.rank;
-                                fp.pp = f_rec.pp;
-                                fp.acc = f_rec.acc;
-                                fp.country = f_rec.country;
-                                fp.ranked_score = f_rec.ranked_score;
-                                fp.total_score = f_rec.total_score;
-                                fp.playcount = f_rec.playcount;
-                                fp.action = 0;
-                                fp.info_text = String::new();
-                                p.queue.extend_from_slice(&packets::user_presence(&fp));
-                                p.queue.extend_from_slice(&packets::user_stats(&fp));
+                                if f_rec.friend_id != BANCHOBOT_ID && f_rec.friend_id != TILLERINO_ID {
+                                    let mut fp = Player::new(f_rec.friend_name.clone());
+                                    fp.userid = f_rec.friend_id;
+                                    fp.bancho_privs = 1;
+                                    fp.rank = f_rec.rank;
+                                    fp.pp = f_rec.pp;
+                                    fp.acc = f_rec.acc;
+                                    fp.country = f_rec.country;
+                                    fp.ranked_score = f_rec.ranked_score;
+                                    fp.total_score = f_rec.total_score;
+                                    fp.playcount = f_rec.playcount;
+                                    fp.action = 0;
+                                    fp.info_text = String::new();
+                                    p.queue.extend_from_slice(&packets::user_presence(&fp));
+                                    p.queue.extend_from_slice(&packets::user_stats(&fp));
+                                }
                             }
                         }
                     }
                     x if x == packets::PacketId::OsuFriendRemove as u16 => {
                         let mut reader = packets::PacketReader::new(in_pkt.payload);
                         if let Ok(friend_id) = reader.read_i32() {
+                            if friend_id <= 2 {
+                                continue;
+                            }
                             let s = state.read().await;
                             let db_conn = s.db.lock().await;
                             let _ = db::remove_friend(&db_conn, &player_name, friend_id);
+                            if friend_id == TILLERINO_ID || friend_id == 2070907 {
+                                let _ = db::remove_friend(&db_conn, &player_name, 2070907);
+                                let _ = db::remove_friend(&db_conn, &player_name, TILLERINO_ID);
+                            }
                             let mut friend_ids = db::get_friend_ids(&db_conn, &player_name).unwrap_or_default();
-                            if !friend_ids.contains(&3) {
-                                friend_ids.push(3);
+                            friend_ids.retain(|&id| id > 2);
+                            if !friend_ids.contains(&BANCHOBOT_ID) {
+                                friend_ids.push(BANCHOBOT_ID);
+                            }
+                            if !friend_ids.contains(&TILLERINO_ID) {
+                                friend_ids.push(TILLERINO_ID);
                             }
                             drop(db_conn);
                             drop(s);
@@ -318,7 +377,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             let mut s = state.write().await;
                             if let Some(ref mut p) = s.player {
                                 p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
-                                p.queue.extend_from_slice(&packets::logout(friend_id));
+                                if friend_id != BANCHOBOT_ID && friend_id != TILLERINO_ID {
+                                    p.queue.extend_from_slice(&packets::logout(friend_id));
+                                }
                             }
                         }
                     }
@@ -401,35 +462,43 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         let db = s.db.lock().await;
         let _ = db::ensure_profile(&db, &profile_name);
         let _ = db::ensure_avatar(&db, &profile_name);
+        let _ = db::remove_friend(&db, &profile_name, 2);
+        let _ = db::remove_friend(&db, &profile_name, 2070907);
         db::get_friend_records(&db, &profile_name).unwrap_or_default()
     };
+    friend_records.retain(|f| f.friend_id > 2 && f.friend_id != 2070907);
 
     if let Some(ref key) = api_key_opt {
         for f in &mut friend_records {
-            if f.friend_id == 3 {
+            if f.friend_id <= 2 || f.friend_id == BANCHOBOT_ID || f.friend_id == TILLERINO_ID || f.friend_id == 2070907 {
                 continue;
             }
-            let query = if f.friend_id > 0 { f.friend_id.to_string() } else { f.friend_name.clone() };
-            if let Some(fetched) = utils::fetch_user_stats_from_api(&http_client, key, &query).await {
-                f.friend_name = fetched.friend_name;
-                f.rank = fetched.rank;
-                f.pp = fetched.pp;
-                f.acc = fetched.acc;
-                f.country = fetched.country;
-                f.ranked_score = fetched.ranked_score;
-                f.total_score = fetched.total_score;
-                f.playcount = fetched.playcount;
+            if f.friend_name.is_empty() || (f.rank == 1 && f.pp == 0) {
+                let query = if f.friend_id > 0 { f.friend_id.to_string() } else { f.friend_name.clone() };
+                if let Some(fetched) = utils::fetch_user_stats_from_api(&http_client, key, &query).await {
+                    f.friend_name = fetched.friend_name;
+                    f.rank = fetched.rank;
+                    f.pp = fetched.pp;
+                    f.acc = fetched.acc;
+                    f.country = fetched.country;
+                    f.ranked_score = fetched.ranked_score;
+                    f.total_score = fetched.total_score;
+                    f.playcount = fetched.playcount;
 
-                let s = state.read().await;
-                let db = s.db.lock().await;
-                let _ = db::save_friend_stats(&db, &profile_name, f);
+                    let s = state.read().await;
+                    let db = s.db.lock().await;
+                    let _ = db::save_friend_stats(&db, &profile_name, f);
+                }
             }
         }
     }
 
-    let mut friend_ids: Vec<i32> = friend_records.iter().map(|f| f.friend_id).collect();
-    if !friend_ids.contains(&3) {
-        friend_ids.push(3);
+    let mut friend_ids: Vec<i32> = friend_records.iter().map(|f| f.friend_id).filter(|&id| id > 2).collect();
+    if !friend_ids.contains(&BANCHOBOT_ID) {
+        friend_ids.push(BANCHOBOT_ID);
+    }
+    if !friend_ids.contains(&TILLERINO_ID) {
+        friend_ids.push(TILLERINO_ID);
     }
 
     let mut player = Player::new(profile_name.clone());
@@ -492,12 +561,13 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         }
     }
 
+    let player_id = player.userid;
     let mut all_ids = Vec::with_capacity(3 + friend_records.len());
-    all_ids.push(player.userid);
+    all_ids.push(player_id);
     all_ids.push(BANCHOBOT_ID);
     all_ids.push(TILLERINO_ID);
     for f in &friend_records {
-        if !all_ids.contains(&f.friend_id) {
+        if f.friend_id > 2 && f.friend_id != player_id && f.friend_id != 2070907 && !all_ids.contains(&f.friend_id) {
             all_ids.push(f.friend_id);
         }
     }
@@ -515,6 +585,9 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     body.extend_from_slice(&packets::user_stats(&tillerino));
 
     for f in &friend_records {
+        if f.friend_id <= 2 || f.friend_id == player_id || f.friend_id == BANCHOBOT_ID || f.friend_id == TILLERINO_ID || f.friend_id == 2070907 {
+            continue;
+        }
         let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
         let mut fp = Player::new(display_name);
         fp.userid = f.friend_id;
@@ -568,6 +641,7 @@ mod tests {
         let mut reader = packets::PacketReader::new(friends_pkt.payload);
         let friends = reader.read_i32_list().expect("Valid friend list");
         assert!(friends.contains(&3), "Friend list must include BanchoBot (3) by default");
+        assert!(friends.contains(&4), "Friend list must include Tillerino (4) by default");
 
         let bundle_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoUserPresenceBundle as u16).expect("Presence bundle must be present");
         let mut bundle_reader = packets::PacketReader::new(bundle_pkt.payload);
@@ -711,5 +785,48 @@ mod tests {
         assert_eq!(bancho.total_score, 0);
         assert_eq!(bancho.info_text, "");
         assert_eq!(bancho.bancho_privs, 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_tillerino_friend_packet_maps_to_bot() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(Player::new("AddTester".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut pkt73_payload = Vec::new();
+        pkt73_payload.extend_from_slice(&4i32.to_le_bytes());
+        let mut pkt73 = vec![73, 0, 0];
+        pkt73.extend_from_slice(&(pkt73_payload.len() as u32).to_le_bytes());
+        pkt73.extend_from_slice(&pkt73_payload);
+
+        let resp = handle(shared_state.clone(), Some("valid-token"), &pkt73).await;
+        assert_eq!(resp.status, 200);
+
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friends(&db_conn, "AddTester").unwrap();
+            assert_eq!(friends, vec![(4, "Tillerino".to_string())]);
+        }
+
+        let mut pkt73_official_payload = Vec::new();
+        pkt73_official_payload.extend_from_slice(&2070907i32.to_le_bytes());
+        let mut pkt73_official = vec![73, 0, 0];
+        pkt73_official.extend_from_slice(&(pkt73_official_payload.len() as u32).to_le_bytes());
+        pkt73_official.extend_from_slice(&pkt73_official_payload);
+
+        let resp_off = handle(shared_state.clone(), Some("valid-token"), &pkt73_official).await;
+        assert_eq!(resp_off.status, 200);
+
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            let friends = db::get_friends(&db_conn, "AddTester").unwrap();
+            assert_eq!(friends, vec![(4, "Tillerino".to_string())]);
+        }
     }
 }
