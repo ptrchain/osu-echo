@@ -200,7 +200,7 @@ pub fn calculate_np_breakdown(bmap: &Beatmap, content: &str, mods_u32: u32) -> O
     let mut od = parsed_map.od;
     if let rosu_pp::any::DifficultyAttributes::Osu(ref osu_diff) = diff {
         ar = osu_diff.ar as f32;
-        od = osu_diff.od as f32;
+        od = osu_diff.od() as f32;
     }
 
     let mods_obj = Mods::from_bits_truncate(mods_u32);
