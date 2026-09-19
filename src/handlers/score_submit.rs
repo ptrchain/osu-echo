@@ -49,7 +49,7 @@ pub async fn calculate_map_ranks(
     all_local_scores: &[Score],
     player_name: &str,
     new_score: &Score,
-) -> (Option<Score>, Option<i32>, Option<i32>) {
+) -> (Option<Score>, Option<i32>, Option<i32>, Option<i32>) {
     let get_score_metric = |sc: &Score| -> ScoreMetric {
         if pp_leaderboard || server_mode.is_some() {
             ScoreMetric::Pp(sc.pp.unwrap_or(0.0))
@@ -71,6 +71,8 @@ pub async fn calculate_map_ranks(
         .iter()
         .filter(|sc| sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods))
         .collect();
+
+    let max_combo_before = player_prev_scores.iter().map(|s| s.max_combo).max();
 
     let previous = player_prev_scores
         .into_iter()
@@ -157,7 +159,7 @@ pub async fn calculate_map_ranks(
         None
     };
 
-    (previous, rank_before, rank_after)
+    (previous, rank_before, rank_after, max_combo_before)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -169,6 +171,7 @@ pub fn build_charts(
     previous: Option<&Score>,
     rank_before: Option<i32>,
     rank_after: Option<i32>,
+    max_combo_before: Option<i32>,
     playcount: i32,
 ) -> Vec<u8> {
     let meta = format!(
@@ -177,13 +180,16 @@ pub fn build_charts(
     );
 
     let prev_score_str = previous.map(|s| s.score.to_string()).unwrap_or_default();
-    let prev_max_combo = previous.map(|s| s.max_combo.to_string()).unwrap_or_default();
+    let effective_combo_before = max_combo_before.or_else(|| previous.map(|s| s.max_combo));
+    let (prev_max_combo, curr_max_combo) = match effective_combo_before {
+        Some(prev_max) => (prev_max.to_string(), prev_max.max(score.max_combo).to_string()),
+        None => (String::new(), score.max_combo.to_string()),
+    };
     let prev_acc = previous.map(|s| format!("{:.2}", s.acc.unwrap_or(0.0))).unwrap_or_default();
     let prev_pp = previous.map(|s| format!("{:.0}", s.pp.unwrap_or(0.0))).unwrap_or_default();
     let prev_rank = rank_before.map(|r| r.to_string()).unwrap_or_default();
 
     let curr_score_str = score.score.to_string();
-    let curr_max_combo = score.max_combo.to_string();
     let curr_acc = format!("{:.2}", score.acc.unwrap_or(0.0));
     let curr_pp = format!("{:.0}", score.pp.unwrap_or(0.0));
     let curr_rank = rank_after.map(|r| r.to_string()).unwrap_or_default();
@@ -238,15 +244,26 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             let bmap = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None);
             if let Some(bmap) = bmap {
                 let existing_score = db::get_score_by_id(&db_conn, existing_id).unwrap_or(None);
+                let overall_max = db::get_max_combo_for_player(&db_conn, &player.name, sub.score.mode).unwrap_or(0);
                 let stats = ProfileStats {
                     rank: player.rank,
                     pp: player.pp as f64,
                     acc: player.acc,
                     ranked_score: player.ranked_score,
                     total_score: player.total_score,
-                    max_combo: player.map_id,
+                    max_combo: overall_max,
                 };
-                let charts = build_charts(&bmap, existing_score.as_ref().unwrap_or(&sub.score), &stats, &stats, existing_score.as_ref(), Some(1), Some(1), playcount);
+                let charts = build_charts(
+                    &bmap,
+                    existing_score.as_ref().unwrap_or(&sub.score),
+                    &stats,
+                    &stats,
+                    existing_score.as_ref(),
+                    Some(1),
+                    Some(1),
+                    Some(overall_max),
+                    playcount,
+                );
                 return Ok(charts);
             }
         }
@@ -354,28 +371,20 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
     score.mods_str = Some(Mods::from_bits_truncate(score.mods).short_name());
 
-    let before_stats = ProfileStats {
-        rank: player.rank,
-        pp: player.pp as f64,
-        acc: player.acc,
-        ranked_score: player.ranked_score,
-        total_score: player.total_score,
-        max_combo: 0,
-    };
-
     let player_name = player.name.clone();
     let mode = s.mode;
     let ping_recent = s.config.ping_user_when_recent_score;
     let enable_recent = s.config.enable_recent_channel;
 
-    let (previous, rank_before, rank_after) = {
+    let (previous, rank_before, rank_after, max_combo_before, overall_max_before) = {
         let db_conn = s.db.lock().await;
         let all_local = db::get_all_scores_on_map(&db_conn, &score.md5, score.mode).unwrap_or_default();
+        let overall_max = db::get_max_combo_for_player(&db_conn, &player_name, score.mode).unwrap_or(0);
         drop(db_conn);
 
         let api_key = s.config.osu_api_key.as_deref();
         let pp_lb = s.config.pp_leaderboard;
-        calculate_map_ranks(
+        let (prev, r_before, r_after, map_max_before) = calculate_map_ranks(
             &s.http,
             api_key,
             &bmap,
@@ -387,7 +396,17 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             &player_name,
             &score,
         )
-        .await
+        .await;
+        (prev, r_before, r_after, map_max_before, overall_max)
+    };
+
+    let before_stats = ProfileStats {
+        rank: player.rank,
+        pp: player.pp as f64,
+        acc: player.acc,
+        ranked_score: player.ranked_score,
+        total_score: player.total_score,
+        max_combo: overall_max_before,
     };
 
     let bmap_status = leaderboard::status_to_db_key(bmap.approved);
@@ -438,10 +457,10 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             acc: player.acc,
             ranked_score: player.ranked_score,
             total_score: player.total_score,
-            max_combo: score.max_combo,
+            max_combo: overall_max_before.max(score.max_combo),
         };
 
-        let charts = build_charts(&bmap, &score, &before_stats, &after_stats, previous.as_ref(), rank_before, rank_after, playcount);
+        let charts = build_charts(&bmap, &score, &before_stats, &after_stats, previous.as_ref(), rank_before, rank_after, max_combo_before, playcount);
 
         let grade =
             utils::get_grade(score.mode as u8, score.n300, score.n100, score.n50, score.ngeki, score.nkatu, score.nmiss, score.mods, score.acc.unwrap_or(0.0));
@@ -547,7 +566,7 @@ mod tests {
 
         let after = ProfileStats { rank: 95, pp: 1050.0, acc: 98.7, ranked_score: 6000000, total_score: 11000000, max_combo: 500 };
 
-        let charts_bytes = build_charts(&bmap, &score, &before, &after, None, None, Some(1), 5);
+        let charts_bytes = build_charts(&bmap, &score, &before, &after, None, None, Some(1), None, 5);
         let charts_str = String::from_utf8(charts_bytes).unwrap();
 
         assert!(charts_str.contains("beatmapId:123|beatmapSetId:456|beatmapPlaycount:5|beatmapPasscount:5"));
@@ -559,14 +578,29 @@ mod tests {
         assert!(charts_str.contains("ppBefore:1000|ppAfter:1050"));
 
         // When rank_after is None (outside top 50), rankAfter should be empty
-        let charts_outside = build_charts(&bmap, &score, &before, &after, None, None, None, 5);
+        let charts_outside = build_charts(&bmap, &score, &before, &after, None, None, None, None, 5);
         let str_outside = String::from_utf8(charts_outside).unwrap();
         assert!(str_outside.contains("rankBefore:|rankAfter:|maxComboBefore:"));
 
         // When placing #5 with previous PB at #8
-        let charts_p5 = build_charts(&bmap, &score, &before, &after, Some(&score), Some(8), Some(5), 5);
+        let charts_p5 = build_charts(&bmap, &score, &before, &after, Some(&score), Some(8), Some(5), Some(500), 5);
         let str_p5 = String::from_utf8(charts_p5).unwrap();
         assert!(str_p5.contains("rankBefore:8|rankAfter:5|maxComboBefore:"));
+
+        // Test combo not showing NEW when higher was achieved in a different submitted score
+        let mut lower_combo_score = score.clone();
+        lower_combo_score.max_combo = 300;
+        let chart_bytes_existing = build_charts(&bmap, &lower_combo_score, &before, &after, Some(&score), Some(1), Some(1), Some(800), 5);
+        let chart_str_existing = String::from_utf8(chart_bytes_existing).unwrap();
+        // maxComboBefore and maxComboAfter both retain 800 -> no NEW combo
+        assert!(chart_str_existing.contains("maxComboBefore:800|maxComboAfter:800"));
+
+        // When beating previous max combo (e.g. 950 > 800)
+        let mut higher_combo_score = score.clone();
+        higher_combo_score.max_combo = 950;
+        let chart_bytes_new = build_charts(&bmap, &higher_combo_score, &before, &after, Some(&score), Some(1), Some(1), Some(800), 5);
+        let chart_str_new = String::from_utf8(chart_bytes_new).unwrap();
+        assert!(chart_str_new.contains("maxComboBefore:800|maxComboAfter:950"));
     }
 
     #[tokio::test]
@@ -602,7 +636,7 @@ mod tests {
 
         // 1. Solo play, no competitors in DB, no API key -> rank 1
         let new_score = make_score("Alice", 100_000, 50.0);
-        let (prev, r_before, r_after) = calculate_map_ranks(
+        let (prev, r_before, r_after, max_c_before) = calculate_map_ranks(
             &http,
             None,
             &bmap,
@@ -617,6 +651,7 @@ mod tests {
         assert!(prev.is_none());
         assert_eq!(r_before, None);
         assert_eq!(r_after, Some(1));
+        assert_eq!(max_c_before, None);
 
         // 2. Competitors exist locally: 4 players with higher scores -> rank 5
         let local_scores = vec![
@@ -626,7 +661,7 @@ mod tests {
             make_score("P4", 200_000, 120.0),
             make_score("P5", 50_000, 30.0),
         ];
-        let (prev, r_before, r_after) = calculate_map_ranks(
+        let (prev, r_before, r_after, _) = calculate_map_ranks(
             &http,
             None,
             &bmap,
@@ -648,7 +683,7 @@ mod tests {
             top50.push(make_score(&format!("Player{}", i), 1_000_000 - i * 1000, 100.0));
         }
         let low_score = make_score("Alice", 50_000, 10.0);
-        let (prev, r_before, r_after) = calculate_map_ranks(
+        let (prev, r_before, r_after, _) = calculate_map_ranks(
             &http,
             None,
             &bmap,
@@ -668,7 +703,7 @@ mod tests {
         let mut with_prev = local_scores.clone();
         with_prev.push(make_score("Alice", 80_000, 40.0)); // Alice previous was 5th (behind P1..P4)
         let improved_score = make_score("Alice", 450_000, 190.0); // beats P2..P5, behind P1 -> rank 2
-        let (prev, r_before, r_after) = calculate_map_ranks(
+        let (prev, r_before, r_after, _) = calculate_map_ranks(
             &http,
             None,
             &bmap,
@@ -683,6 +718,34 @@ mod tests {
         assert!(prev.is_some());
         assert_eq!(r_before, Some(5));
         assert_eq!(r_after, Some(2));
+
+        // 5. Player has multiple scores: Score A has combo 800 (low score), Score B has combo 200 (high score)
+        // calculate_map_ranks must return max_combo_before = Some(800) even though previous is Score B
+        let mut multi_scores = Vec::new();
+        let mut score_a = make_score("Alice", 300_000, 100.0);
+        score_a.max_combo = 800;
+        let mut score_b = make_score("Alice", 800_000, 250.0);
+        score_b.max_combo = 200;
+        multi_scores.push(score_a);
+        multi_scores.push(score_b);
+
+        let mut score_c = make_score("Alice", 500_000, 150.0);
+        score_c.max_combo = 400;
+
+        let (prev, _, _, max_c_before) = calculate_map_ranks(
+            &http,
+            None,
+            &bmap,
+            0,
+            None,
+            false,
+            None,
+            &multi_scores,
+            "Alice",
+            &score_c,
+        ).await;
+        assert_eq!(prev.as_ref().map(|s| s.max_combo), Some(200));
+        assert_eq!(max_c_before, Some(800));
     }
 
     #[test]

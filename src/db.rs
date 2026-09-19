@@ -405,6 +405,12 @@ pub fn get_scores_on_map(conn: &Connection, name: &str, md5: &str, mode: i32) ->
     Ok(scores)
 }
 
+pub fn get_max_combo_for_player(conn: &Connection, name: &str, mode: i32) -> SqlResult<i32> {
+    let mut stmt = conn.prepare("SELECT COALESCE(MAX(max_combo), 0) FROM scores WHERE player_name = ?1 AND mode = ?2")?;
+    let max_combo: i32 = stmt.query_row(params![name, mode], |row| row.get(0))?;
+    Ok(max_combo)
+}
+
 pub fn get_all_scores_on_map(conn: &Connection, md5: &str, mode: i32) -> SqlResult<Vec<Score>> {
     let mut stmt = conn.prepare(
         "SELECT id, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
@@ -945,5 +951,58 @@ mod tests {
         assert_eq!(rows_md5, 1);
         let loaded_loved = get_beatmap_by_md5(&conn, "status_test_md5").unwrap().unwrap();
         assert_eq!(loaded_loved.approved, 4);
+    }
+
+    #[test]
+    fn test_get_max_combo_for_player() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+
+        // When no scores exist, returns 0
+        assert_eq!(get_max_combo_for_player(&conn, "Alice", 0).unwrap(), 0);
+
+        let make_score = |name: &str, mode: i32, md5: &str, max_combo: i32| Score {
+            mode,
+            md5: md5.to_string(),
+            name: name.to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 100000,
+            max_combo,
+            perfect: false,
+            mods: 0,
+            time: 0,
+            acc: Some(100.0),
+            pp: Some(100.0),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        let sc1 = make_score("Alice", 0, "map1", 450);
+        insert_score(&conn, &sc1, "ranked").unwrap();
+
+        let sc2 = make_score("Alice", 0, "map2", 850);
+        insert_score(&conn, &sc2, "ranked").unwrap();
+
+        // Another mode
+        let sc3 = make_score("Alice", 1, "map3", 1200);
+        insert_score(&conn, &sc3, "ranked").unwrap();
+
+        // Mode 0 max combo is 850
+        assert_eq!(get_max_combo_for_player(&conn, "Alice", 0).unwrap(), 850);
+        // Mode 1 max combo is 1200
+        assert_eq!(get_max_combo_for_player(&conn, "Alice", 1).unwrap(), 1200);
+        // Other player is 0
+        assert_eq!(get_max_combo_for_player(&conn, "Bob", 0).unwrap(), 0);
     }
 }
