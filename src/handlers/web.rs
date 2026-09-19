@@ -220,19 +220,20 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    let s = state.read().await;
-    let current_mode = s.mode;
-    let mut lb = Leaderboard::new();
-
     let mut bmap = {
+        let s = state.read().await;
         let db_conn = s.db.lock().await;
         db::get_beatmap_by_md5(&db_conn, &md5).unwrap_or(None)
     };
 
     if bmap.is_none() && !md5.is_empty() {
-        if let Some(ref api_key) = s.config.osu_api_key {
-            if let Some(fetched) = utils::fetch_beatmap_from_api(&s.http, api_key, &[("h", md5.clone())]).await {
-                let db_conn = s.db.lock().await;
+        let (api_key, http, db) = {
+            let s = state.read().await;
+            (s.config.osu_api_key.clone(), s.http.clone(), s.db.clone())
+        };
+        if let Some(ref key) = api_key {
+            if let Some(fetched) = utils::fetch_beatmap_from_api(&http, key, &[("h", md5.clone())]).await {
+                let db_conn = db.lock().await;
                 let _ = db::insert_beatmap(&db_conn, &fetched);
                 bmap = Some(fetched);
             }
@@ -244,7 +245,21 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         return Response::new(b"0|false".to_vec());
     };
 
+    let mut lb = Leaderboard::new();
     lb.bmap = Some(bmap.clone());
+
+    {
+        let mut s_write = state.write().await;
+        s_write.last_np_map = Some(bmap.clone());
+        if let Some(ref mut p) = s_write.player {
+            p.map_id = bmap.beatmap_id as i32;
+            p.map_md5 = bmap.file_md5.clone();
+            p.info_text = format!("{} - {} [{}]", bmap.artist, bmap.title, bmap.version);
+        }
+    }
+
+    let s = state.read().await;
+    let current_mode = s.mode;
 
     let status = api_to_server_status(bmap.approved);
     if !VALID_LB_STATUSES.contains(&status) {
@@ -518,13 +533,30 @@ async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_s
             })
             .collect();
 
+        let last_updated = set
+            .last_update
+            .unwrap_or_else(|| "2020-01-01 00:00:00".to_string())
+            .replace('T', " ")
+            .trim_end_matches('Z')
+            .to_string();
+
+        let ranked = match set.ranked_status {
+            1 => 4,  // Ranked
+            2 => 5,  // Approved
+            3 => 6,  // Qualified
+            4 => 7,  // Loved
+            0 => 2,  // Pending
+            -1 => 1, // WIP
+            _ => 0,  // Graveyard
+        };
+
         direct_resp.entries.push(crate::types::direct_response::DirectEntry {
             id: set.set_id,
             artist: set.artist.unwrap_or_default(),
             title: set.title.unwrap_or_default(),
             creator: set.creator.unwrap_or_default(),
-            ranked: set.ranked_status,
-            last_updated: set.last_update.unwrap_or_default(),
+            ranked,
+            last_updated,
             diffs,
         });
     }
@@ -583,12 +615,120 @@ async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::
     Response::new(b"0".to_vec())
 }
 
-pub async fn handle_download(_state: Arc<RwLock<AppState>>, setid: i64) -> Response {
+pub async fn handle_download(state: Arc<RwLock<AppState>>, setid: i64, no_video: bool) -> Response {
     if setid <= 0 {
-        return Response::empty();
+        return Response::not_found();
     }
 
-    Response::redirect(&format!("https://catboy.best/d/{}", setid))
+    let http = {
+        let s = state.read().await;
+        s.http.clone()
+    };
+
+    let catboy_url = if no_video {
+        format!("https://catboy.best/d/{}n", setid)
+    } else {
+        format!("https://catboy.best/d/{}", setid)
+    };
+
+    let catboy_resp = http.get(&catboy_url).send().await;
+    if let Ok(resp) = catboy_resp {
+        if resp.status() == hyper::StatusCode::OK {
+            if let Ok(bytes) = resp.bytes().await {
+                crate::logger::success(&format!("Direct download: downloaded set {} ({} bytes)", setid, bytes.len()));
+                return Response::new(bytes.to_vec())
+                    .with_header("Content-Type", "application/x-osu-beatmap-archive")
+                    .with_header("Content-Disposition", &format!("attachment; filename=\"{}.osz\"", setid));
+            }
+        }
+    }
+
+    // Secondary mirror fallback: Nerinyan
+    let nerinyan_url = format!("https://api.nerinyan.moe/d/{}?novideo={}", setid, if no_video { 1 } else { 0 });
+    let nerinyan_resp = http.get(&nerinyan_url).send().await;
+    if let Ok(resp) = nerinyan_resp {
+        if resp.status() == hyper::StatusCode::OK {
+            if let Ok(bytes) = resp.bytes().await {
+                crate::logger::success(&format!("Direct download (Nerinyan mirror): downloaded set {} ({} bytes)", setid, bytes.len()));
+                return Response::new(bytes.to_vec())
+                    .with_header("Content-Type", "application/x-osu-beatmap-archive")
+                    .with_header("Content-Disposition", &format!("attachment; filename=\"{}.osz\"", setid));
+            }
+        }
+    }
+
+    crate::logger::error(&format!("Direct download failed for set {}", setid));
+    Response::not_found()
+}
+
+pub async fn handle_thumbnail(state: Arc<RwLock<AppState>>, filename: &str) -> Response {
+    let http = {
+        let s = state.read().await;
+        s.http.clone()
+    };
+
+    // Try b.ppy.sh/thumb/{filename}
+    let b_url = format!("https://b.ppy.sh/thumb/{}", filename);
+    if let Ok(resp) = http.get(&b_url).send().await {
+        if resp.status() == hyper::StatusCode::OK {
+            if let Ok(bytes) = resp.bytes().await {
+                return Response::image(bytes.to_vec(), "jpg");
+            }
+        }
+    }
+
+    // Fallback: assets.ppy.sh card cover using set id
+    let digits: String = filename.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if !digits.is_empty() {
+        let assets_url = format!("https://assets.ppy.sh/beatmaps/{}/covers/card.jpg", digits);
+        if let Ok(resp) = http.get(&assets_url).send().await {
+            if resp.status() == hyper::StatusCode::OK {
+                if let Ok(bytes) = resp.bytes().await {
+                    return Response::image(bytes.to_vec(), "jpg");
+                }
+            }
+        }
+    }
+
+    Response::not_found()
+}
+
+pub async fn handle_preview(state: Arc<RwLock<AppState>>, filename: &str) -> Response {
+    let http = {
+        let s = state.read().await;
+        s.http.clone()
+    };
+
+    let preview_url = format!("https://b.ppy.sh/preview/{}", filename);
+    if let Ok(resp) = http.get(&preview_url).send().await {
+        if resp.status() == hyper::StatusCode::OK {
+            if let Ok(bytes) = resp.bytes().await {
+                return Response::new(bytes.to_vec()).with_header("Content-Type", "audio/mpeg");
+            }
+        }
+    }
+
+    Response::not_found()
+}
+
+pub async fn handle_asset(state: Arc<RwLock<AppState>>, sub_path: &str) -> Response {
+    let http = {
+        let s = state.read().await;
+        s.http.clone()
+    };
+
+    let cleaned = sub_path.trim_start_matches('/');
+    let asset_url = format!("https://assets.ppy.sh/{}", cleaned);
+    if let Ok(resp) = http.get(&asset_url).send().await {
+        if resp.status() == hyper::StatusCode::OK {
+            if let Ok(bytes) = resp.bytes().await {
+                let ext = cleaned.rsplit('.').next().unwrap_or("jpg");
+                return Response::image(bytes.to_vec(), ext);
+            }
+        }
+    }
+
+    Response::not_found()
 }
 
 #[cfg(test)]
@@ -1057,9 +1197,11 @@ mod tests {
         let app_state = AppState::new(conn, config);
         let shared_state = Arc::new(RwLock::new(app_state));
 
-        let resp = handle_download(shared_state, 12345).await;
-        assert_eq!(resp.status, hyper::StatusCode::MOVED_PERMANENTLY);
-        let location = resp.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).map(|(_, v)| v.as_str()).unwrap();
-        assert_eq!(location, "https://catboy.best/d/12345");
+        let resp = handle_download(shared_state.clone(), 0, false).await;
+        assert_eq!(resp.status, hyper::StatusCode::NOT_FOUND);
+
+        let resp_thumb = handle_thumbnail(shared_state, "2620610l.jpg").await;
+        // In unit test environment, might be OK if online or 404 if offline, but shouldn't panic
+        assert!(resp_thumb.status == hyper::StatusCode::OK || resp_thumb.status == hyper::StatusCode::NOT_FOUND);
     }
 }

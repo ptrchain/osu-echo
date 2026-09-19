@@ -233,6 +233,42 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Direct loopback HTTP (port 80) setup for -devserver localhost plain HTTP requests (e.g. b.localhost/thumb)
+    let http80_state = shared_state.clone();
+    tokio::spawn(async move {
+        match TcpListener::bind("127.0.0.1:80").await {
+            Ok(listener) => {
+                logger::success("Direct HTTP server listening on http://127.0.0.1:80 (for -devserver localhost)");
+                loop {
+                    let (stream, _) = match listener.accept().await {
+                        Ok(s) => s,
+                        Err(_) => continue,
+                    };
+                    let io = TokioIo::new(stream);
+                    let state = http80_state.clone();
+                    let service = service_fn(move |req| {
+                        let state = state.clone();
+                        async move {
+                            let resp = handle_request(state, req).await;
+                            Ok::<_, hyper::Error>(resp.into_hyper_response())
+                        }
+                    });
+
+                    tokio::task::spawn(async move {
+                        let _ = http1::Builder::new().serve_connection(io, service).await;
+                    });
+                }
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    logger::info("Port 80 is already in use. Direct HTTP is disabled; port 5000 is still available.");
+                } else {
+                    logger::info(&format!("Could not bind port 80 ({}). Port 5000 is still available.", e));
+                }
+            }
+        }
+    });
+
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("SERVER_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(5000);
     let addr: SocketAddr = match format!("{}:{}", host, port).parse() {
@@ -355,6 +391,13 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
                 format!("/assets{}", path)
             }
         }
+        "b.localhost" => {
+            if path.starts_with("/b") {
+                path.clone()
+            } else {
+                format!("/b{}", path)
+            }
+        }
         _ => path.clone(),
     };
 
@@ -419,7 +462,10 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
         RouteMatch::Web(sub_path) => handlers::web::handle(state, &sub_path, &params, &method, &headers, &body_bytes).await,
         RouteMatch::Avatar(userid) => handlers::avatar::handle(state, userid).await,
         RouteMatch::Api(sub_path) => handlers::api::handle(state, &sub_path, &params).await,
-        RouteMatch::Download(setid) => handlers::web::handle_download(state, setid).await,
+        RouteMatch::Download(setid, no_video) => handlers::web::handle_download(state, setid, no_video).await,
+        RouteMatch::Thumbnail(filename) => handlers::web::handle_thumbnail(state, &filename).await,
+        RouteMatch::Preview(filename) => handlers::web::handle_preview(state, &filename).await,
+        RouteMatch::Asset(sub_path) => handlers::web::handle_asset(state, &sub_path).await,
         RouteMatch::BeatmapWeb(full_path) => Response::redirect(&format!("https://osu.ppy.sh{}", full_path)),
         RouteMatch::Screenshot(link) => Response::redirect(&link),
         RouteMatch::NotFound => Response::not_found(),

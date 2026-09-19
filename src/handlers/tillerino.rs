@@ -266,7 +266,21 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
         None
     };
     let target_set_id = np_info.set_id;
-    let target_hint = np_info.title_hint.clone().or(player_info_text);
+    let target_hint = if let Some(ref th) = np_info.title_hint {
+        if th.contains('[') && th.contains(']') {
+            Some(th.clone())
+        } else if let Some(ref pt) = player_info_text {
+            if pt.contains('[') && pt.contains(']') {
+                Some(pt.clone())
+            } else {
+                Some(th.clone())
+            }
+        } else {
+            Some(th.clone())
+        }
+    } else {
+        player_info_text.clone()
+    };
 
     let mut bmap: Option<Beatmap> = None;
 
@@ -282,6 +296,17 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
             if let Some(ref md5) = target_md5 {
                 if let Ok(Some(m)) = db::get_beatmap_by_md5(&db_conn, md5) {
                     bmap = Some(m);
+                }
+            }
+        }
+        if bmap.is_none() {
+            if let Some(ref last) = s.last_np_map {
+                let set_matches = target_set_id.is_some() && Some(last.beatmapset_id) == target_set_id;
+                let id_matches = target_map_id.is_some() && target_map_id == Some(last.beatmap_id);
+                let md5_matches = target_md5.is_some() && target_md5.as_deref() == Some(&last.file_md5);
+                let no_filter = np_info.map_id.is_none() && np_info.set_id.is_none() && np_info.title_hint.is_none();
+                if set_matches || id_matches || md5_matches || no_filter {
+                    bmap = Some(last.clone());
                 }
             }
         }
@@ -301,7 +326,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
             }
             if fetched.is_none() {
                 if let Some(sid) = target_set_id {
-                    fetched = utils::fetch_beatmap_from_api(&s.http, key, &[("s", sid.to_string())]).await;
+                    fetched = utils::fetch_beatmap_from_api_with_hint(&s.http, key, &[("s", sid.to_string())], target_hint.as_deref()).await;
                 }
             }
             if let Some(b) = fetched {

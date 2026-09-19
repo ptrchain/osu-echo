@@ -6,7 +6,9 @@ use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor;
 
 const TLS_SUBDOMAINS: &[&str] =
-    &["localhost", "c.localhost", "c4.localhost", "c5.localhost", "c6.localhost", "ce.localhost", "osu.localhost", "a.localhost", "assets.localhost"];
+    &["localhost", "c.localhost", "c4.localhost", "c5.localhost", "c6.localhost", "ce.localhost", "osu.localhost", "b.localhost", "a.localhost", "assets.localhost"];
+
+const CURRENT_CERT_VERSION: &str = "v2_with_b_localhost";
 
 pub struct TlsSetupPaths {
     pub cert_pem: PathBuf,
@@ -21,13 +23,15 @@ pub fn get_or_create_certificates(data_dir: &Path) -> Result<TlsSetupPaths, Box<
     let cert_pem = tls_dir.join("localhost.pem");
     let key_pem = tls_dir.join("localhost-key.pem");
     let cert_der = tls_dir.join("localhost.cer");
+    let cert_ver = tls_dir.join("cert_version.txt");
 
-    if cert_pem.exists() && key_pem.exists() && cert_der.exists() {
+    let is_up_to_date = cert_ver.exists() && std::fs::read_to_string(&cert_ver).unwrap_or_default() == CURRENT_CERT_VERSION;
+
+    if cert_pem.exists() && key_pem.exists() && cert_der.exists() && is_up_to_date {
         return Ok(TlsSetupPaths { cert_pem, key_pem, cert_der });
     }
 
-
-    crate::logger::info("Generating self-signed TLS certificates for localhost...");
+    crate::logger::info("Generating self-signed TLS certificates for localhost (including b.localhost)...");
 
     let mut params = CertificateParams::default();
     let mut dn = DistinguishedName::new();
@@ -50,9 +54,11 @@ pub fn get_or_create_certificates(data_dir: &Path) -> Result<TlsSetupPaths, Box<
 
     std::fs::write(&cert_pem, cert_pem_data)?;
     std::fs::write(&key_pem, key_pem_data)?;
-    std::fs::write(&cert_der, cert_der_data)?;
+    std::fs::write(&cert_der, &cert_der_data)?;
+    let _ = std::fs::write(&cert_ver, CURRENT_CERT_VERSION);
 
     crate::logger::success(&format!("TLS certificates generated in {}", tls_dir.display()));
+    let _ = install_windows_trust(&cert_der);
 
     Ok(TlsSetupPaths { cert_pem, key_pem, cert_der })
 }
@@ -91,7 +97,7 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let content = std::fs::read_to_string(&hosts_path).unwrap_or_default();
-        let required = ["osu.localhost", "c.localhost", "a.localhost", "assets.localhost"];
+        let required = ["osu.localhost", "c.localhost", "a.localhost", "assets.localhost", "b.localhost"];
         let all_present = required.iter().all(|domain| content.contains(domain));
 
         if all_present {
@@ -100,7 +106,7 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         crate::logger::info("Configuring Windows hosts file for -devserver localhost subdomains...");
-        let hosts_line = "\r\n127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost # osu-echo\r\n";
+        let hosts_line = "\r\n127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost # osu-echo\r\n";
 
         // Try direct append first (succeeds if already running with admin privileges)
         let direct_success = std::fs::OpenOptions::new()
@@ -118,7 +124,7 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         // Elevate via PowerShell RunAs if permission denied
         crate::logger::info("Requesting administrator privilege to update Windows hosts file...");
         let ps_script = format!(
-            "Add-Content -Path '{}\\System32\\drivers\\etc\\hosts' -Value '`r`n127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost # osu-echo'",
+            "Add-Content -Path '{}\\System32\\drivers\\etc\\hosts' -Value '`r`n127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost # osu-echo'",
             system_root.replace('\'', "''")
         );
 
@@ -138,7 +144,7 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             crate::logger::warn("Could not automatically update Windows hosts file (elevation was cancelled or failed).");
             crate::logger::warn("Please manually add the following line to C:\\Windows\\System32\\drivers\\etc\\hosts as Administrator:");
-            crate::logger::warn("  127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost");
+            crate::logger::warn("  127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost");
         }
     }
 

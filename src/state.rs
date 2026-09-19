@@ -27,9 +27,14 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(db: Connection, config: Config) -> Self {
+        let http = HttpClient::builder()
+            .user_agent("osu!")
+            .build()
+            .unwrap_or_else(|_| HttpClient::new());
+
         Self {
             db: Arc::new(Mutex::new(db)),
-            http: HttpClient::new(),
+            http,
             config,
             player: None,
             mode: None,

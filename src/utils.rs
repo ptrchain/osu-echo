@@ -207,6 +207,15 @@ pub fn is_path(p: &str) -> Option<std::path::PathBuf> {
 }
 
 pub async fn fetch_beatmap_from_api(http: &reqwest::Client, api_key: &str, params: &[(&str, String)]) -> Option<crate::types::beatmap::Beatmap> {
+    fetch_beatmap_from_api_with_hint(http, api_key, params, None).await
+}
+
+pub async fn fetch_beatmap_from_api_with_hint(
+    http: &reqwest::Client,
+    api_key: &str,
+    params: &[(&str, String)],
+    hint: Option<&str>,
+) -> Option<crate::types::beatmap::Beatmap> {
     let mut url = reqwest::Url::parse("https://osu.ppy.sh/api/get_beatmaps").ok()?;
     {
         let mut pairs = url.query_pairs_mut();
@@ -225,6 +234,35 @@ pub async fn fetch_beatmap_from_api(http: &reqwest::Client, api_key: &str, param
     let arr = json.as_array()?;
     if arr.is_empty() {
         return None;
+    }
+
+    if let Some(h) = hint {
+        let clean = if let Some(start) = h.rfind('[') {
+            let rest = &h[start + 1..];
+            let end = rest.find(']').unwrap_or(rest.len());
+            &rest[..end]
+        } else {
+            h
+        }
+        .trim()
+        .to_lowercase();
+
+        if !clean.is_empty() {
+            for item in arr {
+                if let Some(ver) = item.get("version").and_then(|v| v.as_str()) {
+                    if ver.to_lowercase() == clean {
+                        return crate::types::beatmap::Beatmap::from_api_json(item);
+                    }
+                }
+            }
+            for item in arr {
+                if let Some(ver) = item.get("version").and_then(|v| v.as_str()) {
+                    if ver.to_lowercase().contains(&clean) || clean.contains(&ver.to_lowercase()) {
+                        return crate::types::beatmap::Beatmap::from_api_json(item);
+                    }
+                }
+            }
+        }
     }
 
     crate::types::beatmap::Beatmap::from_api_json(&arr[0])
@@ -388,7 +426,7 @@ pub fn find_and_parse_local_osu_file(
                     let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
                     let matches_any = words.iter().any(|w| folder_name.contains(&w.to_lowercase()));
                     if matches_any {
-                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, Some(hint), set_id) {
+                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, Some(hint), None) {
                             return Some((b, c));
                         }
                     }
@@ -402,7 +440,7 @@ pub fn find_and_parse_local_osu_file(
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, title_hint, set_id) {
+                    if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, None, None) {
                         return Some((b, c));
                     }
                 }
@@ -451,9 +489,12 @@ fn scan_dir_for_osu_file(
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("osu") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Some(bmap) = parse_osu_file_to_beatmap(&content, map_id, fallback_set_id) {
+                    if let Some(mut bmap) = parse_osu_file_to_beatmap(&content, None, fallback_set_id) {
                         if let Some(md5) = map_md5 {
                             if !md5.is_empty() && bmap.file_md5.eq_ignore_ascii_case(md5) {
+                                if bmap.beatmap_id == 0 {
+                                    bmap.beatmap_id = map_id.unwrap_or(0);
+                                }
                                 return Some((bmap, content));
                             }
                         }
@@ -469,10 +510,16 @@ fn scan_dir_for_osu_file(
                                 || hint.to_lowercase().contains(&bmap.title.to_lowercase()))
                                 && title_candidate.is_none()
                             {
+                                if bmap.beatmap_id == 0 {
+                                    bmap.beatmap_id = map_id.unwrap_or(0);
+                                }
                                 title_candidate = Some((bmap.clone(), content.clone()));
                             }
                         }
                         if candidate.is_none() {
+                            if bmap.beatmap_id == 0 {
+                                bmap.beatmap_id = map_id.unwrap_or(0);
+                            }
                             candidate = Some((bmap, content));
                         }
                     }
@@ -480,7 +527,12 @@ fn scan_dir_for_osu_file(
             }
         }
     }
-    title_candidate.or(candidate)
+
+    if fallback_set_id.is_some() {
+        title_candidate.or(candidate)
+    } else {
+        title_candidate
+    }
 }
 
 pub async fn get_or_fetch_beatmap_content(
@@ -796,6 +848,38 @@ mod tests {
         assert_eq!(bmap.version, "270");
         assert!(!bmap.file_md5.is_empty());
         assert_eq!(bmap.file_content, Some(content.to_string()));
+    }
+
+    #[test]
+    fn test_scan_dir_does_not_false_match_unrelated_map() {
+        let temp_dir = std::env::temp_dir().join(format!("osu_test_songs_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let map_path = temp_dir.join("test.osu");
+        let content = "osu file format v3\n\
+            [General]\nMode: 0\n\
+            [Metadata]\n\
+            Title:DISCO PRINCE\n\
+            Artist:Kenji Ninuma\n\
+            Creator:peppy\n\
+            Version:Normal\n\
+            [Difficulty]\n\
+            HPDrainRate:6\n\
+            CircleSize:4\n\
+            OverallDifficulty:6\n\
+            ApproachRate:6\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n";
+        std::fs::write(&map_path, content).unwrap();
+
+        // When scanning without matching set_id or title or md5 or map_id, it must NOT return a candidate match
+        let res = scan_dir_for_osu_file(&temp_dir, Some(999999), None, None, None);
+        assert!(res.is_none(), "Must not return unrelated file as match");
+
+        // When scanning with matching title hint, it should match
+        let res_title = scan_dir_for_osu_file(&temp_dir, None, None, Some("DISCO PRINCE"), None);
+        assert!(res_title.is_some(), "Must match by title hint");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
