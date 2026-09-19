@@ -415,18 +415,11 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, String) {
     let mut body = Vec::new();
 
-    // Synchronize pending username from bancho_connect.php
-    let mut name: Option<String> = None;
-    for _ in 0..5 {
-        {
-            let s = state.read().await;
-            if s.pending_login_name.is_some() {
-                name = s.pending_login_name.clone();
-                break;
-            }
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    // Synchronize pending username from bancho_connect.php or directly from body_bytes
+    let mut name: Option<String> = {
+        let s = state.read().await;
+        s.pending_login_name.clone()
+    };
 
     if name.is_none() {
         if let Ok(body_str) = std::str::from_utf8(body_bytes) {
@@ -436,6 +429,17 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
                 if !u.is_empty() {
                     name = Some(u.to_string());
                 }
+            }
+        }
+    }
+
+    if name.is_none() {
+        for _ in 0..2 {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let s = state.read().await;
+            if s.pending_login_name.is_some() {
+                name = s.pending_login_name.clone();
+                break;
             }
         }
     }
@@ -452,9 +456,15 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         s.pending_login_name = None;
     }
 
-    let (api_key_opt, http_client, osu_uname_opt, config_country_opt) = {
+    let (api_key_opt, http_client, osu_uname_opt, config_country_opt, osu_daily_api_key_opt) = {
         let s = state.read().await;
-        (s.config.osu_api_key.clone(), s.http.clone(), s.config.osu_username.clone(), s.config.country.clone())
+        (
+            s.config.osu_api_key.clone(),
+            s.http.clone(),
+            s.config.osu_username.clone(),
+            s.config.country.clone(),
+            s.config.osu_daily_api_key.clone(),
+        )
     };
 
     let mut friend_records = {
@@ -468,28 +478,62 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     };
     friend_records.retain(|f| f.friend_id > 2 && f.friend_id != 2070907);
 
+    // Enqueue friend stats enrichment in the background so login packets are sent immediately
     if let Some(ref key) = api_key_opt {
-        for f in &mut friend_records {
-            if f.friend_id <= 2 || f.friend_id == BANCHOBOT_ID || f.friend_id == TILLERINO_ID || f.friend_id == 2070907 {
-                continue;
-            }
-            if f.friend_name.is_empty() || (f.rank == 1 && f.pp == 0) {
-                let query = if f.friend_id > 0 { f.friend_id.to_string() } else { f.friend_name.clone() };
-                if let Some(fetched) = utils::fetch_user_stats_from_api(&http_client, key, &query).await {
-                    f.friend_name = fetched.friend_name;
-                    f.rank = fetched.rank;
-                    f.pp = fetched.pp;
-                    f.acc = fetched.acc;
-                    f.country = fetched.country;
-                    f.ranked_score = fetched.ranked_score;
-                    f.total_score = fetched.total_score;
-                    f.playcount = fetched.playcount;
+        let friends_to_fetch: Vec<crate::db::FriendRecord> = friend_records
+            .iter()
+            .filter(|f| f.friend_id > 2 && f.friend_id != BANCHOBOT_ID && f.friend_id != TILLERINO_ID && f.friend_id != 2070907)
+            .filter(|f| f.friend_name.is_empty() || (f.rank == 1 && f.pp == 0))
+            .cloned()
+            .collect();
 
-                    let s = state.read().await;
-                    let db = s.db.lock().await;
-                    let _ = db::save_friend_stats(&db, &profile_name, f);
+        if !friends_to_fetch.is_empty() {
+            let http_clone = http_client.clone();
+            let key_clone = key.clone();
+            let state_clone = Arc::clone(&state);
+            let profile_name_clone = profile_name.clone();
+
+            tokio::spawn(async move {
+                for mut f in friends_to_fetch {
+                    let query = if f.friend_id > 0 { f.friend_id.to_string() } else { f.friend_name.clone() };
+                    if let Some(fetched) = utils::fetch_user_stats_from_api(&http_clone, &key_clone, &query).await {
+                        f.friend_name = fetched.friend_name;
+                        f.rank = fetched.rank;
+                        f.pp = fetched.pp;
+                        f.acc = fetched.acc;
+                        f.country = fetched.country;
+                        f.ranked_score = fetched.ranked_score;
+                        f.total_score = fetched.total_score;
+                        f.playcount = fetched.playcount;
+
+                        {
+                            let s = state_clone.read().await;
+                            let db = s.db.lock().await;
+                            let _ = db::save_friend_stats(&db, &profile_name_clone, &f);
+                        }
+
+                        let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name.clone() };
+                        let mut fp = Player::new(display_name);
+                        fp.userid = f.friend_id;
+                        fp.bancho_privs = 1;
+                        fp.rank = f.rank;
+                        fp.pp = f.pp;
+                        fp.acc = f.acc;
+                        fp.country = f.country;
+                        fp.ranked_score = f.ranked_score;
+                        fp.total_score = f.total_score;
+                        fp.playcount = f.playcount;
+                        fp.action = 0;
+                        fp.info_text = String::new();
+
+                        let mut s = state_clone.write().await;
+                        if let Some(ref mut p) = s.player {
+                            p.queue.extend_from_slice(&packets::user_presence(&fp));
+                            p.queue.extend_from_slice(&packets::user_stats(&fp));
+                        }
+                    }
                 }
-            }
+            });
         }
     }
 
@@ -506,13 +550,22 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     if let Some(ref c) = config_country_opt {
         player.country = utils::country_code_to_byte(c);
     } else if let Some(ref key) = api_key_opt {
-        let player_query = osu_uname_opt.as_deref().unwrap_or(&profile_name);
-        if let Some(fetched) = utils::fetch_user_stats_from_api(&http_client, key, player_query).await {
-            player.country = fetched.country;
-            if player.rank == 9999999 {
-                player.rank = fetched.rank;
+        let player_query = osu_uname_opt.clone().unwrap_or_else(|| profile_name.clone());
+        let http_clone = http_client.clone();
+        let key_clone = key.clone();
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Some(fetched) = utils::fetch_user_stats_from_api(&http_clone, &key_clone, &player_query).await {
+                let mut s = state_clone.write().await;
+                if let Some(ref mut p) = s.player {
+                    p.country = fetched.country;
+                    if p.rank == 9999999 || p.rank <= 1 {
+                        p.rank = fetched.rank;
+                    }
+                    p.enqueue_stats();
+                }
             }
-        }
+        });
     }
 
     body.extend_from_slice(&packets::user_id(player.userid));
@@ -553,12 +606,22 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         let scores = db::get_ranked_scores(&db_conn, &profile_name).unwrap_or_default();
         let playcount = db::get_playcount(&db_conn, &profile_name).unwrap_or(0);
         player.calculate_stats(&scores, None, playcount);
+    }
 
-        if let Some(ref api_key) = s.config.osu_daily_api_key {
-            if let Some(rank) = utils::get_rank_from_daily(&s.http, api_key, player.pp, player.mode).await {
-                player.rank = rank;
+    if let Some(daily_key) = osu_daily_api_key_opt {
+        let http_clone = http_client.clone();
+        let pp = player.pp;
+        let mode = player.mode;
+        let state_clone = Arc::clone(&state);
+        tokio::spawn(async move {
+            if let Some(rank) = utils::get_rank_from_daily(&http_clone, &daily_key, pp, mode).await {
+                let mut s = state_clone.write().await;
+                if let Some(ref mut p) = s.player {
+                    p.rank = rank;
+                    p.enqueue_stats();
+                }
             }
-        }
+        });
     }
 
     let player_id = player.userid;
@@ -828,5 +891,44 @@ mod tests {
             let friends = db::get_friends(&db_conn, "AddTester").unwrap();
             assert_eq!(friends, vec![(4, "Tillerino".to_string())]);
         }
+    }
+
+    #[tokio::test]
+    async fn test_login_direct_body_bytes_fast_and_loads_friends() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "FastTester").unwrap();
+
+        let friend_rec = db::FriendRecord {
+            friend_id: 1001,
+            friend_name: "QuickFriend".to_string(),
+            rank: 42,
+            pp: 5000,
+            acc: 99.0,
+            country: 16,
+            ranked_score: 1000000,
+            total_score: 2000000,
+            playcount: 500,
+        };
+        db::save_friend_stats(&conn, "FastTester", &friend_rec).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let app_state = AppState::new(conn, config);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let start = std::time::Instant::now();
+        let (body, status) = login(shared_state, b"FastTester\npasshash\nversion").await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(status, "success");
+        assert!(elapsed < std::time::Duration::from_millis(150), "Login must not stall (took {:?})", elapsed);
+
+        let pkts = packets::split_packets(&body);
+        let friends_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoFriendsList as u16).expect("Friends list present");
+        let mut reader = packets::PacketReader::new(friends_pkt.payload);
+        let friends = reader.read_i32_list().expect("Valid friend list");
+        assert!(friends.contains(&1001), "Cached friend must be in friends list immediately");
+        assert!(friends.contains(&3), "BanchoBot must be in friends list");
+        assert!(friends.contains(&4), "Tillerino must be in friends list");
     }
 }

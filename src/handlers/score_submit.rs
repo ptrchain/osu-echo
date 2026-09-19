@@ -21,6 +21,145 @@ pub struct ProfileStats {
     pub max_combo: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub enum ScoreMetric {
+    Score(i64),
+    Pp(f64),
+}
+
+impl ScoreMetric {
+    pub fn is_greater_than(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ScoreMetric::Score(a), ScoreMetric::Score(b)) => a > b,
+            (ScoreMetric::Pp(a), ScoreMetric::Pp(b)) => a > b,
+            _ => false,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn calculate_map_ranks(
+    http: &reqwest::Client,
+    api_key: Option<&str>,
+    bmap: &Beatmap,
+    mode: i32,
+    server_mode: Option<Mods>,
+    pp_leaderboard: bool,
+    parsed_map: Option<&rosu_pp::Beatmap>,
+    all_local_scores: &[Score],
+    player_name: &str,
+    new_score: &Score,
+) -> (Option<Score>, Option<i32>, Option<i32>) {
+    let get_score_metric = |sc: &Score| -> ScoreMetric {
+        if pp_leaderboard || server_mode.is_some() {
+            ScoreMetric::Pp(sc.pp.unwrap_or(0.0))
+        } else {
+            ScoreMetric::Score(sc.score)
+        }
+    };
+
+    let is_valid_mode = |mods: u32| -> bool {
+        let m = Mods::from_bits_truncate(mods);
+        if let Some(fm) = server_mode {
+            m.intersects(fm)
+        } else {
+            !m.intersects(Mods::RELAX | Mods::AUTOPILOT)
+        }
+    };
+
+    let player_prev_scores: Vec<&Score> = all_local_scores
+        .iter()
+        .filter(|sc| sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods))
+        .collect();
+
+    let previous = player_prev_scores
+        .into_iter()
+        .max_by(|a, b| {
+            if pp_leaderboard || server_mode.is_some() {
+                a.pp.unwrap_or(0.0).partial_cmp(&b.pp.unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                a.score.cmp(&b.score)
+            }
+        })
+        .cloned();
+
+    let mut competitor_metrics: Vec<ScoreMetric> = Vec::new();
+
+    if let Some(key) = api_key {
+        if bmap.beatmap_id > 0 {
+            if let Some(mut bancho_scores) = utils::fetch_scores_from_bancho(http, key, bmap.beatmap_id, mode, None, 50).await {
+                if pp_leaderboard || server_mode.is_some() {
+                    if let Some(map) = parsed_map {
+                        for sc in &mut bancho_scores {
+                            utils::calculate_bancho_score_pp(map, mode, sc);
+                        }
+                    }
+                }
+                for sc in bancho_scores {
+                    if !sc.username.eq_ignore_ascii_case(player_name) {
+                        if pp_leaderboard || server_mode.is_some() {
+                            competitor_metrics.push(ScoreMetric::Pp(sc.pp.unwrap_or(0.0)));
+                        } else {
+                            competitor_metrics.push(ScoreMetric::Score(sc.score.parse::<i64>().unwrap_or(0)));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut other_players: std::collections::HashMap<String, &Score> = std::collections::HashMap::new();
+    for sc in all_local_scores {
+        if !sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods) {
+            let entry = other_players.entry(sc.name.to_lowercase()).or_insert(sc);
+            let curr_better = if pp_leaderboard || server_mode.is_some() {
+                sc.pp.unwrap_or(0.0) > entry.pp.unwrap_or(0.0)
+            } else {
+                sc.score > entry.score
+            };
+            if curr_better {
+                *entry = sc;
+            }
+        }
+    }
+
+    for (_, sc) in other_players {
+        competitor_metrics.push(get_score_metric(sc));
+    }
+
+    competitor_metrics.sort_by(|a, b| {
+        if b.is_greater_than(a) {
+            std::cmp::Ordering::Greater
+        } else if a.is_greater_than(b) {
+            std::cmp::Ordering::Less
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
+
+    let rank_before = if let Some(ref prev) = previous {
+        let prev_m = get_score_metric(prev);
+        let better_count = competitor_metrics.iter().filter(|m| m.is_greater_than(&prev_m)).count();
+        if better_count < 50 {
+            Some((better_count + 1) as i32)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let new_m = get_score_metric(new_score);
+    let better_count = competitor_metrics.iter().filter(|m| m.is_greater_than(&new_m)).count();
+    let rank_after = if better_count < 50 {
+        Some((better_count + 1) as i32)
+    } else {
+        None
+    };
+
+    (previous, rank_before, rank_after)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_charts(
     bmap: &Beatmap,
@@ -29,7 +168,7 @@ pub fn build_charts(
     after: &ProfileStats,
     previous: Option<&Score>,
     rank_before: Option<i32>,
-    rank_after: i32,
+    rank_after: Option<i32>,
     playcount: i32,
 ) -> Vec<u8> {
     let meta = format!(
@@ -47,7 +186,7 @@ pub fn build_charts(
     let curr_max_combo = score.max_combo.to_string();
     let curr_acc = format!("{:.2}", score.acc.unwrap_or(0.0));
     let curr_pp = format!("{:.0}", score.pp.unwrap_or(0.0));
-    let curr_rank = rank_after.to_string();
+    let curr_rank = rank_after.map(|r| r.to_string()).unwrap_or_default();
 
     let sid = score.scoreid.unwrap_or(0);
     let online_score_id = -sid;
@@ -107,7 +246,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
                     total_score: player.total_score,
                     max_combo: player.map_id,
                 };
-                let charts = build_charts(&bmap, existing_score.as_ref().unwrap_or(&sub.score), &stats, &stats, existing_score.as_ref(), Some(1), 1, playcount);
+                let charts = build_charts(&bmap, existing_score.as_ref().unwrap_or(&sub.score), &stats, &stats, existing_score.as_ref(), Some(1), Some(1), playcount);
                 return Ok(charts);
             }
         }
@@ -186,7 +325,8 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         return Err("Missing .osu file".to_string());
     };
 
-    if let Ok(parsed_map) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
+    let parsed_map = rosu_pp::Beatmap::from_bytes(content.as_bytes()).ok();
+    if let Some(ref map) = parsed_map {
         let game_mode = match score.mode {
             0 => rosu_pp::model::mode::GameMode::Osu,
             1 => rosu_pp::model::mode::GameMode::Taiko,
@@ -195,7 +335,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             _ => rosu_pp::model::mode::GameMode::Osu,
         };
 
-        let result = rosu_pp::Performance::new(&parsed_map)
+        let result = rosu_pp::Performance::new(map)
             .mode_or_ignore(game_mode)
             .mods(score.mods)
             .n300(score.n300 as u32)
@@ -228,12 +368,26 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     let ping_recent = s.config.ping_user_when_recent_score;
     let enable_recent = s.config.enable_recent_channel;
 
-    let (previous, rank_before) = {
+    let (previous, rank_before, rank_after) = {
         let db_conn = s.db.lock().await;
-        let prev_scores = db::get_scores_on_map(&db_conn, &player_name, &score.md5, score.mode).unwrap_or_default();
-        let prev = prev_scores.into_iter().max_by_key(|s| s.score);
-        let r_b = if prev.is_some() { Some(1) } else { None };
-        (prev, r_b)
+        let all_local = db::get_all_scores_on_map(&db_conn, &score.md5, score.mode).unwrap_or_default();
+        drop(db_conn);
+
+        let api_key = s.config.osu_api_key.as_deref();
+        let pp_lb = s.config.pp_leaderboard;
+        calculate_map_ranks(
+            &s.http,
+            api_key,
+            &bmap,
+            score.mode,
+            mode,
+            pp_lb,
+            parsed_map.as_ref(),
+            &all_local,
+            &player_name,
+            &score,
+        )
+        .await
     };
 
     let bmap_status = leaderboard::status_to_db_key(bmap.approved);
@@ -287,7 +441,6 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             max_combo: score.max_combo,
         };
 
-        let rank_after = 1;
         let charts = build_charts(&bmap, &score, &before_stats, &after_stats, previous.as_ref(), rank_before, rank_after, playcount);
 
         let grade =
@@ -394,7 +547,7 @@ mod tests {
 
         let after = ProfileStats { rank: 95, pp: 1050.0, acc: 98.7, ranked_score: 6000000, total_score: 11000000, max_combo: 500 };
 
-        let charts_bytes = build_charts(&bmap, &score, &before, &after, None, None, 1, 5);
+        let charts_bytes = build_charts(&bmap, &score, &before, &after, None, None, Some(1), 5);
         let charts_str = String::from_utf8(charts_bytes).unwrap();
 
         assert!(charts_str.contains("beatmapId:123|beatmapSetId:456|beatmapPlaycount:5|beatmapPasscount:5"));
@@ -404,6 +557,132 @@ mod tests {
         assert!(charts_str.contains("chartId:overall"));
         assert!(charts_str.contains("rankBefore:100|rankAfter:95"));
         assert!(charts_str.contains("ppBefore:1000|ppAfter:1050"));
+
+        // When rank_after is None (outside top 50), rankAfter should be empty
+        let charts_outside = build_charts(&bmap, &score, &before, &after, None, None, None, 5);
+        let str_outside = String::from_utf8(charts_outside).unwrap();
+        assert!(str_outside.contains("rankBefore:|rankAfter:|maxComboBefore:"));
+
+        // When placing #5 with previous PB at #8
+        let charts_p5 = build_charts(&bmap, &score, &before, &after, Some(&score), Some(8), Some(5), 5);
+        let str_p5 = String::from_utf8(charts_p5).unwrap();
+        assert!(str_p5.contains("rankBefore:8|rankAfter:5|maxComboBefore:"));
+    }
+
+    #[tokio::test]
+    async fn test_calculate_map_ranks_various_positions() {
+        let http = reqwest::Client::new();
+        let bmap = Beatmap::blank();
+
+        let make_score = |name: &str, score_val: i64, pp_val: f64| Score {
+            scoreid: Some(1),
+            md5: "abc".to_string(),
+            name: name.to_string(),
+            score: score_val,
+            max_combo: 100,
+            mods: 0,
+            n300: 100,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            time: 0,
+            perfect: true,
+            pp: Some(pp_val),
+            acc: Some(100.0),
+            mode: 0,
+            mods_str: None,
+            replay_md5: None,
+            replay_frames: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        // 1. Solo play, no competitors in DB, no API key -> rank 1
+        let new_score = make_score("Alice", 100_000, 50.0);
+        let (prev, r_before, r_after) = calculate_map_ranks(
+            &http,
+            None,
+            &bmap,
+            0,
+            None,
+            false,
+            None,
+            &[],
+            "Alice",
+            &new_score,
+        ).await;
+        assert!(prev.is_none());
+        assert_eq!(r_before, None);
+        assert_eq!(r_after, Some(1));
+
+        // 2. Competitors exist locally: 4 players with higher scores -> rank 5
+        let local_scores = vec![
+            make_score("P1", 500_000, 200.0),
+            make_score("P2", 400_000, 180.0),
+            make_score("P3", 300_000, 150.0),
+            make_score("P4", 200_000, 120.0),
+            make_score("P5", 50_000, 30.0),
+        ];
+        let (prev, r_before, r_after) = calculate_map_ranks(
+            &http,
+            None,
+            &bmap,
+            0,
+            None,
+            false,
+            None,
+            &local_scores,
+            "Alice",
+            &new_score,
+        ).await;
+        assert!(prev.is_none());
+        assert_eq!(r_before, None);
+        assert_eq!(r_after, Some(5));
+
+        // 3. 50 competitors better -> outside top 50 (rank_after: None)
+        let mut top50: Vec<Score> = Vec::new();
+        for i in 1..=50 {
+            top50.push(make_score(&format!("Player{}", i), 1_000_000 - i * 1000, 100.0));
+        }
+        let low_score = make_score("Alice", 50_000, 10.0);
+        let (prev, r_before, r_after) = calculate_map_ranks(
+            &http,
+            None,
+            &bmap,
+            0,
+            None,
+            false,
+            None,
+            &top50,
+            "Alice",
+            &low_score,
+        ).await;
+        assert!(prev.is_none());
+        assert_eq!(r_before, None);
+        assert_eq!(r_after, None);
+
+        // 4. Player had previous score at rank 5, new score improves to rank 2
+        let mut with_prev = local_scores.clone();
+        with_prev.push(make_score("Alice", 80_000, 40.0)); // Alice previous was 5th (behind P1..P4)
+        let improved_score = make_score("Alice", 450_000, 190.0); // beats P2..P5, behind P1 -> rank 2
+        let (prev, r_before, r_after) = calculate_map_ranks(
+            &http,
+            None,
+            &bmap,
+            0,
+            None,
+            false,
+            None,
+            &with_prev,
+            "Alice",
+            &improved_score,
+        ).await;
+        assert!(prev.is_some());
+        assert_eq!(r_before, Some(5));
+        assert_eq!(r_after, Some(2));
     }
 
     #[test]

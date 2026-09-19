@@ -435,7 +435,7 @@ pub fn find_and_parse_local_osu_file(
         }
     }
 
-    if map_id.is_some() || map_md5.is_some() {
+    if (map_id.is_some() || map_md5.is_some()) && set_id.is_none() {
         if let Ok(entries) = std::fs::read_dir(songs_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();

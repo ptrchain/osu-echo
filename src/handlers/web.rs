@@ -206,16 +206,20 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             p.calculate_stats(&scores, filter_mod, playcount);
             let pp = p.pp;
             let current_p_mode = p.mode;
+            p.enqueue_stats();
             drop(s_write);
 
-            let rank = if let Some(ref key) = api_key { utils::get_rank_from_daily(&http, key, pp, current_p_mode).await } else { None };
-
-            let mut s_write = state.write().await;
-            if let Some(ref mut p) = s_write.player {
-                if let Some(r) = rank {
-                    p.rank = r;
-                }
-                p.enqueue_stats();
+            if let Some(key) = api_key {
+                let state_clone = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Some(r) = utils::get_rank_from_daily(&http, &key, pp, current_p_mode).await {
+                        let mut s_write = state_clone.write().await;
+                        if let Some(ref mut p) = s_write.player {
+                            p.rank = r;
+                            p.enqueue_stats();
+                        }
+                    }
+                });
             }
         }
     }
@@ -338,18 +342,31 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                     None
                 };
 
+                let mut tasks = tokio::task::JoinSet::new();
                 for f in &friend_records {
                     if f.friend_id > 0 && f.friend_id != 3 && f.friend_id != 4 && f.friend_id != 2070907 {
-                        if let Some(mut b_scores) = utils::fetch_user_scores_from_bancho(&s.http, api_key, bmap.beatmap_id, f.friend_id, mode).await {
-                            for sc in &mut b_scores {
-                                if sc.username.is_empty() && !f.friend_name.is_empty() {
-                                    sc.username = f.friend_name.clone();
-                                }
-                                if let Some(ref map) = parsed_map {
-                                    utils::calculate_bancho_score_pp(map, mode, sc);
-                                }
-                                friend_entries.push(sc.as_leaderboard_entry(pp_leaderboard || current_mode.is_some()));
+                        let http = s.http.clone();
+                        let api_key = api_key.clone();
+                        let bmap_id = bmap.beatmap_id;
+                        let fid = f.friend_id;
+                        let fname = f.friend_name.clone();
+                        tasks.spawn(async move {
+                            let scores = utils::fetch_user_scores_from_bancho(&http, &api_key, bmap_id, fid, mode).await;
+                            (fname, scores)
+                        });
+                    }
+                }
+
+                while let Some(res) = tasks.join_next().await {
+                    if let Ok((fname, Some(mut b_scores))) = res {
+                        for sc in &mut b_scores {
+                            if sc.username.is_empty() && !fname.is_empty() {
+                                sc.username = fname.clone();
                             }
+                            if let Some(ref map) = parsed_map {
+                                utils::calculate_bancho_score_pp(map, mode, sc);
+                            }
+                            friend_entries.push(sc.as_leaderboard_entry(pp_leaderboard || current_mode.is_some()));
                         }
                     }
                 }

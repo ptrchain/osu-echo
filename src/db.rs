@@ -405,6 +405,50 @@ pub fn get_scores_on_map(conn: &Connection, name: &str, md5: &str, mode: i32) ->
     Ok(scores)
 }
 
+pub fn get_all_scores_on_map(conn: &Connection, md5: &str, mode: i32) -> SqlResult<Vec<Score>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
+                score, max_combo, perfect, mods, time, acc, pp,
+                replay_md5, replay_frames, mods_str, player_name
+         FROM scores
+         WHERE md5 = ?1 AND mode = ?2
+         ORDER BY pp DESC",
+    )?;
+
+    let scores = stmt
+        .query_map(params![md5, mode], |row| {
+            Ok(Score {
+                mode: row.get(1)?,
+                md5: row.get(2)?,
+                name: row.get(19)?,
+                n300: row.get(3)?,
+                n100: row.get(4)?,
+                n50: row.get(5)?,
+                ngeki: row.get(6)?,
+                nkatu: row.get(7)?,
+                nmiss: row.get(8)?,
+                score: row.get(9)?,
+                max_combo: row.get(10)?,
+                perfect: row.get::<_, i32>(11)? != 0,
+                mods: row.get::<_, i64>(12)? as u32,
+                time: row.get(13)?,
+                acc: row.get(14)?,
+                pp: row.get(15)?,
+                replay_md5: row.get(16)?,
+                replay_frames: row.get(17)?,
+                mods_str: row.get(18)?,
+                scoreid: Some(row.get::<_, i64>(0)?),
+                additional_mods: None,
+                submission_checksum: None,
+                submission_identity: None,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(scores)
+}
+
 pub fn get_score_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Score>> {
     let mut stmt = conn.prepare(
         "SELECT id, player_name, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
