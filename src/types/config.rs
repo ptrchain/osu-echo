@@ -189,7 +189,7 @@ pub fn write_dotenv_country(country: &str) -> std::io::Result<()> {
     map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
     map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
 
-    let mut out = String::from("# osu! Local Server - Environment Configuration\n");
+    let mut out = String::from("# osu-echo - Environment Configuration\n");
     for (k, v) in &map {
         out.push_str(&format!("{}={}\n", k, v));
     }
@@ -249,7 +249,7 @@ pub fn write_dotenv(
     map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
     map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
 
-    let mut out = String::from("# osu! Local Server - Environment Configuration\n");
+    let mut out = String::from("# osu-echo - Environment Configuration\n");
     out.push_str(&format!("SERVER_HOST={}\n", map.get("SERVER_HOST").unwrap()));
     out.push_str(&format!("SERVER_PORT={}\n\n", map.get("SERVER_PORT").unwrap()));
 
@@ -288,7 +288,7 @@ pub fn write_dotenv(
 pub fn setup_config(data_dir: &Path) -> Config {
     let mut config = Config::default();
 
-    println!("\n=== osu! Local Server Quick Setup ===");
+    println!("\n=== osu-echo Quick Setup ===");
     println!("Press Enter to accept recommended defaults.\n");
 
     let detected_osu = detect_osu_path();

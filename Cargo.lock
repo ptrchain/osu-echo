@@ -1190,7 +1190,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "osu-localserver"
+name = "osu-echo"
 version = "1.0.0"
 dependencies = [
  "base64",

@@ -10,10 +10,12 @@ mod state;
 mod types;
 mod utils;
 
+use colored::Colorize;
 use http_body_util::BodyExt;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -25,11 +27,35 @@ use state::AppState;
 
 pub const VERSION: &str = "1.0";
 
+const LOGO: &str = r#"                      ,───.                             
+                      │   │            ,──.             
+ ,───.  ,───. ,──.,──.│  .',───.  ,───.│  ,───.  ,───.  
+│ .─. │(  .─' │  ││  ││  ││ .─. :│ .──'│  .─.  ││ .─. │ 
+' '─' '.─'  `)'  ''  '`──'╲   ──.╲ `──.│  │ │  │' '─' ' 
+ `───' `────'  `────' .──. `────' `───'`──' `──' `───'  
+                      '──'     "#;
+
+fn clear_console() {
+    let mut stdout = std::io::stdout();
+    let _ = crossterm::execute!(
+        stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::All),
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::Purge),
+        crossterm::cursor::MoveTo(0, 0)
+    );
+    print!("\x1B[2J\x1B[3J\x1B[H");
+    let _ = stdout.flush();
+}
+
+fn print_banner() {
+    println!("\n{}", LOGO.magenta().bold());
+    println!("  Welcome to {} v{}", "osu-echo".magenta().bold(), VERSION);
+    println!("  {}\n", "A local osu! server written in Rust".dimmed());
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
-
-    logger::info(&format!("osu! Local Server (Rust) v{}", VERSION));
 
     let data_dir = std::env::current_dir()?.join(".data");
     std::fs::create_dir_all(&data_dir)?;
@@ -40,12 +66,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut config = match db::load_config(&conn)? {
         Some(config) => {
+            print_banner();
             logger::info("Found existing server configuration.");
             config
         }
         None => {
             let config = types::config::setup_config(&data_dir);
             db::save_config(&conn, &config)?;
+            clear_console();
+            print_banner();
             config
         }
     };
@@ -148,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(l) => l,
         Err(e) => {
             if e.kind() == std::io::ErrorKind::AddrInUse {
-                logger::error(&format!("Port {} is already in use. Is another instance of osu-localserver already running?", port));
+                logger::error(&format!("Port {} is already in use. Is another instance of osu-echo already running?", port));
             } else {
                 logger::error(&format!("Failed to bind server on {}: {}", addr, e));
             }

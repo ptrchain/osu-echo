@@ -1,4 +1,4 @@
-# osu-localserver
+# osu-echo
 
 A local osu! server written in Rust. It lets you run your own private server on your computer for score saving, performance points (PP) calculation, local leaderboards, and beatmap downloads.
 
