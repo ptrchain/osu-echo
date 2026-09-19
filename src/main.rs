@@ -123,7 +123,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     Err(e) => {
-                        logger::warn(&format!("Could not bind port 443 for HTTPS ({}). Port 5000 is still available.", e));
+                        if e.kind() == std::io::ErrorKind::AddrInUse {
+                            logger::warn("Port 443 is already in use. Direct HTTPS is disabled; port 5000 is still available.");
+                        } else {
+                            logger::warn(&format!("Could not bind port 443 for HTTPS ({}). Port 5000 is still available.", e));
+                        }
                     }
                 }
             });
@@ -132,33 +136,72 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let host = std::env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = std::env::var("SERVER_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(5000);
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()?;
-    let listener = TcpListener::bind(addr).await?;
+    let addr: SocketAddr = match format!("{}:{}", host, port).parse() {
+        Ok(a) => a,
+        Err(e) => {
+            logger::error(&format!("Invalid SERVER_HOST or SERVER_PORT ({}:{}): {}", host, port, e));
+            return Ok(());
+        }
+    };
+
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::AddrInUse {
+                logger::error(&format!("Port {} is already in use. Is another instance of osu-localserver already running?", port));
+            } else {
+                logger::error(&format!("Failed to bind server on {}: {}", addr, e));
+            }
+            return Ok(());
+        }
+    };
 
     logger::success(&format!("Server listening on http://{}", addr));
     logger::info(&format!("osu! version target: {}", VERSION));
 
-    loop {
-        let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
-        let state = shared_state.clone();
+    tokio::select! {
+        _ = async {
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        logger::error(&format!("Accept error: {}", e));
+                        continue;
+                    }
+                };
+                let io = TokioIo::new(stream);
+                let state = shared_state.clone();
 
-        tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
-                let state = state.clone();
-                async move {
-                    let resp = handle_request(state, req).await;
-                    Ok::<_, hyper::Error>(resp.into_hyper_response())
-                }
-            });
+                tokio::task::spawn(async move {
+                    let service = service_fn(move |req| {
+                        let state = state.clone();
+                        async move {
+                            let resp = handle_request(state, req).await;
+                            Ok::<_, hyper::Error>(resp.into_hyper_response())
+                        }
+                    });
 
-            if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
-                if !e.is_incomplete_message() {
-                    logger::error(&format!("Connection error: {}", e));
-                }
+                    if let Err(e) = http1::Builder::new().serve_connection(io, service).await {
+                        if !e.is_incomplete_message() {
+                            logger::error(&format!("Connection error: {}", e));
+                        }
+                    }
+                });
             }
-        });
+        } => {},
+        _ = tokio::signal::ctrl_c() => {
+            logger::info("Shutdown signal received. Shutting down...");
+        }
     }
+
+    {
+        let s = shared_state.read().await;
+        let db = s.db.lock().await;
+        let _ = db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+    }
+    logger::success("Server stopped cleanly.");
+
+    Ok(())
 }
 
 async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::body::Incoming>) -> Response {
