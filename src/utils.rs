@@ -464,13 +464,12 @@ fn scan_dir_for_osu_file(
                         }
                         if let Some(hint) = title_hint {
                             let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            if fname.to_lowercase().contains(&hint.to_lowercase())
+                            if (fname.to_lowercase().contains(&hint.to_lowercase())
                                 || hint.to_lowercase().contains(&bmap.version.to_lowercase())
-                                || hint.to_lowercase().contains(&bmap.title.to_lowercase())
+                                || hint.to_lowercase().contains(&bmap.title.to_lowercase()))
+                                && title_candidate.is_none()
                             {
-                                if title_candidate.is_none() {
-                                    title_candidate = Some((bmap.clone(), content.clone()));
-                                }
+                                title_candidate = Some((bmap.clone(), content.clone()));
                             }
                         }
                         if candidate.is_none() {

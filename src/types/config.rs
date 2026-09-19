@@ -253,20 +253,22 @@ pub fn write_dotenv(
     out.push_str(&format!("SERVER_HOST={}\n", map.get("SERVER_HOST").unwrap()));
     out.push_str(&format!("SERVER_PORT={}\n\n", map.get("SERVER_PORT").unwrap()));
 
-    out.push_str("# osu!direct Credentials (password is stored as MD5 hash)\n");
+    out.push_str("# External API Keys (Recommended)\n");
+    out.push_str("# Legacy v1 API key for online beatmap leaderboards: https://old.ppy.sh/p/api/\n");
+    out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
+    out.push_str("# osudaily API key for real-time global rank calculation: https://osudaily.net/api.php\n");
+    out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
+
+    out.push_str("# Optional osu! Account Credentials (only needed for '!friend sync')\n");
     out.push_str(&format!("OSU_USERNAME={}\n", map.get("OSU_USERNAME").cloned().unwrap_or_default()));
     out.push_str(&format!("OSU_PASSWORD_HASH={}\n\n", map.get("OSU_PASSWORD_HASH").cloned().unwrap_or_default()));
 
-    out.push_str("# External API Keys (osu! legacy API v1 & osu!daily)\n");
-    out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
-    out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
-
     out.push_str("# Leaderboard Settings\n");
-    out.push_str("# Set to true to show PP instead of Score on leaderboards\n");
+    out.push_str("# Show PP instead of Score on beatmap leaderboards\n");
     out.push_str(&format!("PP_LEADERBOARD={}\n", map.get("PP_LEADERBOARD").cloned().unwrap_or_else(|| "false".to_string())));
-    out.push_str("# Set to true to show PP for personal best panel\n");
+    out.push_str("# Show PP in the personal best score panel\n");
     out.push_str(&format!("SHOW_PP_FOR_PERSONAL_BEST={}\n", map.get("SHOW_PP_FOR_PERSONAL_BEST").cloned().unwrap_or_else(|| "false".to_string())));
-    out.push_str("# Number of scores shown on leaderboard (1-100)\n");
+    out.push_str("# Number of scores shown on leaderboards (1-100)\n");
     out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
 
     if let Some(country) = map.get("COUNTRY") {
@@ -325,31 +327,32 @@ pub fn setup_config(data_dir: &Path) -> Config {
         }
     }
 
-    println!("\n--- Credentials & API Keys (.env) ---");
-    let setup_creds = prompt_bool("Configure osu! credentials & API keys now? (Y/n) [default: yes]", true);
+    println!("\n--- External API Keys (Essential for Leaderboards & Rank) ---");
+    println!("1. osu! Legacy API Key (v1):");
+    println!("   Required for online beatmap leaderboards & global scores comparison.");
+    println!("   Get yours at: https://old.ppy.sh/p/api/");
+    config.osu_api_key = prompt_optional_string("osu! legacy API key (or Enter to skip):");
 
+    println!("\n2. osu!daily API Key:");
+    println!("   Required for real-time global rank calculation based on your PP.");
+    println!("   Get yours at: https://osudaily.net/api.php");
+    config.osu_daily_api_key = prompt_optional_string("osu!daily API key (or Enter to skip):");
+
+    println!("\n--- osu! Account Credentials (Optional) ---");
+    println!("In-game search and downloads work via Catboy mirror without credentials.");
+    println!("Credentials are only needed if you want to sync your friends list (!friend sync).");
+    let setup_creds = prompt_bool("Configure official osu! account credentials? (y/N) [default: no]", false);
     if setup_creds {
-        let username = prompt_optional_string("osu! username (for osu!direct search, or Enter to skip)");
-        let mut password_hash = None;
-
+        let username = prompt_optional_string("osu! username (or Enter to skip):");
         if let Some(ref u) = username {
             let raw_pw = prompt_password("osu! password (will be MD5-hashed, or Enter to skip) [Hold Tab to reveal]:");
             if let Some(pw) = raw_pw {
                 let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
-                password_hash = Some(hash);
+                config.osu_password = Some(hash);
                 println!("Password hashed successfully (plaintext password is never stored).");
             }
             config.osu_username = Some(u.clone());
-            config.osu_password = password_hash.clone();
         }
-
-        let osu_api_key = prompt_optional_string("osu! legacy API key (v1, https://old.ppy.sh/p/api/, or Enter to skip)");
-        let osu_daily_key = prompt_optional_string("osu! daily API key (https://osudaily.net/api.php, or Enter to skip)");
-
-        config.osu_api_key = osu_api_key.clone();
-        config.osu_daily_api_key = osu_daily_key.clone();
-    } else {
-        println!("Skipping credentials. You can set them anytime in the .env file.");
     }
 
     println!("\n--- Leaderboard Settings ---");
@@ -515,17 +518,13 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
                             break;
                         }
                     }
-                    KeyCode::Backspace => {
-                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
-                            password.pop();
-                            last_rendered_state.clear();
-                        }
+                    KeyCode::Backspace if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                        password.pop();
+                        last_rendered_state.clear();
                     }
-                    KeyCode::Char(c) => {
-                        if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat {
-                            password.push(c);
-                            last_rendered_state.clear();
-                        }
+                    KeyCode::Char(c) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
+                        password.push(c);
+                        last_rendered_state.clear();
                     }
                     _ => {}
                 }

@@ -7,9 +7,10 @@ A local osu! server written in Rust. It lets you run your own private server on 
 - Saves scores and replays locally.
 - Calculates PP in real time using rosu-pp.
 - Supports unranked maps, custom speed rates, and osu!trainer.
-- In-game beatmap search and direct downloads from mirrors.
+- In-game beatmap search and direct downloads powered by the Catboy (Mino) mirror (no osu! supporter or external accounts required).
 - Local leaderboards and profile statistics.
-- Easy account setup: just log in with any username and password to create a profile.
+- Easy account setup: just log in with any username and password to create a local profile.
+- Zero-configuration start: osu! credentials and API keys are 100% optional.
 
 ## Requirements
 

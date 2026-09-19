@@ -411,11 +411,11 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                     lb.scores.remove(pos);
                 }
             }
-        } else if rank_type == LeaderboardTypes::Friends {
-            if !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name)) {
-                lb.scores.push(personal_entry);
-                lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
-            }
+        } else if rank_type == LeaderboardTypes::Friends
+            && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
+        {
+            lb.scores.push(personal_entry);
+            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
         }
     }
 
@@ -454,62 +454,141 @@ async fn get_friends(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     Response::text(&resp_str)
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct CatboyBeatmap {
+    #[serde(rename = "DiffName")]
+    diff_name: Option<String>,
+    #[serde(rename = "Mode")]
+    mode: Option<i32>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CatboyBeatmapSet {
+    #[serde(rename = "SetID")]
+    set_id: i64,
+    #[serde(rename = "RankedStatus")]
+    ranked_status: i32,
+    #[serde(rename = "Artist")]
+    artist: Option<String>,
+    #[serde(rename = "Title")]
+    title: Option<String>,
+    #[serde(rename = "Creator")]
+    creator: Option<String>,
+    #[serde(rename = "LastUpdate")]
+    last_update: Option<String>,
+    #[serde(rename = "ChildrenBeatmaps")]
+    children_beatmaps: Option<Vec<CatboyBeatmap>>,
+}
+
+async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_status: i32) -> Option<Vec<u8>> {
+    let mut url = reqwest::Url::parse("https://catboy.best/api/search").ok()?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        if !["Newest", "Top Rated", "Most Played"].contains(&query) && !query.is_empty() {
+            pairs.append_pair("q", query);
+        }
+        if mode != -1 {
+            pairs.append_pair("mode", &mode.to_string());
+        }
+        if ranking_status == 3 {
+            pairs.append_pair("status", "3");
+        } else if ranking_status == 8 {
+            pairs.append_pair("status", "-2");
+        }
+        pairs.append_pair("amount", "100");
+    }
+
+    let resp = http.get(url).send().await.ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+
+    let sets: Vec<CatboyBeatmapSet> = resp.json().await.ok()?;
+    let mut direct_resp = DirectResponse::new();
+
+    for set in sets {
+        let diffs: Vec<String> = set
+            .children_beatmaps
+            .unwrap_or_default()
+            .into_iter()
+            .map(|b| {
+                let name = b.diff_name.unwrap_or_else(|| "Normal".to_string());
+                let m = b.mode.unwrap_or(0);
+                format!("{}@{}", name, m)
+            })
+            .collect();
+
+        direct_resp.entries.push(crate::types::direct_response::DirectEntry {
+            id: set.set_id,
+            artist: set.artist.unwrap_or_default(),
+            title: set.title.unwrap_or_default(),
+            creator: set.creator.unwrap_or_default(),
+            ranked: set.ranked_status,
+            last_updated: set.last_update.unwrap_or_default(),
+            diffs,
+        });
+    }
+
+    Some(direct_resp.as_binary())
+}
+
 async fn direct_search(state: Arc<RwLock<AppState>>, params: &std::collections::HashMap<String, String>) -> Response {
     let query = params.get("q").map(|q| utils::url_decode(q)).unwrap_or_default();
     let mode: i32 = params.get("m").and_then(|v| v.parse().ok()).unwrap_or(-1);
     let ranking_status: i32 = params.get("r").and_then(|v| v.parse().ok()).unwrap_or(0);
 
-    let s = state.read().await;
+    let (prefix, http, osu_username, osu_password) = {
+        let s = state.read().await;
+        (s.config.command_prefix.clone(), s.http.clone(), s.config.osu_username.clone(), s.config.osu_password.clone())
+    };
 
-    if query.starts_with(&s.config.command_prefix) {
+    if query.starts_with(&prefix) {
         let msg = "Commands have moved to in-game chat!\nType your command in #osu or PM BanchoBot/Tillerino (e.g. !help, /np, !r).";
         let resp = DirectResponse::from_str(msg, -2);
         return Response::new(resp.as_binary());
     }
 
-    if s.config.osu_username.is_none() || s.config.osu_password.is_none() {
-        return Response::new(b"0".to_vec());
+    // Catboy as main search mirror
+    if let Some(body) = search_catboy(&http, &query, mode, ranking_status).await {
+        utils::log_success(&format!("Catboy mirror: maps loaded for query: `{}`!", query));
+        return Response::new(body);
     }
 
-    let username = s.config.osu_username.as_deref().unwrap();
-    let password = s.config.osu_password.as_deref().unwrap();
+    // Fallback to official osu! search if credentials are provided
+    if let (Some(username), Some(password)) = (osu_username, osu_password) {
+        if let Ok(mut url) = reqwest::Url::parse("https://osu.ppy.sh/web/osu-search.php") {
+            {
+                let mut pairs = url.query_pairs_mut();
+                pairs.append_pair("u", &username);
+                pairs.append_pair("h", &password);
+                if !["Newest", "Top Rated", "Most Played"].contains(&query.as_str()) && !query.is_empty() {
+                    pairs.append_pair("q", &query);
+                }
+                if mode != -1 {
+                    pairs.append_pair("m", &mode.to_string());
+                }
+                pairs.append_pair("r", &ranking_status.to_string());
+            }
 
-    let mut url = reqwest::Url::parse("https://osu.ppy.sh/web/osu-search.php").unwrap();
-    {
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("u", username);
-        pairs.append_pair("h", password);
-        if !["Newest", "Top Rated", "Most Played"].contains(&query.as_str()) {
-            pairs.append_pair("q", &query);
-        }
-        if mode != -1 {
-            pairs.append_pair("m", &mode.to_string());
-        }
-        pairs.append_pair("r", &ranking_status.to_string());
-    }
-
-    match s.http.get(url).send().await {
-        Ok(resp) => {
-            if let Ok(body) = resp.bytes().await {
-                utils::log_success(&format!("maps loaded for query: `{}` !", query));
-                Response::new(body.to_vec())
-            } else {
-                Response::new(b"0".to_vec())
+            if let Ok(resp) = http.get(url).send().await {
+                if let Ok(body) = resp.bytes().await {
+                    utils::log_success(&format!("Official osu!: maps loaded for query: `{}`!", query));
+                    return Response::new(body.to_vec());
+                }
             }
         }
-        Err(_) => {
-            utils::log_error("mirror currently down");
-            Response::new(b"0".to_vec())
-        }
     }
+
+    utils::log_error("Failed to load maps from Catboy mirror and official fallback");
+    Response::new(b"0".to_vec())
 }
 
 pub async fn handle_download(_state: Arc<RwLock<AppState>>, setid: i64) -> Response {
-    if setid == -1 {
+    if setid <= 0 {
         return Response::empty();
     }
 
-    Response::redirect(&format!("https://osu.gatari.pw/d/{}", setid))
+    Response::redirect(&format!("https://catboy.best/d/{}", setid))
 }
 
 #[cfg(test)]
@@ -969,5 +1048,18 @@ mod tests {
         assert_eq!(resp.status, hyper::StatusCode::OK);
         // Direct response starts with set count / cards
         assert!(!resp.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_handle_download_catboy() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let config = crate::types::config::Config::default();
+        let app_state = AppState::new(conn, config);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let resp = handle_download(shared_state, 12345).await;
+        assert_eq!(resp.status, hyper::StatusCode::MOVED_PERMANENTLY);
+        let location = resp.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("location")).map(|(_, v)| v.as_str()).unwrap();
+        assert_eq!(location, "https://catboy.best/d/12345");
     }
 }

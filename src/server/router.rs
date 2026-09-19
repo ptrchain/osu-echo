@@ -51,8 +51,9 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
     }
 
     if path.starts_with("/d/") {
-        let setid_str = path.strip_prefix("/d/").unwrap_or("0");
-        let setid: i64 = setid_str.parse().unwrap_or(0);
+        let setid_raw = path.strip_prefix("/d/").unwrap_or("0");
+        let digits: String = setid_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let setid: i64 = digits.parse().unwrap_or(0);
         return RouteMatch::Download(setid);
     }
 
