@@ -131,3 +131,4 @@ Special thanks to:
 ## License
 
 This project is licensed under the MIT License.
+unofficial / not affiliated with ppy
