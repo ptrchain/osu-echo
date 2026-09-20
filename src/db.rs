@@ -779,6 +779,12 @@ pub fn set_beatmap_status(conn: &Connection, beatmap_id: i64, approved: i32) -> 
 }
 
 pub fn set_beatmap_status_by_md5(conn: &Connection, md5: &str, approved: i32) -> SqlResult<usize> {
+    let status_str = match approved {
+        1 | 2 => "ranked",
+        4 => "loved",
+        _ => "unranked",
+    };
+    let _ = conn.execute("UPDATE scores SET bmap_status = ?1 WHERE md5 = ?2", params![status_str, md5]);
     conn.execute("UPDATE beatmaps SET approved = ?1 WHERE file_md5 = ?2", params![approved, md5])
 }
 

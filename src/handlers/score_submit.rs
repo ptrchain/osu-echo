@@ -297,16 +297,55 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let local = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None);
         if local.is_some() {
             local
-        } else if let Some(ref api_key) = s.config.osu_api_key {
+        } else {
             drop(db_conn);
-            let fetched = utils::fetch_beatmap_from_api(&s.http, api_key, &[("h", sub.score.md5.clone())]).await;
+            let mut fetched = None;
+            if let Some(ref api_key) = s.config.osu_api_key {
+                fetched = utils::fetch_beatmap_from_api(&s.http, api_key, &[("h", sub.score.md5.clone())]).await;
+            }
+            if fetched.is_none() {
+                if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
+                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(&songs_dir, None, None, Some(&sub.score.md5), None) {
+                        let db_conn = s.db.lock().await;
+                        let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                        fetched = Some(local_bmap);
+                    }
+                }
+            }
+            if fetched.is_none() {
+                let player_match = s.player.as_ref().and_then(|p| {
+                    if p.map_md5 == sub.score.md5 || (p.map_id > 0 && p.map_md5.is_empty()) {
+                        Some((p.map_id, p.info_text.clone()))
+                    } else {
+                        None
+                    }
+                });
+                if let Some((mid, _info)) = player_match {
+                    if mid > 0 {
+                        let db_conn = s.db.lock().await;
+                        if let Ok(Some(mut b)) = db::get_beatmap_by_id(&db_conn, mid as i64) {
+                            if b.file_md5.is_empty() || b.file_md5 != sub.score.md5 {
+                                b.file_md5 = sub.score.md5.clone();
+                            }
+                            fetched = Some(b);
+                        }
+                    }
+                }
+            }
+            if fetched.is_none() {
+                if let Some(ref np) = s.last_np_map {
+                    if np.file_md5 == sub.score.md5 || (np.beatmap_id > 0 && s.player.as_ref().map(|p| p.map_id) == Some(np.beatmap_id as i32)) {
+                        let mut b = np.clone();
+                        b.file_md5 = sub.score.md5.clone();
+                        fetched = Some(b);
+                    }
+                }
+            }
             if let Some(ref bmap) = fetched {
                 let db_conn = s.db.lock().await;
                 let _ = db::insert_beatmap(&db_conn, bmap);
             }
             fetched
-        } else {
-            None
         }
     };
 
@@ -822,5 +861,75 @@ mod tests {
         let s = shared_state.read().await;
         let p = s.player.as_ref().unwrap();
         assert!(p.queue.is_empty(), "Failed plays must NOT send notification popups to the player");
+    }
+
+    #[tokio::test]
+    async fn test_score_submit_resolves_fallback_from_player_state() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "MyAngelKyrie").unwrap();
+
+        let osu_content = "osu file format v14\n\n[General]\nAudioFilename: a.mp3\nMode: 0\n\n[Metadata]\nTitle:Kyrie Map\nArtist:Kyrie\nCreator:Mapper\nVersion:Insane\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,500,4,2,0,50,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n";
+
+        let mut bmap = Beatmap::blank();
+        bmap.beatmap_id = 5315861;
+        bmap.approved = 1; // Ranked
+        bmap.file_content = Some(osu_content.to_string());
+        // In DB, the map might have been inserted with an empty or draft MD5
+        bmap.file_md5 = "old_draft_md5".to_string();
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("MyAngelKyrie".to_string());
+        player.map_id = 5315861;
+        player.map_md5 = "e10adc3949ba59abbe56e057f20f883e".to_string();
+        app_state.player = Some(player);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let sub_score = Score {
+            scoreid: None,
+            md5: "e10adc3949ba59abbe56e057f20f883e".to_string(),
+            name: "MyAngelKyrie".to_string(),
+            score: 100000,
+            max_combo: 1,
+            mods: 0,
+            n300: 1,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            time: 12345,
+            perfect: true,
+            pp: None,
+            acc: Some(100.0),
+            mode: 0,
+            mods_str: None,
+            replay_md5: None,
+            replay_frames: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let sub = DecodedSubmission {
+            score: sub_score,
+            submission_checksum: String::new(),
+            passed: true,
+            date: String::new(),
+            osu_version: String::new(),
+            replay_frames: None,
+            identity: None,
+        };
+
+        let result = process_native_submission(shared_state.clone(), sub).await;
+        assert!(result.is_ok(), "Score submission must succeed with player state fallback: {:?}", result.err());
+
+        // Verify beatmap is now indexed by the score's MD5 in the DB
+        let s = shared_state.read().await;
+        let db_conn = s.db.lock().await;
+        let found = db::get_beatmap_by_md5(&db_conn, "e10adc3949ba59abbe56e057f20f883e").unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().beatmap_id, 5315861);
     }
 }

@@ -2,6 +2,7 @@ use crate::db;
 use crate::packets;
 use crate::server::response::Response;
 use crate::state::AppState;
+use crate::types::beatmap::Beatmap;
 use crate::types::direct_response::DirectResponse;
 use crate::types::leaderboard::*;
 use crate::types::mods::Mods;
@@ -258,6 +259,8 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             let s = state.read().await;
             (s.config.osu_api_key.clone(), s.http.clone(), s.db.clone(), s.config.clone())
         };
+        let file_hint = params.get("f").map(|s| s.as_str());
+
         if let Some(ref key) = api_key {
             if let Some(fetched) = utils::fetch_beatmap_from_api(&http, key, &[("h", md5.clone())]).await {
                 let db_conn = db.lock().await;
@@ -265,10 +268,20 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 bmap = Some(fetched);
             }
         }
+        if bmap.is_none() && setid > 0 {
+            if let Some(ref key) = api_key {
+                if let Some(fetched) = utils::fetch_beatmap_from_api_with_hint(&http, key, &[("s", setid.to_string())], file_hint).await {
+                    let mut b = fetched;
+                    b.file_md5 = md5.clone();
+                    let db_conn = db.lock().await;
+                    let _ = db::insert_beatmap(&db_conn, &b);
+                    bmap = Some(b);
+                }
+            }
+        }
         if bmap.is_none() {
             if let Some(songs_dir) = utils::resolve_songs_folder(&config) {
                 let sid = if setid > 0 { Some(setid) } else { None };
-                let file_hint = params.get("f").map(|s| s.as_str());
                 if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(&songs_dir, sid, None, Some(&md5), file_hint) {
                     let db_conn = db.lock().await;
                     let _ = db::insert_beatmap(&db_conn, &local_bmap);
@@ -276,6 +289,22 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                     bmap = Some(local_bmap);
                 }
             }
+        }
+        if bmap.is_none() {
+            let mut fallback = Beatmap::blank();
+            fallback.file_md5 = md5.clone();
+            fallback.beatmapset_id = if setid > 0 { setid } else { 0 };
+            fallback.approved = 0;
+            if let Some(hint) = file_hint {
+                let (artist, title, creator, version) = utils::parse_osu_filename(hint);
+                fallback.artist = artist;
+                fallback.title = title;
+                fallback.creator = creator;
+                fallback.version = version;
+            }
+            let db_conn = db.lock().await;
+            let _ = db::insert_beatmap(&db_conn, &fallback);
+            bmap = Some(fallback);
         }
     }
 
@@ -290,7 +319,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 s_write.last_np_map = None;
             }
         }
-        utils::log_success(&format!("handled map of setid: {}", setid));
+        utils::log_error(&format!("unresolved map of setid: {}", setid));
         return Response::new(b"0|false".to_vec());
     };
 

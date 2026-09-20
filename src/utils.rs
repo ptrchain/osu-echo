@@ -389,6 +389,39 @@ pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, f
     Some(bmap)
 }
 
+pub fn parse_osu_filename(hint: &str) -> (String, String, String, String) {
+    let base = hint.strip_suffix(".osu").unwrap_or(hint).trim();
+    let (without_version, version) = if let (Some(open), Some(close)) = (base.rfind('['), base.rfind(']')) {
+        if close > open {
+            (&base[..open], base[open + 1..close].trim().to_string())
+        } else {
+            (base, "Normal".to_string())
+        }
+    } else {
+        (base, "Normal".to_string())
+    };
+    let without_version = without_version.trim();
+
+    let (without_creator, creator) = if let (Some(open), Some(close)) = (without_version.rfind('('), without_version.rfind(')')) {
+        if close > open {
+            (&without_version[..open], without_version[open + 1..close].trim().to_string())
+        } else {
+            (without_version, String::new())
+        }
+    } else {
+        (without_version, String::new())
+    };
+    let without_creator = without_creator.trim();
+
+    let (artist, title) = if let Some((a, t)) = without_creator.split_once(" - ") {
+        (a.trim().to_string(), t.trim().to_string())
+    } else {
+        ("Unknown".to_string(), without_creator.to_string())
+    };
+
+    (artist, title, creator, version)
+}
+
 pub fn find_and_parse_local_osu_file(
     songs_dir: &std::path::Path,
     set_id: Option<i64>,
@@ -916,5 +949,20 @@ mod tests {
 
         assert_eq!(url_encode("mrekk"), "mrekk");
         assert_eq!(url_encode("hello world"), "hello+world");
+    }
+
+    #[test]
+    fn test_parse_osu_filename() {
+        let (artist, title, creator, version) = parse_osu_filename("xi - FREEDOM DiVE (Nakagawa-Kanon) [FOUR DIMENSIONS].osu");
+        assert_eq!(artist, "xi");
+        assert_eq!(title, "FREEDOM DiVE");
+        assert_eq!(creator, "Nakagawa-Kanon");
+        assert_eq!(version, "FOUR DIMENSIONS");
+
+        let (artist2, title2, creator2, version2) = parse_osu_filename("Artist - Title [Diff]");
+        assert_eq!(artist2, "Artist");
+        assert_eq!(title2, "Title");
+        assert_eq!(creator2, "");
+        assert_eq!(version2, "Diff");
     }
 }

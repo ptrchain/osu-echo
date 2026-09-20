@@ -5,6 +5,7 @@ use crate::db;
 use crate::handlers::tillerino;
 use crate::packets;
 use crate::state::AppState;
+use crate::types::beatmap::Beatmap;
 use crate::types::mods::Mods;
 use crate::types::player::Player;
 use crate::utils;
@@ -397,11 +398,31 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
         return;
     };
 
+    let (player_md5, player_info) = {
+        let s = state.read().await;
+        (
+            s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+            s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+        )
+    };
+
     let (updated, bmap) = {
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let mut u = db::set_beatmap_status(&db_conn, map_id, status).unwrap_or(0);
         let mut b = if u > 0 { db::get_beatmap_by_id(&db_conn, map_id).ok().flatten() } else { None };
+        if u == 0 && !player_md5.is_empty() {
+            if let Ok(Some(mut existing)) = db::get_beatmap_by_md5(&db_conn, &player_md5) {
+                existing.approved = status;
+                if existing.beatmap_id == 0 && map_id > 0 {
+                    existing.beatmap_id = map_id;
+                }
+                let _ = db::insert_beatmap(&db_conn, &existing);
+                let _ = db::set_beatmap_status_by_md5(&db_conn, &player_md5, status);
+                u = 1;
+                b = Some(existing);
+            }
+        }
         if u == 0 {
             drop(db_conn);
             let api_key = s.config.osu_api_key.clone();
@@ -410,6 +431,9 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
             let mut fetched_bmap = None;
             if let Some(ref key) = api_key {
                 fetched_bmap = utils::fetch_beatmap_from_api(&http, key, &[("b", map_id.to_string())]).await;
+                if fetched_bmap.is_none() && !player_md5.is_empty() {
+                    fetched_bmap = utils::fetch_beatmap_from_api(&http, key, &[("h", player_md5.clone())]).await;
+                }
             }
             if fetched_bmap.is_none() {
                 if let Some(ref sdir) = songs_dir {
@@ -418,14 +442,40 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
                         fetched_bmap = Some(local_bmap);
                         let db_conn = s.db.lock().await;
                         let _ = db::update_beatmap_file_content(&db_conn, &md5, &content);
+                    } else if !player_md5.is_empty() {
+                        if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, None, Some(&player_md5), None) {
+                            let md5 = local_bmap.file_md5.clone();
+                            fetched_bmap = Some(local_bmap);
+                            let db_conn = s.db.lock().await;
+                            let _ = db::update_beatmap_file_content(&db_conn, &md5, &content);
+                        }
                     }
                 }
+            }
+            if fetched_bmap.is_none() && (!player_md5.is_empty() || !player_info.is_empty()) {
+                let (artist, title, creator, version) = if !player_info.is_empty() {
+                    utils::parse_osu_filename(&player_info)
+                } else {
+                    (String::new(), format!("Beatmap {}", map_id), String::new(), String::new())
+                };
+                let mut fb = Beatmap::blank();
+                fb.beatmap_id = map_id;
+                fb.file_md5 = player_md5.clone();
+                fb.artist = if artist.is_empty() { "Unknown Artist".to_string() } else { artist };
+                fb.title = if title.is_empty() { format!("Beatmap {}", map_id) } else { title };
+                fb.creator = creator;
+                fb.version = if version.is_empty() { "Normal".to_string() } else { version };
+                fb.approved = status;
+                fetched_bmap = Some(fb);
             }
             if let Some(mut fb) = fetched_bmap {
                 fb.approved = status;
                 let db_conn = s.db.lock().await;
                 let _ = db::insert_beatmap(&db_conn, &fb);
                 let _ = db::set_beatmap_status(&db_conn, map_id, status);
+                if !fb.file_md5.is_empty() {
+                    let _ = db::set_beatmap_status_by_md5(&db_conn, &fb.file_md5, status);
+                }
                 u = 1;
                 b = Some(fb);
             }
@@ -438,7 +488,7 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
             let mut s = state.write().await;
             s.last_np_map = Some(b.clone());
             if let Some(ref mut p) = s.player {
-                if p.map_md5.is_empty() || p.map_md5 == b.file_md5 {
+                if p.map_md5.is_empty() || p.map_md5 == b.file_md5 || p.map_id == b.beatmap_id as i32 {
                     p.map_id = b.beatmap_id as i32;
                     p.map_md5 = b.file_md5.clone();
                 }
@@ -462,9 +512,19 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
     };
 
     let beatmap = {
+        let (player_md5, player_info) = {
+            let s = state.read().await;
+            (
+                s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+                s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+            )
+        };
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let mut b = db::get_beatmap_by_id(&db_conn, map_id).ok().flatten();
+        if b.is_none() && !player_md5.is_empty() {
+            b = db::get_beatmap_by_md5(&db_conn, &player_md5).ok().flatten();
+        }
         if b.is_none() {
             drop(db_conn);
             let api_key = s.config.osu_api_key.clone();
@@ -472,6 +532,9 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
             let songs_dir = utils::resolve_songs_folder(&s.config);
             if let Some(ref key) = api_key {
                 b = utils::fetch_beatmap_from_api(&http, key, &[("b", map_id.to_string())]).await;
+                if b.is_none() && !player_md5.is_empty() {
+                    b = utils::fetch_beatmap_from_api(&http, key, &[("h", player_md5.clone())]).await;
+                }
             }
             if b.is_none() {
                 if let Some(ref sdir) = songs_dir {
@@ -480,10 +543,34 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
                         let _ = db::insert_beatmap(&db_conn, &local_bmap);
                         let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
                         b = Some(local_bmap);
+                    } else if !player_md5.is_empty() {
+                        if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, None, Some(&player_md5), None) {
+                            let db_conn = s.db.lock().await;
+                            let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                            let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                            b = Some(local_bmap);
+                        }
                     }
                 }
             }
-            if let Some(ref fb) = b {
+            if b.is_none() && (!player_md5.is_empty() || !player_info.is_empty()) {
+                let (artist, title, creator, version) = if !player_info.is_empty() {
+                    utils::parse_osu_filename(&player_info)
+                } else {
+                    (String::new(), format!("Beatmap {}", map_id), String::new(), String::new())
+                };
+                let mut fb = Beatmap::blank();
+                fb.beatmap_id = map_id;
+                fb.file_md5 = player_md5.clone();
+                fb.artist = if artist.is_empty() { "Unknown Artist".to_string() } else { artist };
+                fb.title = if title.is_empty() { format!("Beatmap {}", map_id) } else { title };
+                fb.creator = creator;
+                fb.version = if version.is_empty() { "Normal".to_string() } else { version };
+                fb.approved = 0;
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, &fb);
+                b = Some(fb);
+            } else if let Some(ref fb) = b {
                 let db_conn = s.db.lock().await;
                 let _ = db::insert_beatmap(&db_conn, fb);
             }
@@ -1275,5 +1362,41 @@ mod tests {
         // When explicit ID is passed in args, it uses that
         let resolved_explicit = resolve_target_map_id(&state, &["9999"]).await;
         assert_eq!(resolved_explicit, Some(9999));
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_status_ranks_unindexed_beatmap() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("MyAngelKyrie".to_string());
+        player.map_id = 5315861;
+        player.map_md5 = "e10adc3949ba59abbe56e057f20f883e".to_string();
+        player.info_text = "Kyrie - Test Beatmap (Mapper) [Insane]".to_string();
+        app_state.player = Some(player);
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Attempt to rank the beatmap ID 5315861 (which is NOT in DB and NOT on API)
+        handle_set_status(&state, "MyAngelKyrie", &["5315861"], 1, "Ranked").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let ranked = db::get_beatmap_by_id(&db_conn, 5315861).unwrap();
+        assert!(ranked.is_some(), "Beatmap must be created and saved in local database");
+        let b = ranked.unwrap();
+        assert_eq!(b.approved, 1);
+        assert_eq!(b.artist, "Kyrie");
+        assert_eq!(b.title, "Test Beatmap");
+        assert_eq!(b.creator, "Mapper");
+        assert_eq!(b.version, "Insane");
+        assert_eq!(b.file_md5, "e10adc3949ba59abbe56e057f20f883e");
+
+        // Also ensure looking up by MD5 finds the ranked beatmap
+        let by_md5 = db::get_beatmap_by_md5(&db_conn, "e10adc3949ba59abbe56e057f20f883e").unwrap();
+        assert!(by_md5.is_some());
+        assert_eq!(by_md5.unwrap().approved, 1);
     }
 }
