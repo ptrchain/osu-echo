@@ -557,4 +557,52 @@ mod tests {
             assert_eq!(sender, "BanchoBot", "!r in PM to BanchoBot should be handled by BanchoBot");
         }
     }
+
+    #[tokio::test]
+    async fn test_chat_message_recalculate() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PlayerRecalc").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("PlayerRecalc".to_string());
+        app_state.player = Some(player);
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Test in channel (#osu)
+        handle_chat_message(shared_state.clone(), "PlayerRecalc", "!recalculate", "#osu").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            assert!(pkts.iter().any(|p| p.id == packets::PacketId::ChoUserStats as u16));
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Message packet not found");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            let sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert_eq!(sender, "BanchoBot");
+            assert!(msg.contains("Profile recalculation complete!"));
+        }
+
+        // Test in PM to BanchoBot
+        handle_chat_message(shared_state.clone(), "PlayerRecalc", "!recalc", "BanchoBot").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            assert!(pkts.iter().any(|p| p.id == packets::PacketId::ChoUserStats as u16));
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Message packet not found");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            let sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert_eq!(sender, "BanchoBot");
+            assert!(msg.contains("Profile recalculation complete!"));
+        }
+    }
 }

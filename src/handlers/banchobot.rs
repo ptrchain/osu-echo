@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -38,7 +39,7 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "love" => handle_set_status(state, reply_target, args, 4, "Loved").await,
         "unrank" => handle_set_status(state, reply_target, args, 0, "Unranked").await,
         "friend" => handle_friend(state, player_name, reply_target, args).await,
-        "recalc" => handle_recalc(state, player_name, reply_target).await,
+        "recalc" | "recalculate" => handle_recalc(state, player_name, reply_target).await,
         "wipe" => handle_wipe(state, player_name, reply_target).await,
         "avatar" => handle_avatar(state, player_name, reply_target, args).await,
         "recentfeed" | "recentchannel" => handle_recent_channel_toggle(state, reply_target, args).await,
@@ -73,7 +74,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}recentfeed [on/off] : Toggle #recent score channel feed\n\
         {p}country / {p}flag <code> : Set country flag (e.g. {p}country DE, {p}country US, {p}country AU)\n\
         {p}roll [max] : Roll a random number (default 100)\n\
-        {p}recalc : Recalculate all profile stats\n\
+        {p}recalc / {p}recalculate : Recalculate all profile stats & scores\n\
         {p}wipe : Wipe profile stats\n\
         {p}avatar <url or path> : Change avatar\n\
         {p}config : Server settings summary\n\n\
@@ -950,36 +951,152 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
     }
 }
 
-pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
-    let (scores, playcount, filter_mod) = {
+pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &str) -> (usize, i32, f64) {
+    let (scores, http, config, db) = {
         let s = state.read().await;
-        let db_conn = s.db.lock().await;
-        let scores = db::get_ranked_scores(&db_conn, player_name).unwrap_or_default();
-        let playcount = db::get_playcount(&db_conn, player_name).unwrap_or(0);
-        let filter_mod = s.mode;
-        (scores, playcount, filter_mod)
+        let conn = s.db.lock().await;
+        let sc = db::get_all_scores(&conn, player_name).unwrap_or_default();
+        drop(conn);
+        (sc, s.http.clone(), s.config.clone(), s.db.clone())
     };
 
-    let (pp, acc) = {
+    let mut beatmap_cache: HashMap<String, Option<rosu_pp::Beatmap>> = HashMap::new();
+    let mut recalculated_count = 0;
+
+    for score in &scores {
+        let Some(score_id) = score.scoreid else {
+            continue;
+        };
+
+        if !beatmap_cache.contains_key(&score.md5) {
+            let mut bmap = {
+                let conn = db.lock().await;
+                db::get_beatmap_by_md5(&conn, &score.md5).unwrap_or(None)
+            };
+
+            let mut content = None;
+            if let Some(ref b) = bmap {
+                content = utils::get_or_fetch_beatmap_content(&http, &db, &config, b).await;
+            }
+
+            if content.is_none() {
+                if let Some(songs_dir) = utils::resolve_songs_folder(&config) {
+                    if let Some((local_bmap, local_content)) = utils::find_and_parse_local_osu_file(&songs_dir, None, None, Some(&score.md5), None) {
+                        let conn = db.lock().await;
+                        let _ = db::insert_beatmap(&conn, &local_bmap);
+                        let _ = db::update_beatmap_file_content(&conn, &local_bmap.file_md5, &local_content);
+                        drop(conn);
+                        bmap = Some(local_bmap);
+                        content = Some(local_content);
+                    }
+                }
+            }
+
+            if content.is_none() {
+                if let Some(ref api_key) = config.osu_api_key {
+                    if let Some(api_bmap) = utils::fetch_beatmap_from_api(&http, api_key, &[("h", score.md5.clone())]).await {
+                        let conn = db.lock().await;
+                        let _ = db::insert_beatmap(&conn, &api_bmap);
+                        drop(conn);
+                        content = utils::get_or_fetch_beatmap_content(&http, &db, &config, &api_bmap).await;
+                    }
+                }
+            }
+
+            let parsed = content.and_then(|c| rosu_pp::Beatmap::from_bytes(c.as_bytes()).ok());
+            beatmap_cache.insert(score.md5.clone(), parsed);
+        }
+
+        if let Some(Some(ref parsed_map)) = beatmap_cache.get(&score.md5) {
+            let game_mode = match score.mode {
+                0 => rosu_pp::model::mode::GameMode::Osu,
+                1 => rosu_pp::model::mode::GameMode::Taiko,
+                2 => rosu_pp::model::mode::GameMode::Catch,
+                3 => rosu_pp::model::mode::GameMode::Mania,
+                _ => rosu_pp::model::mode::GameMode::Osu,
+            };
+
+            let result = rosu_pp::Performance::new(parsed_map)
+                .mode_or_ignore(game_mode)
+                .mods(score.mods)
+                .n300(score.n300.max(0) as u32)
+                .n100(score.n100.max(0) as u32)
+                .n50(score.n50.max(0) as u32)
+                .n_katu(score.nkatu.max(0) as u32)
+                .n_geki(score.ngeki.max(0) as u32)
+                .misses(score.nmiss.max(0) as u32)
+                .combo(score.max_combo.max(0) as u32)
+                .calculate();
+
+            let new_pp = result.pp();
+            let new_acc = utils::calculate_accuracy(
+                score.mode as u8,
+                score.n300,
+                score.n100,
+                score.n50,
+                score.ngeki,
+                score.nkatu,
+                score.nmiss,
+            );
+
+            let conn = db.lock().await;
+            let _ = db::update_score_pp_and_acc(&conn, score_id, new_pp, new_acc);
+            recalculated_count += 1;
+        }
+    }
+
+    let (ranked_scores, playcount) = {
+        let conn = db.lock().await;
+        let sc = db::get_ranked_scores(&conn, player_name).unwrap_or_default();
+        let pc = db::get_playcount(&conn, player_name).unwrap_or(0);
+        (sc, pc)
+    };
+
+    let (new_pp, new_acc, p_mode) = {
         let mut s = state.write().await;
+        let filter_mod = s.mode;
         if let Some(ref mut p) = s.player {
-            p.calculate_stats(&scores, filter_mod, playcount);
-            let pp = p.pp;
-            let acc = p.acc;
-            p.enqueue_stats();
-            (pp, acc)
+            p.calculate_stats(&ranked_scores, filter_mod, playcount);
+            (p.pp, p.acc, p.mode)
         } else {
-            (0, 0.0)
+            let mut dummy = Player::new(player_name.to_string());
+            dummy.calculate_stats(&ranked_scores, filter_mod, playcount);
+            (dummy.pp, dummy.acc, dummy.mode)
         }
     };
 
+    let daily_key = config.osu_daily_api_key.clone();
+    let rank = if let Some(ref api_key) = daily_key {
+        utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await
+    } else {
+        None
+    };
+
     {
-        let s = state.read().await;
-        let db_conn = s.db.lock().await;
-        let _ = db::update_profile_stats(&db_conn, player_name, pp as f64, acc);
+        let mut s = state.write().await;
+        if let Some(ref mut p) = s.player {
+            if let Some(r) = rank {
+                p.rank = r;
+            }
+            p.enqueue_stats();
+        }
     }
 
-    reply(state, target, "Profile recalculation complete! Stats have been updated.").await;
+    {
+        let conn = db.lock().await;
+        let _ = db::update_profile_stats(&conn, player_name, new_pp as f64, new_acc);
+    }
+
+    (recalculated_count, new_pp, new_acc)
+}
+
+pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
+    let (count, new_pp, new_acc) = recalculate_profile(state, player_name).await;
+    let msg = format!(
+        "Profile recalculation complete! Processed {} score(s). PP: {}pp | Acc: {:.2}%",
+        count, new_pp, new_acc
+    );
+    reply(state, target, &msg).await;
 }
 
 pub async fn handle_wipe(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
@@ -1400,5 +1517,97 @@ mod tests {
         let by_md5 = db::get_beatmap_by_md5(&db_conn, "e10adc3949ba59abbe56e057f20f883e").unwrap();
         assert!(by_md5.is_some());
         assert_eq!(by_md5.unwrap().approved, 1);
+    }
+
+    #[tokio::test]
+    async fn test_recalculate_command_and_profile_pp() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Alice").unwrap();
+
+        let osu_content = "osu file format v14\n\n[General]\nAudioFilename: a.mp3\nMode: 0\n\n[Metadata]\nTitle:T\nArtist:A\nCreator:C\nVersion:V\n\n[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n\n[TimingPoints]\n0,500,4,2,0,50,1,0\n\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n256,192,2000,1,0,0:0:0:0:\n256,192,3000,1,0,0:0:0:0:\n256,192,4000,1,0,0:0:0:0:\n";
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "recalc_map_md5".to_string();
+        bmap.beatmap_id = 9991;
+        bmap.beatmapset_id = 999;
+        bmap.approved = 1;
+        bmap.file_content = Some(osu_content.to_string());
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let mut score = crate::types::score::Score {
+            mode: 0,
+            md5: "recalc_map_md5".to_string(),
+            name: "Alice".to_string(),
+            n300: 4,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 4,
+            perfect: true,
+            mods: 0,
+            time: 1234567,
+            acc: Some(100.0),
+            pp: Some(9999.0), // Old inflated PP from previous bug
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let score_id = db::insert_score(&conn, &score, "ranked").unwrap();
+        score.scoreid = Some(score_id);
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("Alice".to_string());
+        player.pp = 9999;
+        app_state.player = Some(player);
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Test calling !recalculate command
+        handle_command(&state, "Alice", "Alice", "recalculate", &[]).await;
+
+        // Check that score PP was recalculated (not 9999.0 anymore)
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let score_after = db::get_score_by_id(&db_conn, score_id).unwrap().unwrap();
+        assert!(score_after.pp.is_some());
+        let recalculated_pp = score_after.pp.unwrap();
+        assert!(recalculated_pp < 500.0, "Recalculated PP should be realistic, got {}", recalculated_pp);
+        assert!(recalculated_pp >= 0.0);
+
+        // Check that profile was updated
+        let player = s.player.as_ref().unwrap();
+        assert!(player.pp < 500);
+        assert_eq!(player.pp, recalculated_pp.round() as i32);
+        drop(db_conn);
+        drop(s);
+
+        // Check that BanchoBot sent confirmation packet
+        let mut s_write = state.write().await;
+        let queue = s_write.player.as_mut().unwrap().clear_queue();
+        drop(s_write);
+        let packets = packets::split_packets(&queue);
+        let has_recalc_msg = packets.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Profile recalculation complete! Processed 1 score(s).")
+            } else {
+                false
+            }
+        });
+        assert!(has_recalc_msg, "BanchoBot must send confirmation message with score count");
+
+        // Also test !recalc alias
+        handle_command(&state, "Alice", "Alice", "recalc", &[]).await;
     }
 }

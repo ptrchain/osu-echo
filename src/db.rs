@@ -197,6 +197,14 @@ pub fn update_profile_stats(conn: &Connection, name: &str, pp: f64, acc: f64) ->
     Ok(())
 }
 
+pub fn update_score_pp_and_acc(conn: &Connection, score_id: i64, pp: f64, acc: f64) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE scores SET pp = ?1, acc = ?2 WHERE id = ?3",
+        params![pp, acc, score_id],
+    )?;
+    Ok(())
+}
+
 pub fn profile_exists(conn: &Connection, name: &str) -> SqlResult<bool> {
     let mut stmt = conn.prepare("SELECT COUNT(*) FROM profiles WHERE name = ?1")?;
     let count: i32 = stmt.query_row(params![name], |row| row.get(0))?;
@@ -1023,5 +1031,50 @@ mod tests {
         assert_eq!(get_max_combo_for_player(&conn, "Alice", 1).unwrap(), 1200);
         // Other player is 0
         assert_eq!(get_max_combo_for_player(&conn, "Bob", 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_update_score_pp_and_acc() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+
+        let sc = Score {
+            mode: 0,
+            md5: "map_pp_test".to_string(),
+            name: "Alice".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 123456,
+            acc: Some(95.0),
+            pp: Some(999.0), // Old inflated PP
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        let id = insert_score(&conn, &sc, "ranked").unwrap();
+        let loaded_before = get_score_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(loaded_before.pp, Some(999.0));
+        assert_eq!(loaded_before.acc, Some(95.0));
+
+        // Update score with recalculated PP and acc
+        update_score_pp_and_acc(&conn, id, 150.25, 98.75).unwrap();
+
+        let loaded_after = get_score_by_id(&conn, id).unwrap().unwrap();
+        assert_eq!(loaded_after.pp, Some(150.25));
+        assert_eq!(loaded_after.acc, Some(98.75));
     }
 }

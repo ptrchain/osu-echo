@@ -12,7 +12,7 @@ pub fn register_commands(state: &mut AppState) {
         (vec!["tops", "t"], Some("shows your top plays!"), false, Arc::new(|state, args| Box::pin(cmd_tops(state, args)))),
         (vec!["r", "rs", "recent"], Some("shows your recent plays!"), false, Arc::new(|state, args| Box::pin(cmd_recent(state, args)))),
         (vec!["stats", "p", "osu", "profile", "s"], Some("shows your stats!"), false, Arc::new(|state, args| Box::pin(cmd_stats(state, args)))),
-        (vec!["recalc"], Some("recalculate all profiles!"), true, Arc::new(|state, _args| Box::pin(cmd_recalc(state)))),
+        (vec!["recalc", "recalculate"], Some("recalculate all profiles!"), true, Arc::new(|state, _args| Box::pin(cmd_recalc(state)))),
         (vec!["wipe"], Some("wipes all stats from your current profile!"), true, Arc::new(|state, _args| Box::pin(cmd_wipe(state)))),
         (vec!["avatar"], Some("change your avatar! Example: !avatar (path or URL)"), true, Arc::new(|state, args| Box::pin(cmd_avatar(state, args)))),
         (vec!["config"], Some("shows current config!"), false, Arc::new(|state, _args| Box::pin(cmd_config(state)))),

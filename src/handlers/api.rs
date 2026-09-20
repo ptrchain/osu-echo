@@ -264,9 +264,11 @@ async fn recalc(state: Arc<RwLock<AppState>>, params: &std::collections::HashMap
     drop(db_conn);
     drop(s);
 
-    let _state_clone = state.clone();
+    let state_clone = state.clone();
+    let name_clone = name.clone();
     tokio::spawn(async move {
         utils::log("Starting recalculation...");
+        crate::handlers::banchobot::recalculate_profile(&state_clone, &name_clone).await;
         utils::log_success("Recalculation complete!");
     });
 
