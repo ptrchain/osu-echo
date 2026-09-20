@@ -51,7 +51,7 @@ impl Beatmap {
         Self {
             beatmapset_id: 0,
             beatmap_id: 0,
-            approved: 3,
+            approved: 0,
             total_length: 0,
             hit_length: 0,
             version: String::new(),
@@ -160,4 +160,17 @@ fn parse_f64(json: &serde_json::Value, key: &str) -> Option<f64> {
         return Some(n);
     }
     v.as_str()?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_beatmap_blank_defaults() {
+        let b = Beatmap::blank();
+        assert_eq!(b.approved, 0, "Blank beatmaps must default to unranked (0)");
+        assert_eq!(b.beatmap_id, 0);
+        assert_eq!(b.beatmapset_id, 0);
+    }
 }

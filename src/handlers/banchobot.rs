@@ -313,13 +313,84 @@ pub async fn handle_leaderboard(state: &Arc<RwLock<AppState>>, _player_name: &st
     reply(state, target, &lines.join("\n")).await;
 }
 
-pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str], status: i32, status_name: &str) {
-    let map_id = if let Some(first) = args.first() {
-        first.parse::<i64>().ok()
-    } else {
+// Resolves the target beatmap ID for bot commands (e.g. !rank, !status).
+// Prioritizes the active player map MD5 over stale state to prevent ranking the wrong beatmap.
+// This logic fixes bug #B0001 (stale map selection / incorrect PP on multi-diff mapsets).
+// Thanks to kaan for reporting it!
+pub async fn resolve_target_map_id(state: &Arc<RwLock<AppState>>, args: &[&str]) -> Option<i64> {
+    if let Some(first) = args.first() {
+        if let Ok(id) = first.parse::<i64>() {
+            return Some(id);
+        }
+    }
+
+    let (player_md5, player_mid, last_np) = {
         let s = state.read().await;
-        s.last_np_map.as_ref().map(|b| b.beatmap_id).or_else(|| s.player.as_ref().map(|p| p.map_id as i64))
+        let md5 = s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default();
+        let mid = s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0);
+        let np = s.last_np_map.clone();
+        (md5, mid, np)
     };
+
+    if !player_md5.is_empty() {
+        if let Some(ref np) = last_np {
+            if np.file_md5.eq_ignore_ascii_case(&player_md5) && np.beatmap_id > 0 {
+                return Some(np.beatmap_id);
+            }
+        }
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &player_md5) {
+            if b.beatmap_id > 0 {
+                return Some(b.beatmap_id);
+            }
+        }
+
+        if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
+            if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(&songs_dir, None, None, Some(&player_md5), None) {
+                let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                if local_bmap.beatmap_id > 0 {
+                    return Some(local_bmap.beatmap_id);
+                }
+            }
+        }
+
+        let api_key = s.config.osu_api_key.clone();
+        let http = s.http.clone();
+        drop(db_conn);
+        drop(s);
+        if let Some(ref key) = api_key {
+            if let Some(fetched) = utils::fetch_beatmap_from_api(&http, key, &[("h", player_md5.clone())]).await {
+                let s = state.read().await;
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, &fetched);
+                if fetched.beatmap_id > 0 {
+                    return Some(fetched.beatmap_id);
+                }
+            }
+        }
+    }
+
+    if player_mid > 0 {
+        return Some(player_mid);
+    }
+
+    // Fallback to last_np_map only when player has no active map MD5
+    if player_md5.is_empty() {
+        if let Some(np) = last_np {
+            if np.beatmap_id > 0 {
+                return Some(np.beatmap_id);
+            }
+        }
+    }
+
+    None
+}
+
+pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str], status: i32, status_name: &str) {
+    let map_id = resolve_target_map_id(state, args).await;
 
     let Some(map_id) = map_id else {
         reply(state, target, &format!("Usage: !{} [beatmap_id], or select a map first.", status_name.to_lowercase())).await;
@@ -329,17 +400,47 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
     let (updated, bmap) = {
         let s = state.read().await;
         let db_conn = s.db.lock().await;
-        let u = db::set_beatmap_status(&db_conn, map_id, status).unwrap_or(0);
-        let b = if u > 0 { db::get_beatmap_by_id(&db_conn, map_id).ok().flatten() } else { None };
+        let mut u = db::set_beatmap_status(&db_conn, map_id, status).unwrap_or(0);
+        let mut b = if u > 0 { db::get_beatmap_by_id(&db_conn, map_id).ok().flatten() } else { None };
+        if u == 0 {
+            drop(db_conn);
+            let api_key = s.config.osu_api_key.clone();
+            let http = s.http.clone();
+            let songs_dir = utils::resolve_songs_folder(&s.config);
+            let mut fetched_bmap = None;
+            if let Some(ref key) = api_key {
+                fetched_bmap = utils::fetch_beatmap_from_api(&http, key, &[("b", map_id.to_string())]).await;
+            }
+            if fetched_bmap.is_none() {
+                if let Some(ref sdir) = songs_dir {
+                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, Some(map_id), None, None) {
+                        let md5 = local_bmap.file_md5.clone();
+                        fetched_bmap = Some(local_bmap);
+                        let db_conn = s.db.lock().await;
+                        let _ = db::update_beatmap_file_content(&db_conn, &md5, &content);
+                    }
+                }
+            }
+            if let Some(mut fb) = fetched_bmap {
+                fb.approved = status;
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, &fb);
+                let _ = db::set_beatmap_status(&db_conn, map_id, status);
+                u = 1;
+                b = Some(fb);
+            }
+        }
         (u, b)
     };
 
     if updated > 0 {
         if let Some(b) = bmap {
             let mut s = state.write().await;
-            if let Some(ref mut np) = s.last_np_map {
-                if np.beatmap_id == map_id {
-                    np.approved = status;
+            s.last_np_map = Some(b.clone());
+            if let Some(ref mut p) = s.player {
+                if p.map_md5.is_empty() || p.map_md5 == b.file_md5 {
+                    p.map_id = b.beatmap_id as i32;
+                    p.map_md5 = b.file_md5.clone();
                 }
             }
             drop(s);
@@ -353,12 +454,7 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
 }
 
 pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str]) {
-    let map_id = if let Some(first) = args.first() {
-        first.parse::<i64>().ok()
-    } else {
-        let s = state.read().await;
-        s.last_np_map.as_ref().map(|b| b.beatmap_id).or_else(|| s.player.as_ref().map(|p| p.map_id as i64))
-    };
+    let map_id = resolve_target_map_id(state, args).await;
 
     let Some(map_id) = map_id else {
         reply(state, target, "Usage: !status [beatmap_id], or select a map first.").await;
@@ -368,7 +464,31 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
     let beatmap = {
         let s = state.read().await;
         let db_conn = s.db.lock().await;
-        db::get_beatmap_by_id(&db_conn, map_id).ok().flatten()
+        let mut b = db::get_beatmap_by_id(&db_conn, map_id).ok().flatten();
+        if b.is_none() {
+            drop(db_conn);
+            let api_key = s.config.osu_api_key.clone();
+            let http = s.http.clone();
+            let songs_dir = utils::resolve_songs_folder(&s.config);
+            if let Some(ref key) = api_key {
+                b = utils::fetch_beatmap_from_api(&http, key, &[("b", map_id.to_string())]).await;
+            }
+            if b.is_none() {
+                if let Some(ref sdir) = songs_dir {
+                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, Some(map_id), None, None) {
+                        let db_conn = s.db.lock().await;
+                        let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                        let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                        b = Some(local_bmap);
+                    }
+                }
+            }
+            if let Some(ref fb) = b {
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, fb);
+            }
+        }
+        b
     };
 
     if let Some(b) = beatmap {
@@ -974,6 +1094,7 @@ pub async fn handle_country(state: &Arc<RwLock<AppState>>, _player_name: &str, t
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::beatmap::Beatmap;
     use rusqlite::Connection;
 
     #[tokio::test]
@@ -1114,5 +1235,45 @@ mod tests {
 
         let a_count: i32 = conn.query_row("SELECT COUNT(*) FROM avatars WHERE player_name = 'Friend 2'", [], |r| r.get(0)).unwrap();
         assert_eq!(a_count, 0, "Friend 2 avatar must be purged");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_target_map_id_prefers_active_md5_over_stale_np() {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        // Map A (stale np map)
+        let mut map_a = Beatmap::blank();
+        map_a.beatmap_id = 1111;
+        map_a.file_md5 = "md5_a".to_string();
+        map_a.title = "Map A".to_string();
+        map_a.version = "Diff A".to_string();
+        db::insert_beatmap(&conn, &map_a).unwrap();
+
+        // Map B (active player map)
+        let mut map_b = Beatmap::blank();
+        map_b.beatmap_id = 2222;
+        map_b.file_md5 = "md5_b".to_string();
+        map_b.title = "Map B".to_string();
+        map_b.version = "Diff B".to_string();
+        db::insert_beatmap(&conn, &map_b).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("Player1".to_string());
+        player.map_md5 = "md5_b".to_string(); // active map is Map B!
+        player.map_id = 0;
+        app_state.player = Some(player);
+        app_state.last_np_map = Some(map_a); // stale last_np_map is Map A!
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // When no argument is given, it must resolve Map B (2222), NOT stale Map A (1111)
+        let resolved = resolve_target_map_id(&state, &[]).await;
+        assert_eq!(resolved, Some(2222));
+
+        // When explicit ID is passed in args, it uses that
+        let resolved_explicit = resolve_target_map_id(&state, &["9999"]).await;
+        assert_eq!(resolved_explicit, Some(9999));
     }
 }

@@ -50,7 +50,7 @@ pub fn status_to_db_key(approved: i32) -> &'static str {
         2 => "approved",
         3 => "qualified",
         4 => "loved",
-        _ => "ranked",
+        _ => "unranked",
     }
 }
 
@@ -105,5 +105,32 @@ impl Leaderboard {
         }
 
         buffer
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_status_to_db_key_mappings() {
+        assert_eq!(status_to_db_key(1), "ranked");
+        assert_eq!(status_to_db_key(2), "approved");
+        assert_eq!(status_to_db_key(3), "qualified");
+        assert_eq!(status_to_db_key(4), "loved");
+        assert_eq!(status_to_db_key(0), "unranked");
+        assert_eq!(status_to_db_key(-1), "unranked");
+        assert_eq!(status_to_db_key(-2), "unranked");
+        assert_eq!(status_to_db_key(99), "unranked");
+    }
+
+    #[test]
+    fn test_api_to_server_status() {
+        assert_eq!(api_to_server_status(1), RANKED);
+        assert_eq!(api_to_server_status(2), APPROVED);
+        assert_eq!(api_to_server_status(3), QUALIFIED);
+        assert_eq!(api_to_server_status(4), LOVED);
+        assert_eq!(api_to_server_status(0), PENDING);
+        assert_eq!(api_to_server_status(-2), PENDING);
     }
 }

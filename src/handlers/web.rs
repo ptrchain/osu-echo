@@ -254,9 +254,9 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     };
 
     if bmap.is_none() && !md5.is_empty() {
-        let (api_key, http, db) = {
+        let (api_key, http, db, config) = {
             let s = state.read().await;
-            (s.config.osu_api_key.clone(), s.http.clone(), s.db.clone())
+            (s.config.osu_api_key.clone(), s.http.clone(), s.db.clone(), s.config.clone())
         };
         if let Some(ref key) = api_key {
             if let Some(fetched) = utils::fetch_beatmap_from_api(&http, key, &[("h", md5.clone())]).await {
@@ -265,9 +265,31 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 bmap = Some(fetched);
             }
         }
+        if bmap.is_none() {
+            if let Some(songs_dir) = utils::resolve_songs_folder(&config) {
+                let sid = if setid > 0 { Some(setid) } else { None };
+                let file_hint = params.get("f").map(|s| s.as_str());
+                if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(&songs_dir, sid, None, Some(&md5), file_hint) {
+                    let db_conn = db.lock().await;
+                    let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                    let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                    bmap = Some(local_bmap);
+                }
+            }
+        }
     }
 
     let Some(bmap) = bmap else {
+        if !md5.is_empty() {
+            let mut s_write = state.write().await;
+            if let Some(ref mut p) = s_write.player {
+                p.map_md5 = md5.clone();
+                p.map_id = 0;
+            }
+            if s_write.last_np_map.as_ref().map(|b| &b.file_md5) != Some(&md5) {
+                s_write.last_np_map = None;
+            }
+        }
         utils::log_success(&format!("handled map of setid: {}", setid));
         return Response::new(b"0|false".to_vec());
     };

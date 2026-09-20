@@ -469,6 +469,7 @@ fn scan_dir_for_osu_file(
     fallback_set_id: Option<i64>,
 ) -> Option<(crate::types::beatmap::Beatmap, String)> {
     let mut candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
+    let mut version_candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
     let mut title_candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
 
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -492,9 +493,23 @@ fn scan_dir_for_osu_file(
                         }
                         if let Some(hint) = title_hint {
                             let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            if (fname.to_lowercase().contains(&hint.to_lowercase())
-                                || hint.to_lowercase().contains(&bmap.version.to_lowercase())
-                                || hint.to_lowercase().contains(&bmap.title.to_lowercase()))
+                            let diff_bracket = format!("[{}]", bmap.version);
+                            let hint_lower = hint.to_lowercase();
+                            if !bmap.version.is_empty()
+                                && (fname.to_lowercase().contains(&diff_bracket.to_lowercase())
+                                    || hint_lower.contains(&diff_bracket.to_lowercase())
+                                    || hint_lower.contains(&bmap.version.to_lowercase())
+                                    || bmap.version.to_lowercase() == hint_lower)
+                            {
+                                if version_candidate.is_none() {
+                                    if bmap.beatmap_id == 0 {
+                                        bmap.beatmap_id = map_id.unwrap_or(0);
+                                    }
+                                    version_candidate = Some((bmap.clone(), content.clone()));
+                                }
+                            } else if (fname.to_lowercase().contains(&hint_lower)
+                                || hint_lower.contains(&bmap.title.to_lowercase())
+                                || bmap.title.to_lowercase().contains(&hint_lower))
                                 && title_candidate.is_none()
                             {
                                 if bmap.beatmap_id == 0 {
@@ -515,13 +530,18 @@ fn scan_dir_for_osu_file(
         }
     }
 
-    if fallback_set_id.is_some() {
-        title_candidate.or(candidate)
+    if map_md5.is_some() {
+        version_candidate.or(title_candidate)
+    } else if fallback_set_id.is_some() {
+        version_candidate.or(title_candidate).or(candidate)
     } else {
-        title_candidate
+        version_candidate.or(title_candidate)
     }
 }
 
+// Retrieves beatmap file content. Validates that local candidate matches the requested
+// difficulty (MD5, ID, or version) to prevent multi-diff mapsets from caching the wrong difficulty.
+// Fixes bug #B0001 (multi-diff title collision & incorrect PP). Thanks to kaan for reporting it!
 pub async fn get_or_fetch_beatmap_content(
     http: &reqwest::Client,
     db: &tokio::sync::Mutex<rusqlite::Connection>,
@@ -540,10 +560,17 @@ pub async fn get_or_fetch_beatmap_content(
         }
         let sid = if bmap.beatmapset_id > 0 { Some(bmap.beatmapset_id) } else { None };
         let mid = if bmap.beatmap_id > 0 { Some(bmap.beatmap_id) } else { None };
-        if let Some((_, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, Some(&bmap.file_md5), Some(&bmap.title)) {
-            let conn = db.lock().await;
-            let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
-            return Some(local_c);
+        let diff_hint = if !bmap.version.is_empty() { format!("[{}]", bmap.version) } else { bmap.title.clone() };
+        if let Some((local_bmap, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, Some(&bmap.file_md5), Some(&diff_hint)) {
+            let md5_match = !bmap.file_md5.is_empty() && local_bmap.file_md5.eq_ignore_ascii_case(&bmap.file_md5);
+            let id_match = bmap.beatmap_id > 0 && local_bmap.beatmap_id == bmap.beatmap_id;
+            let ver_match = !bmap.version.is_empty() && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
+
+            if md5_match || id_match || ver_match {
+                let conn = db.lock().await;
+                let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
+                return Some(local_c);
+            }
         }
     }
 
