@@ -173,12 +173,22 @@ pub async fn handle_tops(state: &Arc<RwLock<AppState>>, player_name: &str, targe
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let scs = db::get_ranked_scores(&db_conn, player_name).unwrap_or_default();
+        let mut scores = Vec::new();
         let mut bmaps = Vec::new();
-        for sc in scs.iter().take(5) {
+        let mut seen_md5 = std::collections::HashSet::new();
+        for sc in scs {
+            if seen_md5.insert(sc.md5.clone()) {
+                scores.push(sc);
+            }
+            if scores.len() >= 5 {
+                break;
+            }
+        }
+        for sc in scores.iter() {
             let b = db::get_beatmap_by_md5(&db_conn, &sc.md5).unwrap_or(None);
             bmaps.push(b);
         }
-        (scs, bmaps)
+        (scores, bmaps)
     };
 
     if scores.is_empty() {
