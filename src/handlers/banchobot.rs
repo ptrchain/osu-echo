@@ -1171,6 +1171,8 @@ pub async fn handle_country(state: &Arc<RwLock<AppState>>, _player_name: &str, t
             p.queue.extend_from_slice(&packets::user_presence(p));
             p.queue.extend_from_slice(&packets::user_stats(p));
         }
+        let db = s.db.lock().await;
+        let _ = db::save_profile_country(&db, _player_name, byte);
     }
 
     let _ = crate::types::config::write_dotenv_country(&trimmed);

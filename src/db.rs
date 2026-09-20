@@ -19,7 +19,8 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
             name TEXT PRIMARY KEY,
             pp REAL NOT NULL DEFAULT 0,
             acc REAL NOT NULL DEFAULT 0,
-            playcount INTEGER NOT NULL DEFAULT 0
+            playcount INTEGER NOT NULL DEFAULT 0,
+            country INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS scores (
@@ -136,6 +137,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN ranked_score INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN total_score INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN playcount INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE profiles ADD COLUMN country INTEGER NOT NULL DEFAULT 0", []);
 
     let _ = conn.execute("DELETE FROM friends WHERE friend_id <= 2 OR friend_id = 2070907", []);
     let _ = conn.execute("DELETE FROM profiles WHERE name = 'Friend 2'", []);
@@ -165,7 +167,18 @@ pub fn load_config(conn: &Connection) -> SqlResult<Option<Config>> {
 }
 
 pub fn ensure_profile(conn: &Connection, name: &str) -> SqlResult<()> {
-    conn.execute("INSERT OR IGNORE INTO profiles (name, pp, acc, playcount) VALUES (?1, 0, 0, 0)", params![name])?;
+    conn.execute("INSERT OR IGNORE INTO profiles (name, pp, acc, playcount, country) VALUES (?1, 0, 0, 0, 0)", params![name])?;
+    Ok(())
+}
+
+pub fn get_profile_country(conn: &Connection, name: &str) -> SqlResult<u8> {
+    let mut stmt = conn.prepare("SELECT country FROM profiles WHERE name = ?1")?;
+    let country: i32 = stmt.query_row(params![name], |row| row.get(0)).unwrap_or(0);
+    Ok(country as u8)
+}
+
+pub fn save_profile_country(conn: &Connection, name: &str, country: u8) -> SqlResult<()> {
+    conn.execute("UPDATE profiles SET country = ?1 WHERE name = ?2", params![country as i32, name])?;
     Ok(())
 }
 

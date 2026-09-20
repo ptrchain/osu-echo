@@ -135,7 +135,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     if let Some(ref u) = username_from_params {
         if !u.is_empty() {
             let mut s = state.write().await;
-            if s.pending_login_name.is_none() {
+            if s.player.is_none() && s.pending_login_name.is_none() {
                 s.pending_login_name = Some(u.clone());
             }
         }
@@ -1546,6 +1546,31 @@ mod tests {
         assert_eq!(resp.status, hyper::StatusCode::OK);
         let body_str = String::from_utf8(resp.body).unwrap();
         assert!(body_str.contains("CacheHitUser"), "Leaderboard must include cached score");
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_while_logged_in_does_not_pollute_pending_login_name() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "LoggedInUser").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("LoggedInUser".to_string()));
+        app_state.pending_login_name = None;
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "any_md5".to_string());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "1".to_string());
+        params.insert("us".to_string(), "LoggedInUser".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let _ = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        let s = shared_state.read().await;
+        assert!(s.pending_login_name.is_none(), "Leaderboard queries while a player is active must NEVER pollute pending_login_name");
     }
 }
 

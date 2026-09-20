@@ -188,7 +188,7 @@ fn write_string(s: &str) -> Vec<u8> {
     result
 }
 
-fn write_i32(i: i32) -> Vec<u8> {
+pub fn write_i32(i: i32) -> Vec<u8> {
     i.to_le_bytes().to_vec()
 }
 
@@ -225,7 +225,7 @@ fn write_list32(list: &[i32]) -> Vec<u8> {
 }
 
 // Bancho packet wire layout: [packet_id: u16 le][padding: 1 byte (0x00)][length: u32 le][payload: bytes]
-fn write_packet(packet_id: u16, data: &[u8]) -> Vec<u8> {
+pub fn write_packet(packet_id: u16, data: &[u8]) -> Vec<u8> {
     let mut p = Vec::with_capacity(7 + data.len());
     p.extend_from_slice(&packet_id.to_le_bytes());
     p.push(0);

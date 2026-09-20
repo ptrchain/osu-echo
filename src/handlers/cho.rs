@@ -376,6 +376,12 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             }
                         }
                     }
+                    x if x == packets::PacketId::OsuLogout as u16 => {
+                        let mut s = state.write().await;
+                        s.player = None;
+                        s.pending_login_name = None;
+                        utils::log(&format!("Player {} logged out.", player_name));
+                    }
                     _ => {}
                 }
             }
@@ -399,22 +405,22 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, String) {
     let mut body = Vec::new();
 
-    // Synchronize pending username from bancho_connect.php or directly from body_bytes
-    let mut name: Option<String> = {
-        let s = state.read().await;
-        s.pending_login_name.clone()
-    };
-
-    if name.is_none() {
-        if let Ok(body_str) = std::str::from_utf8(body_bytes) {
-            let mut lines = body_str.lines();
-            if let Some(first_line) = lines.next() {
-                let u = first_line.trim();
-                if !u.is_empty() {
-                    name = Some(u.to_string());
-                }
+    // Extract username primarily from body_bytes (authoritative login request)
+    let mut name: Option<String> = None;
+    if let Ok(body_str) = std::str::from_utf8(body_bytes) {
+        let mut lines = body_str.lines();
+        if let Some(first_line) = lines.next() {
+            let u = first_line.trim();
+            if !u.is_empty() {
+                name = Some(u.to_string());
             }
         }
+    }
+
+    // Fallback to pending username from bancho_connect.php or pre-login if body_bytes is empty
+    if name.is_none() {
+        let s = state.read().await;
+        name = s.pending_login_name.clone();
     }
 
     if name.is_none() {
@@ -531,21 +537,44 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
 
     let mut player = Player::new(profile_name.clone());
 
-    if let Some(ref c) = config_country_opt {
-        player.country = utils::country_code_to_byte(c);
-    } else if let Some(ref key) = api_key_opt {
+    let db_country = {
+        let s = state.read().await;
+        let db = s.db.lock().await;
+        db::get_profile_country(&db, &profile_name).unwrap_or(0)
+    };
+
+    if db_country != 0 {
+        player.country = db_country;
+    } else if let Some(ref c) = config_country_opt {
+        let code_byte = utils::country_code_to_byte(c);
+        player.country = code_byte;
+        let s = state.read().await;
+        let db = s.db.lock().await;
+        let _ = db::save_profile_country(&db, &profile_name, code_byte);
+    }
+
+    if let Some(ref key) = api_key_opt {
         let player_query = osu_uname_opt.clone().unwrap_or_else(|| profile_name.clone());
         let http_clone = http_client.clone();
         let key_clone = key.clone();
         let state_clone = Arc::clone(&state);
+        let profile_name_clone = profile_name.clone();
         tokio::spawn(async move {
             if let Some(fetched) = utils::fetch_user_stats_from_api(&http_clone, &key_clone, &player_query).await {
+                if fetched.country != 0 {
+                    let s = state_clone.read().await;
+                    let db = s.db.lock().await;
+                    let _ = db::save_profile_country(&db, &profile_name_clone, fetched.country);
+                }
                 let mut s = state_clone.write().await;
                 if let Some(ref mut p) = s.player {
-                    p.country = fetched.country;
+                    if fetched.country != 0 {
+                        p.country = fetched.country;
+                    }
                     if p.rank == 9999999 || p.rank <= 1 {
                         p.rank = fetched.rank;
                     }
+                    p.queue.extend_from_slice(&packets::user_presence(p));
                     p.enqueue_stats();
                 }
             }
@@ -602,6 +631,7 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
                 let mut s = state_clone.write().await;
                 if let Some(ref mut p) = s.player {
                     p.rank = rank;
+                    p.queue.extend_from_slice(&packets::user_presence(p));
                     p.enqueue_stats();
                 }
             }
@@ -914,5 +944,83 @@ mod tests {
         assert!(friends.contains(&1001), "Cached friend must be in friends list immediately");
         assert!(friends.contains(&3), "BanchoBot must be in friends list");
         assert!(friends.contains(&4), "Tillerino must be in friends list");
+    }
+
+    #[tokio::test]
+    async fn test_login_prioritizes_body_bytes_over_stale_pending_name() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "OldProfile").unwrap();
+        db::ensure_profile(&conn, "NewProfile").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        // Simulate stale pending_login_name from previous leaderboard request
+        app_state.pending_login_name = Some("OldProfile".to_string());
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let (body, status) = login(shared_state.clone(), b"NewProfile\npasshash\nversion").await;
+        assert_eq!(status, "success");
+
+        let s = shared_state.read().await;
+        let player = s.player.as_ref().expect("Player logged in");
+        assert_eq!(player.name, "NewProfile", "Authoritative username in body_bytes must take precedence over stale pending_login_name");
+        assert_eq!(s.pending_login_name, None, "pending_login_name must be cleared after login");
+
+        let pkts = packets::split_packets(&body);
+        let presence_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoUserPresence as u16).expect("Presence present");
+        let mut reader = packets::PacketReader::new(presence_pkt.payload);
+        let _uid = reader.read_i32().unwrap();
+        let uname = reader.read_string().unwrap();
+        assert_eq!(uname, "NewProfile");
+    }
+
+    #[tokio::test]
+    async fn test_osu_logout_packet_clears_player_and_pending_name() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(Player::new("LoggedOutUser".to_string()));
+        app_state.pending_login_name = Some("LoggedOutUser".to_string());
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Create OsuLogout packet (id 2)
+        let logout_pkt = packets::write_packet(packets::PacketId::OsuLogout as u16, &packets::write_i32(0));
+        let resp = handle(shared_state.clone(), Some("dummy-token"), &logout_pkt).await;
+        assert_eq!(resp.status, 200);
+
+        let s = shared_state.read().await;
+        assert!(s.player.is_none(), "Player must be cleared on OsuLogout");
+        assert!(s.pending_login_name.is_none(), "pending_login_name must be cleared on OsuLogout");
+    }
+
+    #[tokio::test]
+    async fn test_login_loads_persisted_profile_country_immediately() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "GermanUser").unwrap();
+        db::save_profile_country(&conn, "GermanUser", 56).unwrap(); // DE is 56
+
+        let config = crate::types::config::Config::default();
+        let app_state = AppState::new(conn, config);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let (body, status) = login(shared_state.clone(), b"GermanUser\npasshash\nversion").await;
+        assert_eq!(status, "success");
+
+        let s = shared_state.read().await;
+        let player = s.player.as_ref().expect("Player logged in");
+        assert_eq!(player.country, 56, "Saved profile country must be loaded immediately");
+
+        let pkts = packets::split_packets(&body);
+        let presence_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoUserPresence as u16).expect("Presence present");
+        let mut reader = packets::PacketReader::new(presence_pkt.payload);
+        let _uid = reader.read_i32().unwrap();
+        let _uname = reader.read_string().unwrap();
+        let _timezone = reader.read_u8().unwrap();
+        let country = reader.read_u8().unwrap();
+        assert_eq!(country, 56, "Initial login presence packet must carry the saved country immediately");
     }
 }
