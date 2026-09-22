@@ -63,7 +63,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
 
     let msg = format!(
         "BanchoBot Commands:\n\
-        {p}status / {p}rank / {p}love / {p}unrank [id] : Manage beatmap status\n\
+        {p}status / {p}rank / {p}love / {p}unrank [set/diff] [id] : Manage beatmap status (set or diff)\n\
         {p}recent / {p}r : Show your recent play\n\
         {p}tops / {p}t : Show top 5 plays\n\
         {p}stats / {p}profile : Show player stats\n\
@@ -330,10 +330,8 @@ pub async fn handle_leaderboard(state: &Arc<RwLock<AppState>>, _player_name: &st
 // This logic fixes bug #B0001 (stale map selection / incorrect PP on multi-diff mapsets).
 // Thanks to kaan for reporting it!
 pub async fn resolve_target_map_id(state: &Arc<RwLock<AppState>>, args: &[&str]) -> Option<i64> {
-    if let Some(first) = args.first() {
-        if let Ok(id) = first.parse::<i64>() {
-            return Some(id);
-        }
+    if let Some(id) = args.iter().find_map(|a| a.parse::<i64>().ok()) {
+        return Some(id);
     }
 
     let (player_md5, player_mid, last_np) = {
@@ -385,7 +383,7 @@ pub async fn resolve_target_map_id(state: &Arc<RwLock<AppState>>, args: &[&str])
         }
     }
 
-    if player_mid > 0 {
+    if player_md5.is_empty() && player_mid > 0 {
         return Some(player_mid);
     }
 
@@ -402,10 +400,257 @@ pub async fn resolve_target_map_id(state: &Arc<RwLock<AppState>>, args: &[&str])
 }
 
 pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str], status: i32, status_name: &str) {
+    let is_set = args.iter().any(|a| a.eq_ignore_ascii_case("set"));
+    let number_arg = args.iter().find_map(|a| a.parse::<i64>().ok());
+
+    if is_set {
+        let (player_md5, player_mid, _player_info) = {
+            let s = state.read().await;
+            (
+                s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+                s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
+                s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+            )
+        };
+
+        let mut target_set_id = 0i64;
+        if let Some(num) = number_arg {
+            target_set_id = num;
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, num) {
+                if b.beatmapset_id > 0 {
+                    target_set_id = b.beatmapset_id;
+                }
+            }
+        } else {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if !player_md5.is_empty() {
+                if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &player_md5) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 {
+                if let Some(ref np) = s.last_np_map {
+                    if np.beatmapset_id > 0 {
+                        target_set_id = np.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 && player_mid > 0 {
+                if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, player_mid) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+        }
+
+        let (songs_dir, api_key, http) = {
+            let s = state.read().await;
+            (utils::resolve_songs_folder(&s.config), s.config.osu_api_key.clone(), s.http.clone())
+        };
+
+        if target_set_id > 0 {
+            if let Some(ref sdir) = songs_dir {
+                if let Some(folder_path) = utils::find_local_mapset_folder(sdir, Some(target_set_id), None) {
+                    let scanned = utils::scan_dir_for_all_osu_files(&folder_path, Some(target_set_id));
+                    let s = state.read().await;
+                    let db_conn = s.db.lock().await;
+                    for (mut bmap, content) in scanned {
+                        bmap.approved = status;
+                        let _ = db::insert_beatmap(&db_conn, &bmap);
+                        let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, &content);
+                        let _ = db::set_beatmap_status_by_md5(&db_conn, &bmap.file_md5, status);
+                        if bmap.beatmap_id > 0 {
+                            let _ = db::set_beatmap_status(&db_conn, bmap.beatmap_id, status);
+                        }
+                    }
+                }
+            }
+
+            if let Some(ref key) = api_key {
+                if let Some(api_bmaps) = utils::fetch_all_beatmaps_from_api(&http, key, &[("s", target_set_id.to_string())]).await {
+                    let s = state.read().await;
+                    let db_conn = s.db.lock().await;
+                    for mut bmap in api_bmaps {
+                        bmap.approved = status;
+                        let _ = db::insert_beatmap(&db_conn, &bmap);
+                        let _ = db::set_beatmap_status(&db_conn, bmap.beatmap_id, status);
+                        if !bmap.file_md5.is_empty() {
+                            let _ = db::set_beatmap_status_by_md5(&db_conn, &bmap.file_md5, status);
+                        }
+                    }
+                }
+            }
+
+            let set_bmaps = {
+                let s = state.read().await;
+                let db_conn = s.db.lock().await;
+                let _ = db::set_beatmapset_status(&db_conn, target_set_id, status);
+                db::get_beatmaps_by_set_id(&db_conn, target_set_id).unwrap_or_default()
+            };
+
+            if !set_bmaps.is_empty() {
+                let artist = set_bmaps[0].artist.clone();
+                let title = set_bmaps[0].title.clone();
+                let count = set_bmaps.len();
+
+                let mut s = state.write().await;
+                if let Some(ref mut np) = s.last_np_map {
+                    if np.beatmapset_id == target_set_id {
+                        np.approved = status;
+                    }
+                }
+                drop(s);
+
+                reply(state, target, &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is now {}!", artist, title, target_set_id, count, status_name)).await;
+                return;
+            }
+        }
+
+        if !player_md5.is_empty() {
+            if let Some(ref sdir) = songs_dir {
+                if let Some(folder_path) = utils::find_local_mapset_folder(sdir, None, Some(&player_md5)) {
+                    let scanned = utils::scan_dir_for_all_osu_files(&folder_path, None);
+                    let count = scanned.len();
+                    let (mut artist, mut title) = (String::new(), String::new());
+                    {
+                        let s = state.read().await;
+                        let db_conn = s.db.lock().await;
+                        for (mut bmap, content) in scanned {
+                            if artist.is_empty() {
+                                artist = bmap.artist.clone();
+                                title = bmap.title.clone();
+                            }
+                            bmap.approved = status;
+                            let _ = db::insert_beatmap(&db_conn, &bmap);
+                            let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, &content);
+                            let _ = db::set_beatmap_status_by_md5(&db_conn, &bmap.file_md5, status);
+                            if bmap.beatmap_id > 0 {
+                                let _ = db::set_beatmap_status(&db_conn, bmap.beatmap_id, status);
+                            }
+                        }
+                    }
+
+                    if count > 0 {
+                        let mut s = state.write().await;
+                        if let Some(ref mut np) = s.last_np_map {
+                            np.approved = status;
+                        }
+                        drop(s);
+
+                        let display_artist = if artist.is_empty() { "Unknown Artist" } else { &artist };
+                        let display_title = if title.is_empty() { "Custom Beatmap" } else { &title };
+                        reply(state, target, &format!("Beatmapset {} - {} ({} difficulties) is now {}!", display_artist, display_title, count, status_name)).await;
+                        return;
+                    }
+                }
+            }
+        }
+
+        if target_set_id > 0 {
+            reply(state, target, &format!("Beatmapset ID: {} not found in local database or Songs folder.", target_set_id)).await;
+        } else {
+            reply(state, target, &format!("Usage: !{} set [beatmapset_id], or select a map first.", status_name.to_lowercase())).await;
+        }
+        return;
+    }
+
+    let explicit_id = number_arg;
+
+    let (player_md5, _player_mid, player_info) = {
+        let s = state.read().await;
+        (
+            s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+            s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
+            s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+        )
+    };
+
+    // If no explicit ID argument is provided and player has an active map MD5:
+    // rank the active map directly by MD5 to avoid turning practice diffs into top diffs!
+    if explicit_id.is_none() && !player_md5.is_empty() {
+        let (updated, bmap) = {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            let mut b = db::get_beatmap_by_md5(&db_conn, &player_md5).ok().flatten();
+            if b.is_none() {
+                drop(db_conn);
+                let songs_dir = utils::resolve_songs_folder(&s.config);
+                let api_key = s.config.osu_api_key.clone();
+                let http = s.http.clone();
+                if let Some(ref sdir) = songs_dir {
+                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, None, Some(&player_md5), None) {
+                        let md5 = local_bmap.file_md5.clone();
+                        let db_conn = s.db.lock().await;
+                        let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                        let _ = db::update_beatmap_file_content(&db_conn, &md5, &content);
+                        b = Some(local_bmap);
+                    }
+                }
+                if b.is_none() {
+                    if let Some(ref key) = api_key {
+                        if let Some(fetched) = utils::fetch_beatmap_from_api(&http, key, &[("h", player_md5.clone())]).await {
+                            let db_conn = s.db.lock().await;
+                            let _ = db::insert_beatmap(&db_conn, &fetched);
+                            b = Some(fetched);
+                        }
+                    }
+                }
+                if b.is_none() && !player_info.is_empty() {
+                    let (artist, title, creator, version) = utils::parse_osu_filename(&player_info);
+                    let mut fb = Beatmap::blank();
+                    fb.file_md5 = player_md5.clone();
+                    fb.artist = if artist.is_empty() { "Unknown Artist".to_string() } else { artist };
+                    fb.title = if title.is_empty() { "Custom Beatmap".to_string() } else { title };
+                    fb.creator = creator;
+                    fb.version = if version.is_empty() { "Normal".to_string() } else { version };
+                    let db_conn = s.db.lock().await;
+                    let _ = db::insert_beatmap(&db_conn, &fb);
+                    b = Some(fb);
+                }
+            } else {
+                drop(db_conn);
+            }
+
+            if let Some(mut target_bmap) = b {
+                target_bmap.approved = status;
+                let db_conn = s.db.lock().await;
+                let _ = db::insert_beatmap(&db_conn, &target_bmap);
+                let _ = db::set_beatmap_status_by_md5(&db_conn, &player_md5, status);
+                if target_bmap.beatmap_id > 0 {
+                    let _ = db::set_beatmap_status(&db_conn, target_bmap.beatmap_id, status);
+                }
+                (1, Some(target_bmap))
+            } else {
+                (0, None)
+            }
+        };
+
+        if updated > 0 {
+            if let Some(b) = bmap {
+                let mut s = state.write().await;
+                s.last_np_map = Some(b.clone());
+                if let Some(ref mut p) = s.player {
+                    p.map_id = b.beatmap_id as i32;
+                    p.map_md5 = b.file_md5.clone();
+                }
+                drop(s);
+                let id_str = if b.beatmap_id > 0 { format!(" (ID: {})", b.beatmap_id) } else { String::new() };
+                reply(state, target, &format!("Beatmap {} - {} [{}]{} is now {}!", b.artist, b.title, b.version, id_str, status_name)).await;
+            }
+            return;
+        }
+    }
+
     let map_id = resolve_target_map_id(state, args).await;
 
     let Some(map_id) = map_id else {
-        reply(state, target, &format!("Usage: !{} [beatmap_id], or select a map first.", status_name.to_lowercase())).await;
+        reply(state, target, &format!("Usage: !{} [set/diff] [beatmap_id], or select a map first.", status_name.to_lowercase())).await;
         return;
     };
 
@@ -515,21 +760,202 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
 }
 
 pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str]) {
+    let is_set = args.iter().any(|a| a.eq_ignore_ascii_case("set"));
+    let number_arg = args.iter().find_map(|a| a.parse::<i64>().ok());
+
+    let (player_md5, player_mid, player_info) = {
+        let s = state.read().await;
+        (
+            s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+            s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
+            s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+        )
+    };
+
+    if is_set {
+        let mut target_set_id = 0i64;
+        if let Some(num) = number_arg {
+            target_set_id = num;
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, num) {
+                if b.beatmapset_id > 0 {
+                    target_set_id = b.beatmapset_id;
+                }
+            }
+        } else {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if !player_md5.is_empty() {
+                if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &player_md5) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 {
+                if let Some(ref np) = s.last_np_map {
+                    if np.beatmapset_id > 0 {
+                        target_set_id = np.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 && player_mid > 0 {
+                if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, player_mid) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+        }
+
+        let (songs_dir, api_key, http) = {
+            let s = state.read().await;
+            (utils::resolve_songs_folder(&s.config), s.config.osu_api_key.clone(), s.http.clone())
+        };
+
+        if target_set_id > 0 {
+            let mut set_bmaps = {
+                let s = state.read().await;
+                let db_conn = s.db.lock().await;
+                db::get_beatmaps_by_set_id(&db_conn, target_set_id).unwrap_or_default()
+            };
+
+            if set_bmaps.is_empty() {
+                if let Some(ref sdir) = songs_dir {
+                    if let Some(folder_path) = utils::find_local_mapset_folder(sdir, Some(target_set_id), None) {
+                        let scanned = utils::scan_dir_for_all_osu_files(&folder_path, Some(target_set_id));
+                        let s = state.read().await;
+                        let db_conn = s.db.lock().await;
+                        for (bmap, content) in scanned {
+                            let _ = db::insert_beatmap(&db_conn, &bmap);
+                            let _ = db::update_beatmap_file_content(&db_conn, &bmap.file_md5, &content);
+                        }
+                    }
+                }
+                if let Some(ref key) = api_key {
+                    if let Some(api_bmaps) = utils::fetch_all_beatmaps_from_api(&http, key, &[("s", target_set_id.to_string())]).await {
+                        let s = state.read().await;
+                        let db_conn = s.db.lock().await;
+                        for bmap in api_bmaps {
+                            let _ = db::insert_beatmap(&db_conn, &bmap);
+                        }
+                    }
+                }
+                let s = state.read().await;
+                let db_conn = s.db.lock().await;
+                set_bmaps = db::get_beatmaps_by_set_id(&db_conn, target_set_id).unwrap_or_default();
+            }
+
+            if !set_bmaps.is_empty() {
+                let artist = set_bmaps[0].artist.clone();
+                let title = set_bmaps[0].title.clone();
+                let total = set_bmaps.len();
+                let ranked = set_bmaps.iter().filter(|b| b.approved == 1 || b.approved == 2).count();
+                let loved = set_bmaps.iter().filter(|b| b.approved == 4).count();
+                let qualified = set_bmaps.iter().filter(|b| b.approved == 3).count();
+                let unranked = set_bmaps.iter().filter(|b| b.approved <= 0).count();
+
+                let status_summary = if ranked == total {
+                    "Ranked".to_string()
+                } else if loved == total {
+                    "Loved".to_string()
+                } else if unranked == total {
+                    "Unranked / Pending".to_string()
+                } else {
+                    let mut parts = Vec::new();
+                    if ranked > 0 { parts.push(format!("{} Ranked", ranked)); }
+                    if loved > 0 { parts.push(format!("{} Loved", loved)); }
+                    if qualified > 0 { parts.push(format!("{} Qualified", qualified)); }
+                    if unranked > 0 { parts.push(format!("{} Unranked", unranked)); }
+                    parts.join(", ")
+                };
+
+                reply(state, target, &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is {}", artist, title, target_set_id, total, status_summary)).await;
+                return;
+            }
+        }
+
+        if !player_md5.is_empty() {
+            if let Some(ref sdir) = songs_dir {
+                if let Some(folder_path) = utils::find_local_mapset_folder(sdir, None, Some(&player_md5)) {
+                    let scanned = utils::scan_dir_for_all_osu_files(&folder_path, None);
+                    if !scanned.is_empty() {
+                        let total = scanned.len();
+                        let artist = scanned[0].0.artist.clone();
+                        let title = scanned[0].0.title.clone();
+                        let mut ranked = 0;
+                        let mut loved = 0;
+                        let mut unranked = 0;
+                        {
+                            let s = state.read().await;
+                            let db_conn = s.db.lock().await;
+                            for (b, _) in &scanned {
+                                if let Ok(Some(existing)) = db::get_beatmap_by_md5(&db_conn, &b.file_md5) {
+                                    match existing.approved {
+                                        1 | 2 => ranked += 1,
+                                        4 => loved += 1,
+                                        _ => unranked += 1,
+                                    }
+                                } else {
+                                    unranked += 1;
+                                }
+                            }
+                        }
+                        let status_summary = if ranked == total {
+                            "Ranked".to_string()
+                        } else if loved == total {
+                            "Loved".to_string()
+                        } else if unranked == total {
+                            "Unranked / Pending".to_string()
+                        } else {
+                            format!("{} Ranked, {} Unranked", ranked, unranked)
+                        };
+                        reply(state, target, &format!("Beatmapset {} - {} ({} difficulties) is {}", artist, title, total, status_summary)).await;
+                        return;
+                    }
+                }
+            }
+        }
+
+        if target_set_id > 0 {
+            reply(state, target, &format!("Beatmapset ID: {} not found in database.", target_set_id)).await;
+        } else {
+            reply(state, target, "Usage: !status [set/diff] [id], or select a map first.").await;
+        }
+        return;
+    }
+
+    let explicit_id = number_arg;
+
+    if explicit_id.is_none() && !player_md5.is_empty() {
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let b = db::get_beatmap_by_md5(&db_conn, &player_md5).ok().flatten();
+        drop(db_conn);
+        drop(s);
+        if let Some(b) = b {
+            let status_str = match b.approved {
+                1 => "Ranked",
+                2 => "Approved",
+                3 => "Qualified",
+                4 => "Loved",
+                _ => "Unranked / Pending",
+            };
+            let id_str = if b.beatmap_id > 0 { format!(" (ID: {})", b.beatmap_id) } else { String::new() };
+            reply(state, target, &format!("{} - {} [{}]{} is {}", b.artist, b.title, b.version, id_str, status_str)).await;
+            return;
+        }
+    }
+
     let map_id = resolve_target_map_id(state, args).await;
 
     let Some(map_id) = map_id else {
-        reply(state, target, "Usage: !status [beatmap_id], or select a map first.").await;
+        reply(state, target, "Usage: !status [set/diff] [beatmap_id], or select a map first.").await;
         return;
     };
 
     let beatmap = {
-        let (player_md5, player_info) = {
-            let s = state.read().await;
-            (
-                s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
-                s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
-            )
-        };
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let mut b = db::get_beatmap_by_id(&db_conn, map_id).ok().flatten();
@@ -1619,5 +2045,187 @@ mod tests {
 
         // Also test !recalc alias
         handle_command(&state, "Alice", "Alice", "recalc", &[]).await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_status_ranks_practice_diff_without_corrupting_top_diff() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Player1").unwrap();
+
+        // Top diff (ID: 129891, unranked)
+        let mut top_diff = Beatmap::blank();
+        top_diff.beatmap_id = 129891;
+        top_diff.beatmapset_id = 39804;
+        top_diff.file_md5 = "top_diff_md5_123".to_string();
+        top_diff.title = "Freedom Dive".to_string();
+        top_diff.version = "FOUR DIMENSIONS".to_string();
+        top_diff.approved = 0;
+        db::insert_beatmap(&conn, &top_diff).unwrap();
+
+        // Practice diff (ID: 0, unranked)
+        let mut practice_diff = Beatmap::blank();
+        practice_diff.beatmap_id = 0;
+        practice_diff.beatmapset_id = 39804;
+        practice_diff.file_md5 = "practice_diff_md5_456".to_string();
+        practice_diff.title = "Freedom Dive".to_string();
+        practice_diff.version = "FOUR DIMENSIONS [Practice]".to_string();
+        practice_diff.approved = 0;
+        db::insert_beatmap(&conn, &practice_diff).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("Player1".to_string());
+        player.map_md5 = "practice_diff_md5_456".to_string();
+        player.map_id = 0; // Practice diff has ID 0
+        app_state.player = Some(player);
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Player ranks their current map without specifying args
+        handle_set_status(&state, "Player1", &[], 1, "Ranked").await;
+
+        // Verify: Practice diff is now Ranked, with beatmap_id = 0
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let p_bmap = db::get_beatmap_by_md5(&db_conn, "practice_diff_md5_456").unwrap().unwrap();
+        assert_eq!(p_bmap.approved, 1, "Practice diff must be marked ranked");
+        assert_eq!(p_bmap.beatmap_id, 0, "Practice diff beatmap_id must NOT become the top diff ID");
+        assert_eq!(p_bmap.version, "FOUR DIMENSIONS [Practice]");
+
+        // Verify: Top diff is completely untouched (still approved = 0)
+        let t_bmap = db::get_beatmap_by_id(&db_conn, 129891).unwrap().unwrap();
+        assert_eq!(t_bmap.approved, 0, "Top diff must remain unranked and untouched!");
+        assert_eq!(t_bmap.file_md5, "top_diff_md5_123");
+        assert_eq!(t_bmap.version, "FOUR DIMENSIONS");
+    }
+
+    #[tokio::test]
+    async fn test_handle_set_status_set_ranks_all_diffs_in_mapset() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Player1").unwrap();
+
+        // Diff 1 in set 5555
+        let mut diff1 = Beatmap::blank();
+        diff1.beatmap_id = 5001;
+        diff1.beatmapset_id = 5555;
+        diff1.file_md5 = "diff1_md5".to_string();
+        diff1.artist = "Xi".to_string();
+        diff1.title = "Blue Zenith".to_string();
+        diff1.version = "Normal".to_string();
+        diff1.approved = 0;
+        db::insert_beatmap(&conn, &diff1).unwrap();
+
+        // Diff 2 in set 5555
+        let mut diff2 = Beatmap::blank();
+        diff2.beatmap_id = 5002;
+        diff2.beatmapset_id = 5555;
+        diff2.file_md5 = "diff2_md5".to_string();
+        diff2.artist = "Xi".to_string();
+        diff2.title = "Blue Zenith".to_string();
+        diff2.version = "Insane".to_string();
+        diff2.approved = 0;
+        db::insert_beatmap(&conn, &diff2).unwrap();
+
+        // Diff 3 in set 5555
+        let mut diff3 = Beatmap::blank();
+        diff3.beatmap_id = 5003;
+        diff3.beatmapset_id = 5555;
+        diff3.file_md5 = "diff3_md5".to_string();
+        diff3.artist = "Xi".to_string();
+        diff3.title = "Blue Zenith".to_string();
+        diff3.version = "FOUR DIMENSIONS".to_string();
+        diff3.approved = 0;
+        db::insert_beatmap(&conn, &diff3).unwrap();
+
+        let mut config = crate::types::config::Config::default();
+        config.paths.songs = Some("target".to_string());
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("Player1".to_string());
+        player.map_md5 = "diff2_md5".to_string(); // active diff is Insane
+        player.map_id = 5002;
+        app_state.player = Some(player);
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // 1. Run "!rank set" on the active mapset
+        handle_set_status(&state, "Player1", &["set"], 1, "Ranked").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+
+        // All 3 diffs should now be ranked
+        let d1 = db::get_beatmap_by_id(&db_conn, 5001).unwrap().unwrap();
+        let d2 = db::get_beatmap_by_id(&db_conn, 5002).unwrap().unwrap();
+        let d3 = db::get_beatmap_by_id(&db_conn, 5003).unwrap().unwrap();
+        assert_eq!(d1.approved, 1);
+        assert_eq!(d2.approved, 1);
+        assert_eq!(d3.approved, 1);
+        drop(db_conn);
+        drop(s);
+
+        // BanchoBot reply should confirm set ranking with difficulty count
+        let mut s_write = state.write().await;
+        let queue = s_write.player.as_mut().unwrap().clear_queue();
+        drop(s_write);
+        let packets = packets::split_packets(&queue);
+        let reply_found = packets.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Beatmapset Xi - Blue Zenith (Set ID: 5555) (3 difficulties) is now Ranked!")
+            } else {
+                false
+            }
+        });
+        assert!(reply_found, "Reply must confirm set ranking for all 3 difficulties");
+
+        // 2. Test "!unrank set 5555" with explicit ID
+        handle_set_status(&state, "Player1", &["set", "5555"], 0, "Unranked").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let d1 = db::get_beatmap_by_id(&db_conn, 5001).unwrap().unwrap();
+        let d2 = db::get_beatmap_by_id(&db_conn, 5002).unwrap().unwrap();
+        let d3 = db::get_beatmap_by_id(&db_conn, 5003).unwrap().unwrap();
+        assert_eq!(d1.approved, 0);
+        assert_eq!(d2.approved, 0);
+        assert_eq!(d3.approved, 0);
+        drop(db_conn);
+        drop(s);
+
+        // 3. Test "!rank diff" on active map only ranks that single diff
+        handle_set_status(&state, "Player1", &["diff"], 1, "Ranked").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let d1 = db::get_beatmap_by_id(&db_conn, 5001).unwrap().unwrap();
+        let d2 = db::get_beatmap_by_id(&db_conn, 5002).unwrap().unwrap();
+        let d3 = db::get_beatmap_by_id(&db_conn, 5003).unwrap().unwrap();
+        assert_eq!(d1.approved, 0, "Diff 1 must stay unranked");
+        assert_eq!(d2.approved, 1, "Active diff 2 must be ranked");
+        assert_eq!(d3.approved, 0, "Diff 3 must stay unranked");
+        drop(db_conn);
+        drop(s);
+
+        // 4. Test "!status set" reporting mixed statuses
+        handle_status(&state, "Player1", &["set"]).await;
+        let mut s_write = state.write().await;
+        let queue = s_write.player.as_mut().unwrap().clear_queue();
+        drop(s_write);
+        let packets = packets::split_packets(&queue);
+        let status_found = packets.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("1 Ranked, 2 Unranked")
+            } else {
+                false
+            }
+        });
+        assert!(status_found, "Status set message must report mixed diff counts");
     }
 }

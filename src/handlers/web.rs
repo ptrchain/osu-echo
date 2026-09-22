@@ -268,17 +268,6 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 bmap = Some(fetched);
             }
         }
-        if bmap.is_none() && setid > 0 {
-            if let Some(ref key) = api_key {
-                if let Some(fetched) = utils::fetch_beatmap_from_api_with_hint(&http, key, &[("s", setid.to_string())], file_hint).await {
-                    let mut b = fetched;
-                    b.file_md5 = md5.clone();
-                    let db_conn = db.lock().await;
-                    let _ = db::insert_beatmap(&db_conn, &b);
-                    bmap = Some(b);
-                }
-            }
-        }
         if bmap.is_none() {
             if let Some(songs_dir) = utils::resolve_songs_folder(&config) {
                 let sid = if setid > 0 { Some(setid) } else { None };

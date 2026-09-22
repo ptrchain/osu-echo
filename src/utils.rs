@@ -210,6 +210,43 @@ pub async fn fetch_beatmap_from_api(http: &reqwest::Client, api_key: &str, param
     fetch_beatmap_from_api_with_hint(http, api_key, params, None).await
 }
 
+pub async fn fetch_all_beatmaps_from_api(
+    http: &reqwest::Client,
+    api_key: &str,
+    params: &[(&str, String)],
+) -> Option<Vec<crate::types::beatmap::Beatmap>> {
+    let mut url = reqwest::Url::parse("https://osu.ppy.sh/api/get_beatmaps").ok()?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("k", api_key);
+        for (k, v) in params {
+            pairs.append_pair(k, v);
+        }
+    }
+
+    let resp = http.get(url).send().await.ok()?;
+    if resp.status() != 200 {
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let arr = json.as_array()?;
+    if arr.is_empty() {
+        return None;
+    }
+
+    let list: Vec<crate::types::beatmap::Beatmap> = arr
+        .iter()
+        .filter_map(crate::types::beatmap::Beatmap::from_api_json)
+        .collect();
+
+    if list.is_empty() {
+        None
+    } else {
+        Some(list)
+    }
+}
+
 pub async fn fetch_beatmap_from_api_with_hint(
     http: &reqwest::Client,
     api_key: &str,
@@ -255,14 +292,10 @@ pub async fn fetch_beatmap_from_api_with_hint(
                     }
                 }
             }
-            for item in arr {
-                if let Some(ver) = item.get("version").and_then(|v| v.as_str()) {
-                    if ver.to_lowercase().contains(&clean) || clean.contains(&ver.to_lowercase()) {
-                        return crate::types::beatmap::Beatmap::from_api_json(item);
-                    }
-                }
-            }
         }
+        // If a hint was provided and did not match any difficulty in the beatmapset,
+        // return None instead of falling back to the first difficulty.
+        return None;
     }
 
     crate::types::beatmap::Beatmap::from_api_json(&arr[0])
@@ -365,7 +398,9 @@ pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, f
         return None;
     }
 
-    if bmap.beatmap_id == 0 {
+    if bmap.version.to_lowercase().contains("practice") {
+        bmap.beatmap_id = 0;
+    } else if bmap.beatmap_id == 0 {
         bmap.beatmap_id = fallback_bmap_id.unwrap_or(0);
     }
     if bmap.beatmapset_id == 0 {
@@ -471,6 +506,82 @@ pub fn find_and_parse_local_osu_file(
     None
 }
 
+pub fn scan_dir_for_all_osu_files(
+    dir: &std::path::Path,
+    fallback_set_id: Option<i64>,
+) -> Vec<(crate::types::beatmap::Beatmap, String)> {
+    let mut results = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("osu") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    if let Some(bmap) = parse_osu_file_to_beatmap(&content, None, fallback_set_id) {
+                        results.push((bmap, content));
+                    }
+                }
+            }
+        }
+    }
+    results
+}
+
+pub fn find_local_mapset_folder(
+    songs_dir: &std::path::Path,
+    set_id: Option<i64>,
+    map_md5: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    if !songs_dir.exists() {
+        return None;
+    }
+
+    if let Some(sid) = set_id {
+        if sid > 0 {
+            let prefix = format!("{} ", sid);
+            if let Ok(entries) = std::fs::read_dir(songs_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if folder_name.starts_with(&prefix) || folder_name == sid.to_string() {
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+            return None;
+        }
+    }
+
+    if let Some(md5) = map_md5 {
+        if !md5.is_empty() {
+            if let Ok(entries) = std::fs::read_dir(songs_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                            for sub in sub_entries.flatten() {
+                                let sub_path = sub.path();
+                                if sub_path.extension().and_then(|e| e.to_str()) == Some("osu") {
+                                    if let Ok(content) = std::fs::read_to_string(&sub_path) {
+                                        use md5::Digest;
+                                        let hash = format!("{:x}", md5::Md5::digest(content.as_bytes()));
+                                        if hash.eq_ignore_ascii_case(md5) {
+                                            return Some(path);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 pub fn resolve_songs_folder(config: &crate::types::config::Config) -> Option<std::path::PathBuf> {
     if let Some(folder) = config.songs_folder() {
         if folder.exists() {
@@ -512,11 +623,14 @@ fn scan_dir_for_osu_file(
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Some(mut bmap) = parse_osu_file_to_beatmap(&content, None, fallback_set_id) {
                         if let Some(md5) = map_md5 {
-                            if !md5.is_empty() && bmap.file_md5.eq_ignore_ascii_case(md5) {
-                                if bmap.beatmap_id == 0 {
-                                    bmap.beatmap_id = map_id.unwrap_or(0);
+                            if !md5.is_empty() {
+                                if bmap.file_md5.eq_ignore_ascii_case(md5) {
+                                    if bmap.beatmap_id == 0 {
+                                        bmap.beatmap_id = map_id.unwrap_or(0);
+                                    }
+                                    return Some((bmap, content));
                                 }
-                                return Some((bmap, content));
+                                continue;
                             }
                         }
                         if let Some(mid) = map_id {
@@ -564,7 +678,7 @@ fn scan_dir_for_osu_file(
     }
 
     if map_md5.is_some() {
-        version_candidate.or(title_candidate)
+        None
     } else if fallback_set_id.is_some() {
         version_candidate.or(title_candidate).or(candidate)
     } else {
@@ -586,20 +700,15 @@ pub async fn get_or_fetch_beatmap_content(
     }
 
     if let Some(songs_dir) = resolve_songs_folder(config) {
-        if let Some(local_c) = find_local_osu_file(&songs_dir, bmap.beatmap_id, bmap.beatmapset_id) {
-            let conn = db.lock().await;
-            let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
-            return Some(local_c);
-        }
         let sid = if bmap.beatmapset_id > 0 { Some(bmap.beatmapset_id) } else { None };
         let mid = if bmap.beatmap_id > 0 { Some(bmap.beatmap_id) } else { None };
         let diff_hint = if !bmap.version.is_empty() { format!("[{}]", bmap.version) } else { bmap.title.clone() };
-        if let Some((local_bmap, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, Some(&bmap.file_md5), Some(&diff_hint)) {
+        let md5_opt = if !bmap.file_md5.is_empty() { Some(bmap.file_md5.as_str()) } else { None };
+        if let Some((local_bmap, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, md5_opt, Some(&diff_hint)) {
             let md5_match = !bmap.file_md5.is_empty() && local_bmap.file_md5.eq_ignore_ascii_case(&bmap.file_md5);
-            let id_match = bmap.beatmap_id > 0 && local_bmap.beatmap_id == bmap.beatmap_id;
-            let ver_match = !bmap.version.is_empty() && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
+            let id_and_ver_match = bmap.beatmap_id > 0 && local_bmap.beatmap_id == bmap.beatmap_id && !bmap.version.is_empty() && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
 
-            if md5_match || id_match || ver_match {
+            if md5_match || (bmap.file_md5.is_empty() && id_and_ver_match) {
                 let conn = db.lock().await;
                 let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
                 return Some(local_c);
@@ -607,10 +716,17 @@ pub async fn get_or_fetch_beatmap_content(
         }
     }
 
-    if let Some(fetched_c) = fetch_osu_file(http, bmap.beatmap_id).await {
-        let conn = db.lock().await;
-        let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &fetched_c);
-        return Some(fetched_c);
+    if bmap.beatmap_id > 0 {
+        if let Some(fetched_c) = fetch_osu_file(http, bmap.beatmap_id).await {
+            use md5::Digest;
+            let fetched_md5 = format!("{:x}", md5::Md5::digest(fetched_c.as_bytes()));
+            let md5_match = bmap.file_md5.is_empty() || fetched_md5.eq_ignore_ascii_case(&bmap.file_md5);
+            if md5_match {
+                let conn = db.lock().await;
+                let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &fetched_c);
+                return Some(fetched_c);
+            }
+        }
     }
 
     None
@@ -964,5 +1080,96 @@ mod tests {
         assert_eq!(title2, "Title");
         assert_eq!(creator2, "");
         assert_eq!(version2, "Diff");
+    }
+
+    #[test]
+    fn test_practice_diff_resets_beatmap_id() {
+        let content = "osu file format v14\n\n\
+            [Metadata]\n\
+            Title:FREEDOM DiVE\n\
+            Artist:xi\n\
+            Creator:Nakagawa-Kanon\n\
+            Version:FOUR DIMENSIONS [Practice]\n\
+            BeatmapID:129891\n\
+            BeatmapSetID:39804\n\
+            [Difficulty]\n\
+            HPDrainRate:7\n\
+            CircleSize:4\n\
+            OverallDifficulty:9\n\
+            ApproachRate:9\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n";
+
+        let bmap = parse_osu_file_to_beatmap(content, Some(129891), Some(39804)).unwrap();
+        assert_eq!(bmap.beatmap_id, 0, "Practice diff must reset beatmap_id to 0 to prevent hijacking official map ID");
+        assert_eq!(bmap.beatmapset_id, 39804);
+        assert_eq!(bmap.version, "FOUR DIMENSIONS [Practice]");
+    }
+
+    #[tokio::test]
+    async fn test_scan_dir_and_content_strict_md5_isolation() {
+        let temp_dir = std::env::temp_dir().join(format!("osu_test_md5_iso_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let official_content = "osu file format v14\n\n\
+            [Metadata]\n\
+            Title:Freedom Dive\n\
+            Artist:xi\n\
+            Creator:Mapper\n\
+            Version:Top Diff\n\
+            BeatmapID:55555\n\
+            BeatmapSetID:33333\n\
+            [Difficulty]\n\
+            HPDrainRate:7\n\
+            CircleSize:4\n\
+            OverallDifficulty:9\n\
+            ApproachRate:9\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n";
+        let official_path = temp_dir.join("xi - Freedom Dive (Mapper) [Top Diff].osu");
+        std::fs::write(&official_path, official_content).unwrap();
+        let official_bmap = parse_osu_file_to_beatmap(official_content, None, None).unwrap();
+
+        let practice_content = "osu file format v14\n\n\
+            [Metadata]\n\
+            Title:Freedom Dive\n\
+            Artist:xi\n\
+            Creator:Mapper\n\
+            Version:Top Diff [Practice]\n\
+            BeatmapID:55555\n\
+            BeatmapSetID:33333\n\
+            [Difficulty]\n\
+            HPDrainRate:7\n\
+            CircleSize:4\n\
+            OverallDifficulty:9\n\
+            ApproachRate:9\n\
+            [HitObjects]\n\
+            256,192,1000,1,0,0:0:0:0:\n\
+            300,200,2000,1,0,0:0:0:0:\n";
+        let practice_path = temp_dir.join("xi - Freedom Dive (Mapper) [Top Diff Practice].osu");
+        std::fs::write(&practice_path, practice_content).unwrap();
+        let practice_bmap = parse_osu_file_to_beatmap(practice_content, None, None).unwrap();
+
+        assert_ne!(official_bmap.file_md5, practice_bmap.file_md5);
+
+        // 1. Querying scan_dir_for_osu_file by practice MD5 must ONLY return practice diff
+        let res_practice = scan_dir_for_osu_file(&temp_dir, Some(55555), Some(&practice_bmap.file_md5), None, Some(33333));
+        assert!(res_practice.is_some());
+        let (found_p, _) = res_practice.unwrap();
+        assert_eq!(found_p.file_md5, practice_bmap.file_md5);
+        assert_eq!(found_p.version, "Top Diff [Practice]");
+
+        // 2. Querying scan_dir_for_osu_file by official MD5 must ONLY return official diff
+        let res_official = scan_dir_for_osu_file(&temp_dir, Some(55555), Some(&official_bmap.file_md5), None, Some(33333));
+        assert!(res_official.is_some());
+        let (found_o, _) = res_official.unwrap();
+        assert_eq!(found_o.file_md5, official_bmap.file_md5);
+        assert_eq!(found_o.version, "Top Diff");
+
+        // 3. Querying with a newer MD5 not present locally must return None (not fall back to old file)
+        let res_newer = scan_dir_for_osu_file(&temp_dir, Some(55555), Some("newer_updated_md5_12345"), Some("Top Diff"), Some(33333));
+        assert!(res_newer.is_none(), "Must NOT return older file when querying for a newer MD5");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

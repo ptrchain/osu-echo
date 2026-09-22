@@ -809,6 +809,28 @@ pub fn set_beatmap_status_by_md5(conn: &Connection, md5: &str, approved: i32) ->
     conn.execute("UPDATE beatmaps SET approved = ?1 WHERE file_md5 = ?2", params![approved, md5])
 }
 
+pub fn set_beatmapset_status(conn: &Connection, beatmapset_id: i64, approved: i32) -> SqlResult<usize> {
+    let status_str = match approved {
+        1 | 2 => "ranked",
+        4 => "loved",
+        _ => "unranked",
+    };
+    let _ = conn.execute(
+        "UPDATE scores SET bmap_status = ?1 WHERE md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?2)",
+        params![status_str, beatmapset_id],
+    );
+    conn.execute("UPDATE beatmaps SET approved = ?1 WHERE beatmapset_id = ?2", params![approved, beatmapset_id])
+}
+
+pub fn get_beatmaps_by_set_id(conn: &Connection, beatmapset_id: i64) -> SqlResult<Vec<Beatmap>> {
+    let mut stmt = conn.prepare("SELECT * FROM beatmaps WHERE beatmapset_id = ?1")?;
+    let maps = stmt
+        .query_map(params![beatmapset_id], |row| Ok(row_to_beatmap(row)))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(maps)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

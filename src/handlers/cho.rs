@@ -74,11 +74,15 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             {
                                 let s = state.read().await;
                                 let db_conn = s.db.lock().await;
-                                if map_id > 0 {
-                                    resolved_bmap = db::get_beatmap_by_id(&db_conn, map_id as i64).ok().flatten();
-                                }
-                                if resolved_bmap.is_none() && !map_md5.is_empty() {
+                                if !map_md5.is_empty() {
                                     resolved_bmap = db::get_beatmap_by_md5(&db_conn, &map_md5).ok().flatten();
+                                }
+                                if resolved_bmap.is_none() && map_id > 0 {
+                                    if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, map_id as i64) {
+                                        if map_md5.is_empty() || b.file_md5.eq_ignore_ascii_case(&map_md5) {
+                                            resolved_bmap = Some(b);
+                                        }
+                                    }
                                 }
                             }
 

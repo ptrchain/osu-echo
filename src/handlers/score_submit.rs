@@ -314,7 +314,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             }
             if fetched.is_none() {
                 let player_match = s.player.as_ref().and_then(|p| {
-                    if p.map_md5 == sub.score.md5 || (p.map_id > 0 && p.map_md5.is_empty()) {
+                    if p.map_md5 == sub.score.md5 {
                         Some((p.map_id, p.info_text.clone()))
                     } else {
                         None
@@ -324,20 +324,18 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
                     if mid > 0 {
                         let db_conn = s.db.lock().await;
                         if let Ok(Some(mut b)) = db::get_beatmap_by_id(&db_conn, mid as i64) {
-                            if b.file_md5.is_empty() || b.file_md5 != sub.score.md5 {
+                            if !b.version.to_lowercase().contains("practice") {
                                 b.file_md5 = sub.score.md5.clone();
+                                fetched = Some(b);
                             }
-                            fetched = Some(b);
                         }
                     }
                 }
             }
             if fetched.is_none() {
                 if let Some(ref np) = s.last_np_map {
-                    if np.file_md5 == sub.score.md5 || (np.beatmap_id > 0 && s.player.as_ref().map(|p| p.map_id) == Some(np.beatmap_id as i32)) {
-                        let mut b = np.clone();
-                        b.file_md5 = sub.score.md5.clone();
-                        fetched = Some(b);
+                    if np.file_md5 == sub.score.md5 {
+                        fetched = Some(np.clone());
                     }
                 }
             }
