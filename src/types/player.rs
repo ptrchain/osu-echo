@@ -74,19 +74,22 @@ impl Player {
         let mut seen_md5 = std::collections::HashSet::new();
         let top_scores: Vec<&&Score> = filtered.iter().filter(|s| seen_md5.insert(s.md5.clone())).take(100).collect();
 
-        let mut pp: f64 = top_scores.iter().enumerate().map(|(i, s)| s.pp.unwrap_or(0.0) * 0.95_f64.powi(i as i32)).sum();
+        let mut pp = 0.0;
+        let mut weighted_acc = 0.0;
+        let mut weight_sum = 0.0;
 
-        // osu! bonus PP formula: scales with number of scores submitted up to ~416.67
+        for (i, s) in top_scores.iter().enumerate() {
+            let weight = 0.95_f64.powi(i as i32);
+            pp += s.pp.unwrap_or(0.0) * weight;
+            weighted_acc += s.acc.unwrap_or(0.0) * weight;
+            weight_sum += weight;
+        }
+
         if !filtered.is_empty() {
             pp += 416.6667 * (1.0 - 0.9994_f64.powi(filtered.len() as i32));
         }
         self.pp = pp.round() as i32;
-
-        if !top_scores.is_empty() {
-            self.acc = top_scores.iter().map(|s| s.acc.unwrap_or(0.0)).sum::<f64>() / top_scores.len() as f64;
-        } else {
-            self.acc = 0.0;
-        }
+        self.acc = if weight_sum > 0.0 { weighted_acc / weight_sum } else { 0.0 };
 
         let mut best_scores_per_map: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
         let mut total = 0i64;
@@ -174,5 +177,20 @@ mod tests {
         assert!(player.pp >= 700);
         assert!((player.acc - 98.0).abs() < 1e-4);
         assert_eq!(player.ranked_score, 1_000_000);
+    }
+
+    #[test]
+    fn test_weighted_accuracy() {
+        let mut player = Player::new("AccPlayer".to_string());
+        player.mode = 0;
+
+        let scores = vec![
+            dummy_score(0, "map_1", 500.0, 100.0, 1_000_000),
+            dummy_score(0, "map_2", 400.0, 90.0, 800_000),
+        ];
+
+        player.calculate_stats(&scores, None, 2);
+        let expected_acc = (100.0 * 1.0 + 90.0 * 0.95) / (1.0 + 0.95);
+        assert!((player.acc - expected_acc).abs() < 1e-6);
     }
 }
