@@ -436,7 +436,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                     };
 
                     for sc in filtered {
-                        friend_entries.push(sc.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode));
+                        friend_entries.push(sc.as_leaderboard_entry(pp_leaderboard, false, current_mode));
                     }
                 }
             }
@@ -518,7 +518,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
 
         for sc in &sorted {
-            lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode));
+            lb.scores.push(sc.as_leaderboard_entry(pp_leaderboard, false, current_mode));
         }
     }
 
@@ -550,9 +550,9 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
             lb.personal_score = Some(personal_entry.clone());
 
-            if is_global {
-                let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
+            let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
 
+            if is_global {
                 lb.scores.push(entry_for_list);
                 lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
 
@@ -564,7 +564,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             } else if rank_type == LeaderboardTypes::Friends
                 && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
             {
-                lb.scores.push(personal_entry);
+                lb.scores.push(entry_for_list);
                 lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
             }
         }
@@ -1717,6 +1717,78 @@ mod tests {
         let (res1, res2) = tokio::join!(handle1, handle2);
         assert!(res1.is_ok());
         assert!(res2.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_show_pp_pb_isolation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PBUser").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.beatmap_id = 4444;
+        bmap.beatmapset_id = 7777;
+        bmap.approved = 1;
+        bmap.file_md5 = "pb_isolation_md5".to_string();
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let score = Score {
+            mode: 0,
+            md5: "pb_isolation_md5".to_string(),
+            name: "PBUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 12_345_678,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(450.0),
+            replay_md5: None,
+            scoreid: Some(99),
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &score, "ranked").unwrap();
+
+        let mut config = crate::types::config::Config::default();
+        config.pp_leaderboard = false;
+        config.show_pp_for_personal_best = true;
+
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("PBUser".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Query local leaderboard (v=0)
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "pb_isolation_md5".to_string());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "0".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state.clone(), "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await;
+        let body_str = String::from_utf8(resp.body).unwrap();
+        let lines: Vec<&str> = body_str.lines().collect();
+
+        // Line 4 is personal best score line, Line 5 is the first ranked score on the leaderboard list
+        assert!(lines.len() >= 6, "Must have header, offset, title, rating, personal score, and leaderboard score");
+        let pb_line = lines[4];
+        let lb_line = lines[5];
+
+        // Personal score line should contain PP (450) because show_pp_for_personal_best = true
+        assert!(pb_line.contains("|450|"), "Personal best banner must display PP: got {}", pb_line);
+
+        // Leaderboard score line should contain total score (12345678), NOT PP!
+        assert!(lb_line.contains("|12345678|"), "Leaderboard list entry must display score, NOT PP: got {}", lb_line);
+        assert!(!lb_line.contains("|450|"), "Leaderboard list entry must NOT leak show_pp_pb: got {}", lb_line);
     }
 }
 
