@@ -198,41 +198,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_avatar_route_matching() {
+    fn test_route_matching() {
         let query = HashMap::new();
-        assert_eq!(match_route("/a/4", &query), RouteMatch::Avatar(4));
-        assert_eq!(match_route("/4", &query), RouteMatch::Avatar(4));
-        assert_eq!(match_route("/4.png", &query), RouteMatch::Avatar(4));
-        assert_eq!(match_route("/3", &query), RouteMatch::Avatar(3));
-        assert_eq!(match_route("/2070907", &query), RouteMatch::Avatar(2070907));
-        assert_eq!(match_route("/u/4", &query), RouteMatch::BeatmapWeb("/users/2070907".to_string()));
-    }
+        let cases = [
+            ("/a/4", RouteMatch::Avatar(4)),
+            ("/4", RouteMatch::Avatar(4)),
+            ("/4.png", RouteMatch::Avatar(4)),
+            ("/3", RouteMatch::Avatar(3)),
+            ("/2070907", RouteMatch::Avatar(2070907)),
+            ("/u/4", RouteMatch::BeatmapWeb("/users/2070907".to_string())),
+            ("/d/2620610", RouteMatch::Download(2620610, false)),
+            ("/osu/d/2620610", RouteMatch::Download(2620610, false)),
+            ("/d/2620610n", RouteMatch::Download(2620610, true)),
+            ("/osu/d/2620610n", RouteMatch::Download(2620610, true)),
+            ("/thumb/2620610l.jpg", RouteMatch::Thumbnail("2620610l.jpg".to_string())),
+            ("/osu/thumb/2620610l.jpg", RouteMatch::Thumbnail("2620610l.jpg".to_string())),
+            ("/b/thumb/2620610l.jpg", RouteMatch::Thumbnail("2620610l.jpg".to_string())),
+            ("/b/2620610l.jpg", RouteMatch::Thumbnail("2620610l.jpg".to_string())),
+            ("/preview/2620610.mp3", RouteMatch::Preview("2620610.mp3".to_string())),
+            ("/osu/preview/2620610.mp3", RouteMatch::Preview("2620610.mp3".to_string())),
+            ("/osu/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
+            ("/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
+            ("/web/osu-osz2-getscores.php", RouteMatch::Web("/osu-osz2-getscores.php".to_string())),
+        ];
 
-    #[test]
-    fn test_download_routes() {
-        let query = HashMap::new();
-        assert_eq!(match_route("/d/2620610", &query), RouteMatch::Download(2620610, false));
-        assert_eq!(match_route("/osu/d/2620610", &query), RouteMatch::Download(2620610, false));
-        assert_eq!(match_route("/d/2620610n", &query), RouteMatch::Download(2620610, true));
-        assert_eq!(match_route("/osu/d/2620610n", &query), RouteMatch::Download(2620610, true));
-    }
-
-    #[test]
-    fn test_thumbnail_and_preview_routes() {
-        let query = HashMap::new();
-        assert_eq!(match_route("/thumb/2620610l.jpg", &query), RouteMatch::Thumbnail("2620610l.jpg".to_string()));
-        assert_eq!(match_route("/osu/thumb/2620610l.jpg", &query), RouteMatch::Thumbnail("2620610l.jpg".to_string()));
-        assert_eq!(match_route("/b/thumb/2620610l.jpg", &query), RouteMatch::Thumbnail("2620610l.jpg".to_string()));
-        assert_eq!(match_route("/b/2620610l.jpg", &query), RouteMatch::Thumbnail("2620610l.jpg".to_string()));
-        assert_eq!(match_route("/preview/2620610.mp3", &query), RouteMatch::Preview("2620610.mp3".to_string()));
-        assert_eq!(match_route("/osu/preview/2620610.mp3", &query), RouteMatch::Preview("2620610.mp3".to_string()));
-    }
-
-    #[test]
-    fn test_web_routes() {
-        let query = HashMap::new();
-        assert_eq!(match_route("/osu/web/osu-search.php", &query), RouteMatch::Web("/osu-search.php".to_string()));
-        assert_eq!(match_route("/web/osu-search.php", &query), RouteMatch::Web("/osu-search.php".to_string()));
-        assert_eq!(match_route("/web/osu-osz2-getscores.php", &query), RouteMatch::Web("/osu-osz2-getscores.php".to_string()));
+        for (path, expected) in cases {
+            assert_eq!(match_route(path, &query), expected, "Route failed for {}", path);
+        }
     }
 }

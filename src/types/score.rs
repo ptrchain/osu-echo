@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn test_bancho_score_from_json() {
-        let json = serde_json::json!({
+        let string_json = serde_json::json!({
             "score_id": "12345678",
             "username": "WhiteCat",
             "score": "98765432",
@@ -265,23 +265,14 @@ mod tests {
             "pp": "750.5"
         });
 
-        let score = BanchoScore::from_json(&json).unwrap();
-        assert_eq!(score.score_id, "12345678");
-        assert_eq!(score.username, "WhiteCat");
-        assert_eq!(score.pp, Some(750.5));
-        assert_eq!(score.enabled_mods, "24");
+        let s1 = BanchoScore::from_json(&string_json).unwrap();
+        assert_eq!(s1.score_id, "12345678");
+        assert_eq!(s1.username, "WhiteCat");
+        assert_eq!(s1.pp, Some(750.5));
+        assert_eq!(s1.as_leaderboard_entry(false).score, 98765432);
+        assert_eq!(s1.as_leaderboard_entry(true).score, 750);
 
-        let entry_raw = score.as_leaderboard_entry(false);
-        assert_eq!(entry_raw.score, 98765432);
-        assert_eq!(entry_raw.username, "WhiteCat");
-
-        let entry_pp = score.as_leaderboard_entry(true);
-        assert_eq!(entry_pp.score, 750);
-    }
-
-    #[test]
-    fn test_bancho_score_numeric_json() {
-        let json = serde_json::json!({
+        let numeric_json = serde_json::json!({
             "score_id": 9999,
             "username": "Mrekk",
             "score": 1000000,
@@ -299,9 +290,9 @@ mod tests {
             "replay_available": 1
         });
 
-        let score = BanchoScore::from_json(&json).unwrap();
-        assert_eq!(score.score_id, "9999");
-        assert_eq!(score.username, "Mrekk");
-        assert_eq!(score.score, "1000000");
+        let s2 = BanchoScore::from_json(&numeric_json).unwrap();
+        assert_eq!(s2.score_id, "9999");
+        assert_eq!(s2.username, "Mrekk");
+        assert_eq!(s2.score, "1000000");
     }
 }

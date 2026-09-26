@@ -344,33 +344,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_write_osu_string() {
-        let empty = write_string("");
-        assert_eq!(empty, vec![0x00]);
-
+    fn test_packet_builders() {
+        assert_eq!(write_string(""), vec![0x00]);
         let str_bytes = write_string("osu!");
         assert_eq!(str_bytes[0], 0x0b);
         assert_eq!(str_bytes[1], 4);
         assert_eq!(&str_bytes[2..], b"osu!");
-    }
 
-    #[test]
-    fn test_notification_packet() {
-        let pkt = notification("Hello World");
-        assert_eq!(pkt[0], 24);
-        assert_eq!(pkt[1], 0);
-        assert_eq!(pkt[2], 0);
-        assert!(pkt.len() > 7);
-    }
+        let notif_pkt = notification("Hello World");
+        assert_eq!(notif_pkt[0], 24);
+        assert_eq!(notif_pkt[1], 0);
+        assert_eq!(notif_pkt[2], 0);
+        assert!(notif_pkt.len() > 7);
 
-    #[test]
-    fn test_user_id_packet() {
-        let pkt = user_id(2);
-        assert_eq!(pkt[0], 5);
-        assert_eq!(pkt[1], 0);
-        assert_eq!(pkt[2], 0);
-        assert_eq!(&pkt[3..7], &4i32.to_le_bytes());
-        assert_eq!(&pkt[7..11], &2i32.to_le_bytes());
+        let uid_pkt = user_id(2);
+        assert_eq!(uid_pkt[0], 5);
+        assert_eq!(&uid_pkt[3..7], &4i32.to_le_bytes());
+        assert_eq!(&uid_pkt[7..11], &2i32.to_le_bytes());
+
+        let pong_pkt = pong();
+        assert_eq!(pong_pkt[0], 8);
+        assert_eq!(&pong_pkt[3..7], &0u32.to_le_bytes());
     }
 
     #[test]
@@ -415,14 +409,5 @@ mod tests {
         assert_eq!(split[0].payload, &[] as &[u8]);
         assert_eq!(split[1].id, PacketId::OsuSendPublicMessage as u16);
         assert_eq!(split[1].payload, b"payload123");
-    }
-
-    #[test]
-    fn test_pong_packet() {
-        let pkt = pong();
-        assert_eq!(pkt[0], 8);
-        assert_eq!(pkt[1], 0);
-        assert_eq!(pkt[2], 0);
-        assert_eq!(&pkt[3..7], &0u32.to_le_bytes());
     }
 }

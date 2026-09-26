@@ -84,41 +84,36 @@ mod tests {
     use crate::utils;
 
     #[test]
-    fn test_parse_np_message_direct() {
+    fn test_parse_np_message_variants() {
         assert!(parse_np_message("/np").is_some());
         assert!(parse_np_message("!np").is_some());
         assert!(parse_np_message("/np ").is_some());
         assert!(parse_np_message("hello").is_none());
-    }
 
-    #[test]
-    fn test_parse_np_message_action() {
-        let msg = "\x01ACTION is listening to [https://osu.ppy.sh/b/123456 Artist - Title [Insane]]\x01";
-        let info = parse_np_message(msg).unwrap();
-        assert_eq!(info.map_id, Some(123456));
-        assert_eq!(info.mods, None);
+        let action = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/b/123456 Artist - Title [Insane]]\x01").unwrap();
+        assert_eq!(action.map_id, Some(123456));
+        assert_eq!(action.mods, None);
 
-        let msg_playing = "\x01ACTION is playing [https://osu.ppy.sh/b/98765 Artist - Title [Extra]] <+HDDT>\x01";
-        let info_playing = parse_np_message(msg_playing).unwrap();
-        assert_eq!(info_playing.map_id, Some(98765));
-        assert_eq!(info_playing.mods, Some((Mods::HIDDEN | Mods::DOUBLETIME).bits()));
-    }
+        let playing = parse_np_message("\x01ACTION is playing [https://osu.ppy.sh/b/98765 Artist - Title [Extra]] <+HDDT>\x01").unwrap();
+        assert_eq!(playing.map_id, Some(98765));
+        assert_eq!(playing.mods, Some((Mods::HIDDEN | Mods::DOUBLETIME).bits()));
 
-    #[test]
-    fn test_parse_np_message_cuttingedge() {
-        let msg = "\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/1222729#osu/2543274 VINXIS - Sidetracked Day GAMMA]\x01";
-        let info = parse_np_message(msg).unwrap();
-        assert_eq!(info.map_id, Some(2543274));
-        assert_eq!(info.set_id, Some(1222729));
-        assert_eq!(info.title_hint.as_deref(), Some("VINXIS - Sidetracked Day GAMMA"));
-    }
+        let ce = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/1222729#osu/2543274 VINXIS - Sidetracked Day GAMMA]\x01").unwrap();
+        assert_eq!(ce.map_id, Some(2543274));
+        assert_eq!(ce.set_id, Some(1222729));
+        assert_eq!(ce.title_hint.as_deref(), Some("VINXIS - Sidetracked Day GAMMA"));
 
-    #[test]
-    fn test_parse_np_message_plain_action() {
-        let msg = "*w is listening to VINXIS - Sidetracked Day GAMMA";
-        let info = parse_np_message(msg).unwrap();
-        assert_eq!(info.map_id, None);
-        assert_eq!(info.title_hint.as_deref(), Some("VINXIS - Sidetracked Day GAMMA"));
+        let plain = parse_np_message("*w is listening to VINXIS - Sidetracked Day GAMMA").unwrap();
+        assert_eq!(plain.map_id, None);
+        assert_eq!(plain.title_hint.as_deref(), Some("VINXIS - Sidetracked Day GAMMA"));
+
+        let edit = parse_np_message("\x01ACTION is editing [https://osu.ppy.sh/b/54321 MapArtist - EditTitle [Insane]] +HD\x01").unwrap();
+        assert_eq!(edit.map_id, Some(54321));
+        assert_eq!(edit.mods, Some(Mods::HIDDEN.bits()));
+
+        let slash = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/123456/789012 Artist - SlashTitle [Hard]]\x01").unwrap();
+        assert_eq!(slash.set_id, Some(123456));
+        assert_eq!(slash.map_id, Some(789012));
     }
 
     #[test]
@@ -388,19 +383,6 @@ mod tests {
             assert_eq!(sender, "Tillerino");
             assert_eq!(sender_id, 4);
         }
-    }
-
-    #[test]
-    fn test_parse_np_message_editing_and_slash_format() {
-        let edit_msg = "\x01ACTION is editing [https://osu.ppy.sh/b/54321 MapArtist - EditTitle [Insane]] +HD\x01";
-        let info = parse_np_message(edit_msg).unwrap();
-        assert_eq!(info.map_id, Some(54321));
-        assert_eq!(info.mods, Some(Mods::HIDDEN.bits()));
-
-        let slash_msg = "\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/123456/789012 Artist - SlashTitle [Hard]]\x01";
-        let info2 = parse_np_message(slash_msg).unwrap();
-        assert_eq!(info2.set_id, Some(123456));
-        assert_eq!(info2.map_id, Some(789012));
     }
 
     #[tokio::test]

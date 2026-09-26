@@ -575,21 +575,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_paths_default_resolution() {
+    fn test_paths_resolution() {
         let mut config = Config::default();
         config.paths.osu_path = Some("C:\\osu".to_string());
-
         assert_eq!(config.songs_folder(), Some(PathBuf::from("C:\\osu\\Songs")));
         assert_eq!(config.replay_folder(), Some(PathBuf::from("C:\\osu\\Replays")));
         assert_eq!(config.screenshots_folder(), Some(PathBuf::from("C:\\osu\\Screenshots")));
-    }
 
-    #[test]
-    fn test_custom_paths_override_osu_path() {
-        let mut config = Config::default();
-        config.paths.osu_path = Some("C:\\osu".to_string());
         config.paths.songs = Some("D:\\CustomSongs".to_string());
-
         assert_eq!(config.songs_folder(), Some(PathBuf::from("D:\\CustomSongs")));
         assert_eq!(config.replay_folder(), Some(PathBuf::from("C:\\osu\\Replays")));
     }
