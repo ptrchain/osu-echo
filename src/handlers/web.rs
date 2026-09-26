@@ -149,8 +149,8 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
     // If player is not yet set in state (e.g. concurrent login), wait briefly for in-flight login to complete
     if state.read().await.player.is_none() {
-        for _ in 0..40 {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        for _ in 0..5 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             if state.read().await.player.is_some() {
                 break;
             }
