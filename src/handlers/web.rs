@@ -341,11 +341,10 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    let (current_mode, is_restricted, http, db, config) = {
+    let (current_mode, http, db, config) = {
         let s = state.read().await;
         (
             s.mode,
-            s.player.as_ref().map_or(false, |p| p.is_restricted),
             s.http.clone(),
             s.db.clone(),
             s.config.clone(),
@@ -545,28 +544,26 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         personal_candidates.sort_by_key(|a| std::cmp::Reverse(a.score));
     }
 
-    if !is_restricted {
-        if let Some(best) = personal_candidates.first() {
-            let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
-            lb.personal_score = Some(personal_entry.clone());
+    if let Some(best) = personal_candidates.first() {
+        let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
+        lb.personal_score = Some(personal_entry.clone());
 
-            let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
+        let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
 
-            if is_global {
-                lb.scores.push(entry_for_list);
-                lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
+        if is_global {
+            lb.scores.push(entry_for_list);
+            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
 
-                if let Some(pos) = lb.scores.iter().position(|s| s.score_id == lb.personal_score.as_ref().unwrap().score_id && s.username == player_name) {
-                    if pos >= 100 {
-                        lb.scores.remove(pos);
-                    }
+            if let Some(pos) = lb.scores.iter().position(|s| s.score_id == lb.personal_score.as_ref().unwrap().score_id && s.username == player_name) {
+                if pos >= 100 {
+                    lb.scores.remove(pos);
                 }
-            } else if rank_type == LeaderboardTypes::Friends
-                && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
-            {
-                lb.scores.push(entry_for_list);
-                lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
             }
+        } else if rank_type == LeaderboardTypes::Friends
+            && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
+        {
+            lb.scores.push(entry_for_list);
+            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
         }
     }
 
@@ -1615,6 +1612,77 @@ mod tests {
 
         assert_eq!(resp.status, hyper::StatusCode::OK);
         assert_eq!(resp.body, b"error: ban\n");
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_while_restricted_shows_personal_score() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "RestrictedLBUser").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "0123456789abcdef0123456789abcdef".to_string();
+        bmap.beatmap_id = 999999;
+        bmap.beatmapset_id = 888888;
+        bmap.approved = 1;
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let sample_score = Score {
+            mode: 0,
+            md5: bmap.file_md5.clone(),
+            name: "RestrictedLBUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 500_000,
+            max_combo: 100,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(150.0),
+            replay_md5: None,
+            scoreid: Some(999),
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &sample_score, "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("RestrictedLBUser".to_string());
+        player.is_restricted = true;
+        app_state.player = Some(player);
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "0123456789abcdef0123456789abcdef".to_string());
+        params.insert("m".to_string(), "0".to_string());
+        params.insert("v".to_string(), "1".to_string());
+        params.insert("u".to_string(), "RestrictedLBUser".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(
+            shared_state,
+            "/osu-osz2-getscores.php",
+            &params,
+            &hyper::Method::GET,
+            &headers,
+            b"",
+        ).await;
+
+        let body_str = String::from_utf8_lossy(&resp.body);
+        let lines: Vec<&str> = body_str.lines().collect();
+        assert!(lines.len() >= 5, "Response must include header and personal score lines");
+        let personal_score_line = lines[4];
+        assert!(personal_score_line.contains("RestrictedLBUser"), "Personal best banner must be shown even when restricted");
     }
 
     #[tokio::test]

@@ -1672,26 +1672,22 @@ pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &st
         p.rank = 0;
         p.pp = 0;
 
-        // 1. In-game notification banner (the iconic yellow toast)
         p.queue.extend_from_slice(&packets::notification(
             "Your account is currently in restricted mode! Please visit the osu! website for more information."
         ));
 
-        // 2. Strip privileges
         p.queue.extend_from_slice(&packets::bancho_privs(0));
 
-        // 3. User stats and presence reflecting restriction (rank 0, pp 0, privs 0)
         p.enqueue_stats();
         p.queue.extend_from_slice(&packets::user_presence(p));
 
-        // 4. BanchoBot direct message with official wording
         let pm_text = if let Some(ref r) = reason {
             format!(
-                "Your account is currently in restricted mode! Please visit the osu! website for more information.\nReason: {}\n(Note: This is simulated for funsies. Type !restrictself or !unrestrict to lift restriction.)",
+                "Your account is currently in restricted mode! Please visit the osu! website for more information.\nReason: {}",
                 r
             )
         } else {
-            "Your account is currently in restricted mode! Please visit the osu! website for more information.\n(Note: This is simulated for funsies. Type !restrictself or !unrestrict to lift restriction.)".to_string()
+            "Your account is currently in restricted mode! Please visit the osu! website for more information.".to_string()
         };
 
         let pm_pkt = packets::send_msg("BanchoBot", &pm_text, &p.name, BOT_ID);
@@ -1723,7 +1719,6 @@ pub async fn handle_unrestrictself(state: &Arc<RwLock<AppState>>, player_name: &
         return;
     }
 
-    // Recalculate true stats from DB and restore global rank if configured
     recalculate_profile(state, player_name).await;
 
     let mut s = state.write().await;
@@ -2368,7 +2363,6 @@ mod tests {
 
         let state = Arc::new(RwLock::new(app_state));
 
-        // 1. Invoke !restrictself with a custom reason
         handle_restrictself(&state, "RestrictedUser", "#osu", &["blatant", "relax", "hacks"]).await;
 
         {
@@ -2380,7 +2374,6 @@ mod tests {
             assert_eq!(p.pp, 0, "PP must be wiped to 0");
         }
 
-        // Verify queued packets: notification, bancho_privs(0), user_stats, user_presence, BanchoBot message
         let queue = {
             let mut s = state.write().await;
             s.player.as_mut().unwrap().clear_queue()
@@ -2391,13 +2384,11 @@ mod tests {
         assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Must queue ChoUserStats packet");
         assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserPresence as u16), "Must queue ChoUserPresence packet");
 
-        // Verify notification content
         let notif_pkt = pkts.iter().find(|pkt| pkt.id == packets::PacketId::ChoNotification as u16).unwrap();
         let mut notif_reader = packets::PacketReader::new(notif_pkt.payload);
         let notif_text = notif_reader.read_string().unwrap();
         assert!(notif_text.contains("restricted mode"), "Notification must mention restricted mode");
 
-        // Verify BanchoBot message includes the reason
         let msg_pkt = pkts.iter().find(|pkt| {
             if pkt.id == packets::PacketId::ChoSendMessage as u16 {
                 let mut r = packets::PacketReader::new(pkt.payload);
@@ -2410,7 +2401,6 @@ mod tests {
         });
         assert!(msg_pkt.is_some(), "BanchoBot message must mention the restriction reason");
 
-        // 2. Invoke !restrictself again (toggle off)
         handle_restrictself(&state, "RestrictedUser", "#osu", &[]).await;
 
         {
@@ -2420,7 +2410,6 @@ mod tests {
             assert_eq!(p.bancho_privs, 63, "Bancho privileges must be restored");
         }
 
-        // Verify unrestrict notification and packets
         let unrestrict_queue = {
             let mut s = state.write().await;
             s.player.as_mut().unwrap().clear_queue()
@@ -2436,7 +2425,6 @@ mod tests {
             }
         }), "Must queue restriction lifted notification");
 
-        // 3. Test explicit !unrestrict when not restricted
         handle_unrestrictself(&state, "RestrictedUser", "#osu").await;
         let not_restricted_queue = {
             let mut s = state.write().await;

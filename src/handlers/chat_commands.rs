@@ -70,7 +70,7 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
                 banchobot::reply(&state, player_name, "Your account is currently in restricted mode! Cannot message other users.").await;
                 return;
             } else if !is_pm {
-                banchobot::reply(&state, player_name, "Your account is currently in restricted mode! Chatting in public channels is disabled. (Type !unrestrict to lift restriction)").await;
+                banchobot::reply(&state, player_name, "Your account is currently in restricted mode! Chatting in public channels is disabled.").await;
                 return;
             }
         }
@@ -624,7 +624,6 @@ mod tests {
 
         let shared_state = Arc::new(RwLock::new(app_state));
 
-        // 1. Trying to send a general command in #osu while restricted should be blocked
         handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!roll", "#osu").await;
         {
             let mut s = shared_state.write().await;
@@ -637,10 +636,8 @@ mod tests {
             let _sender = r.read_string().unwrap();
             let msg = r.read_string().unwrap();
             assert!(msg.contains("restricted mode"), "Must notify about restricted mode blocking public chat");
-            assert!(msg.contains("!unrestrict"), "Must provide unrestrict instruction");
         }
 
-        // 2. Messaging Tillerino while restricted should be blocked with explanation
         handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!r", "Tillerino").await;
         {
             let mut s = shared_state.write().await;
@@ -655,7 +652,6 @@ mod tests {
             assert!(msg.contains("Cannot message other users"));
         }
 
-        // 3. Sending !unrestrict in #osu should succeed and lift restriction
         handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!unrestrict", "#osu").await;
         {
             let s = shared_state.read().await;
