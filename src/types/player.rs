@@ -24,6 +24,7 @@ pub struct Player {
     pub info_text: String,
     pub location: (f32, f32),
     pub bancho_privs: i32,
+    pub is_restricted: bool,
 }
 
 impl Player {
@@ -48,6 +49,7 @@ impl Player {
             info_text: String::new(),
             location: (0.0, 0.0),
             bancho_privs: 63,
+            is_restricted: false,
         }
     }
 

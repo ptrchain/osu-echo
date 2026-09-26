@@ -54,6 +54,28 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
     let cmd = parts[0].to_lowercase();
     let args = &parts[1..];
 
+    let is_restricted = {
+        let s = state.read().await;
+        s.player.as_ref().map_or(false, |p| p.is_restricted)
+    };
+
+    if is_restricted {
+        let is_unrestrict_cmd = matches!(
+            cmd.as_str(),
+            "restrictself" | "restrict" | "unrestrictself" | "unrestrict" | "help" | "commands"
+        );
+
+        if !is_unrestrict_cmd {
+            if is_tillerino {
+                banchobot::reply(&state, player_name, "Your account is currently in restricted mode! Cannot message other users.").await;
+                return;
+            } else if !is_pm {
+                banchobot::reply(&state, player_name, "Your account is currently in restricted mode! Chatting in public channels is disabled. (Type !unrestrict to lift restriction)").await;
+                return;
+            }
+        }
+    }
+
     if is_tillerino {
         tillerino::handle_command(&state, player_name, &reply_target, &cmd, args).await;
         return;
@@ -585,6 +607,60 @@ mod tests {
             let msg = r.read_string().unwrap();
             assert_eq!(sender, "BanchoBot");
             assert!(msg.contains("Profile recalculation complete!"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_restricted_mode_chat_blocks_public_but_allows_unrestrict() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "RestrictedChatUser").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("RestrictedChatUser".to_string());
+        player.is_restricted = true;
+        app_state.player = Some(player);
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // 1. Trying to send a general command in #osu while restricted should be blocked
+        handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!roll", "#osu").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty(), "Must reply to user with restriction notice");
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Message packet not found");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("restricted mode"), "Must notify about restricted mode blocking public chat");
+            assert!(msg.contains("!unrestrict"), "Must provide unrestrict instruction");
+        }
+
+        // 2. Messaging Tillerino while restricted should be blocked with explanation
+        handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!r", "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty(), "Must reply with restriction warning");
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("Message packet not found");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("Cannot message other users"));
+        }
+
+        // 3. Sending !unrestrict in #osu should succeed and lift restriction
+        handle_chat_message(shared_state.clone(), "RestrictedChatUser", "!unrestrict", "#osu").await;
+        {
+            let s = shared_state.read().await;
+            let p = s.player.as_ref().unwrap();
+            assert!(!p.is_restricted, "Player must now be unrestricted");
         }
     }
 }

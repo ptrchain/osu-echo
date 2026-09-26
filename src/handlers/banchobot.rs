@@ -49,6 +49,8 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "country" | "flag" => handle_country(state, player_name, reply_target, args).await,
         "mybest" | "pb" => handle_mybest(state, player_name, reply_target).await,
         "leaderboard" | "lb" => handle_leaderboard(state, player_name, reply_target).await,
+        "restrictself" | "restrict" => handle_restrictself(state, player_name, reply_target, args).await,
+        "unrestrictself" | "unrestrict" => handle_unrestrictself(state, player_name, reply_target).await,
         _ => {
             reply(state, reply_target, &format!("Unknown command: !{}. Type !help for commands.", cmd)).await;
         }
@@ -76,6 +78,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}roll [max] : Roll a random number (default 100)\n\
         {p}recalc / {p}recalculate : Recalculate all profile stats & scores\n\
         {p}wipe : Wipe profile stats\n\
+        {p}restrictself [reason] / {p}unrestrict : Mimic being banned on official osu! (toggle on/off)\n\
         {p}avatar <url or path> : Change avatar\n\
         {p}config : Server settings summary\n\n\
         Tillerino Commands (PM Tillerino or in chat):\n\
@@ -1629,6 +1632,120 @@ pub async fn handle_config(state: &Arc<RwLock<AppState>>, target: &str) {
     reply(state, target, &msg).await;
 }
 
+pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &str, reply_target: &str, args: &[&str]) {
+    if let Some(&sub) = args.first() {
+        if sub.eq_ignore_ascii_case("off") || sub.eq_ignore_ascii_case("undo") || sub.eq_ignore_ascii_case("lift") {
+            handle_unrestrictself(state, player_name, reply_target).await;
+            return;
+        }
+    }
+
+    let is_already_restricted = {
+        let s = state.read().await;
+        s.player.as_ref().map_or(false, |p| p.is_restricted)
+    };
+
+    if is_already_restricted && args.is_empty() {
+        handle_unrestrictself(state, player_name, reply_target).await;
+        return;
+    }
+
+    let reason = if !args.is_empty() {
+        let filtered_args: Vec<&str> = if args.first() == Some(&"on") {
+            args[1..].to_vec()
+        } else {
+            args.to_vec()
+        };
+        if filtered_args.is_empty() {
+            None
+        } else {
+            Some(filtered_args.join(" "))
+        }
+    } else {
+        None
+    };
+
+    let mut s = state.write().await;
+    if let Some(ref mut p) = s.player {
+        p.is_restricted = true;
+        p.bancho_privs = 0;
+        p.rank = 0;
+        p.pp = 0;
+
+        // 1. In-game notification banner (the iconic yellow toast)
+        p.queue.extend_from_slice(&packets::notification(
+            "Your account is currently in restricted mode! Please visit the osu! website for more information."
+        ));
+
+        // 2. Strip privileges
+        p.queue.extend_from_slice(&packets::bancho_privs(0));
+
+        // 3. User stats and presence reflecting restriction (rank 0, pp 0, privs 0)
+        p.enqueue_stats();
+        p.queue.extend_from_slice(&packets::user_presence(p));
+
+        // 4. BanchoBot direct message with official wording
+        let pm_text = if let Some(ref r) = reason {
+            format!(
+                "Your account is currently in restricted mode! Please visit the osu! website for more information.\nReason: {}\n(Note: This is simulated for funsies. Type !restrictself or !unrestrict to lift restriction.)",
+                r
+            )
+        } else {
+            "Your account is currently in restricted mode! Please visit the osu! website for more information.\n(Note: This is simulated for funsies. Type !restrictself or !unrestrict to lift restriction.)".to_string()
+        };
+
+        let pm_pkt = packets::send_msg("BanchoBot", &pm_text, &p.name, BOT_ID);
+        p.queue.extend_from_slice(&pm_pkt);
+
+        if reply_target.starts_with('#') {
+            let chan_text = format!("{} is now in restricted mode.", p.name);
+            let chan_pkt = packets::send_msg("BanchoBot", &chan_text, reply_target, BOT_ID);
+            p.queue.extend_from_slice(&chan_pkt);
+        }
+    }
+}
+
+pub async fn handle_unrestrictself(state: &Arc<RwLock<AppState>>, player_name: &str, reply_target: &str) {
+    let was_restricted = {
+        let mut s = state.write().await;
+        if let Some(ref mut p) = s.player {
+            let was = p.is_restricted;
+            p.is_restricted = false;
+            p.bancho_privs = 63;
+            was
+        } else {
+            false
+        }
+    };
+
+    if !was_restricted {
+        reply(state, reply_target, "You are not currently in restricted mode.").await;
+        return;
+    }
+
+    // Recalculate true stats from DB and restore global rank if configured
+    recalculate_profile(state, player_name).await;
+
+    let mut s = state.write().await;
+    if let Some(ref mut p) = s.player {
+        p.bancho_privs = 63;
+        p.queue.extend_from_slice(&packets::bancho_privs(63));
+        p.queue.extend_from_slice(&packets::notification(
+            "Your account restriction has been lifted! Welcome back."
+        ));
+        p.queue.extend_from_slice(&packets::user_presence(p));
+
+        let pm_text = "Your restriction has been lifted! Your stats and rankings have been restored. Have fun playing!";
+        let pm_pkt = packets::send_msg("BanchoBot", pm_text, &p.name, BOT_ID);
+        p.queue.extend_from_slice(&pm_pkt);
+
+        if reply_target.starts_with('#') {
+            let chan_pkt = packets::send_msg("BanchoBot", pm_text, reply_target, BOT_ID);
+            p.queue.extend_from_slice(&chan_pkt);
+        }
+    }
+}
+
 pub async fn handle_roll(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     let max = args.first().and_then(|s| s.parse::<u32>().ok()).unwrap_or(100);
     let result = roll_dice(max);
@@ -2233,5 +2350,109 @@ mod tests {
             }
         });
         assert!(status_found, "Status set message must report mixed diff counts");
+    }
+
+    #[tokio::test]
+    async fn test_restrictself_and_unrestrictself_flow() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "RestrictedUser").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("RestrictedUser".to_string());
+        player.rank = 1234;
+        player.pp = 500;
+        player.bancho_privs = 63;
+        app_state.player = Some(player);
+
+        let state = Arc::new(RwLock::new(app_state));
+
+        // 1. Invoke !restrictself with a custom reason
+        handle_restrictself(&state, "RestrictedUser", "#osu", &["blatant", "relax", "hacks"]).await;
+
+        {
+            let s = state.read().await;
+            let p = s.player.as_ref().unwrap();
+            assert!(p.is_restricted, "Player must be marked as restricted");
+            assert_eq!(p.bancho_privs, 0, "Bancho privileges must be revoked to 0");
+            assert_eq!(p.rank, 0, "Rank must be wiped to 0");
+            assert_eq!(p.pp, 0, "PP must be wiped to 0");
+        }
+
+        // Verify queued packets: notification, bancho_privs(0), user_stats, user_presence, BanchoBot message
+        let queue = {
+            let mut s = state.write().await;
+            s.player.as_mut().unwrap().clear_queue()
+        };
+        let pkts = packets::split_packets(&queue);
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoNotification as u16), "Must queue restriction notification");
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoPrivileges as u16), "Must queue ChoPrivileges packet");
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Must queue ChoUserStats packet");
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserPresence as u16), "Must queue ChoUserPresence packet");
+
+        // Verify notification content
+        let notif_pkt = pkts.iter().find(|pkt| pkt.id == packets::PacketId::ChoNotification as u16).unwrap();
+        let mut notif_reader = packets::PacketReader::new(notif_pkt.payload);
+        let notif_text = notif_reader.read_string().unwrap();
+        assert!(notif_text.contains("restricted mode"), "Notification must mention restricted mode");
+
+        // Verify BanchoBot message includes the reason
+        let msg_pkt = pkts.iter().find(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("blatant relax hacks")
+            } else {
+                false
+            }
+        });
+        assert!(msg_pkt.is_some(), "BanchoBot message must mention the restriction reason");
+
+        // 2. Invoke !restrictself again (toggle off)
+        handle_restrictself(&state, "RestrictedUser", "#osu", &[]).await;
+
+        {
+            let s = state.read().await;
+            let p = s.player.as_ref().unwrap();
+            assert!(!p.is_restricted, "Player must no longer be restricted after toggle");
+            assert_eq!(p.bancho_privs, 63, "Bancho privileges must be restored");
+        }
+
+        // Verify unrestrict notification and packets
+        let unrestrict_queue = {
+            let mut s = state.write().await;
+            s.player.as_mut().unwrap().clear_queue()
+        };
+        let unrestrict_pkts = packets::split_packets(&unrestrict_queue);
+        assert!(unrestrict_pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoNotification as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("restriction has been lifted")
+            } else {
+                false
+            }
+        }), "Must queue restriction lifted notification");
+
+        // 3. Test explicit !unrestrict when not restricted
+        handle_unrestrictself(&state, "RestrictedUser", "#osu").await;
+        let not_restricted_queue = {
+            let mut s = state.write().await;
+            s.player.as_mut().unwrap().clear_queue()
+        };
+        let not_restr_pkts = packets::split_packets(&not_restricted_queue);
+        let info_msg = not_restr_pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("not currently in restricted mode")
+            } else {
+                false
+            }
+        });
+        assert!(info_msg, "Must inform player they are not currently restricted");
     }
 }

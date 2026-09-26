@@ -16,6 +16,8 @@ pub fn register_commands(state: &mut AppState) {
         (vec!["wipe"], Some("wipes all stats from your current profile!"), true, Arc::new(|state, _args| Box::pin(cmd_wipe(state)))),
         (vec!["avatar"], Some("change your avatar! Example: !avatar (path or URL)"), true, Arc::new(|state, args| Box::pin(cmd_avatar(state, args)))),
         (vec!["config"], Some("shows current config!"), false, Arc::new(|state, _args| Box::pin(cmd_config(state)))),
+        (vec!["restrictself", "restrict"], Some("mimic being banned on official osu! (toggle on/off)"), false, Arc::new(|state, args| Box::pin(cmd_restrictself(state, args)))),
+        (vec!["unrestrictself", "unrestrict"], Some("lift your self-restriction"), false, Arc::new(|state, _args| Box::pin(cmd_unrestrictself(state)))),
     ];
 
     for (names, docs, confirm, func) in commands {
@@ -182,4 +184,23 @@ async fn cmd_config(state: Arc<RwLock<AppState>>) -> Option<Vec<u8>> {
     let config_str = format!("{:#?}", s.config);
     let resp = DirectResponse::from_str(&config_str, -2);
     Some(resp.as_binary())
+}
+
+async fn cmd_restrictself(state: Arc<RwLock<AppState>>, args: Vec<String>) -> Option<Vec<u8>> {
+    let s = state.read().await;
+    let player_name = s.player.as_ref()?.name.clone();
+    drop(s);
+
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    crate::handlers::banchobot::handle_restrictself(&state, &player_name, &player_name, &str_args).await;
+    None
+}
+
+async fn cmd_unrestrictself(state: Arc<RwLock<AppState>>) -> Option<Vec<u8>> {
+    let s = state.read().await;
+    let player_name = s.player.as_ref()?.name.clone();
+    drop(s);
+
+    crate::handlers::banchobot::handle_unrestrictself(&state, &player_name, &player_name).await;
+    None
 }

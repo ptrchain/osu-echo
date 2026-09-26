@@ -51,6 +51,9 @@ async fn score_sub(state: Arc<RwLock<AppState>>, method: &hyper::Method, headers
         if s.player.is_none() {
             return Response::empty().with_status(hyper::StatusCode::NOT_FOUND);
         }
+        if s.player.as_ref().map_or(false, |p| p.is_restricted) {
+            return Response::new(b"error: ban\n".to_vec());
+        }
     }
 
     if *method != hyper::Method::POST {
@@ -227,23 +230,33 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.calculate_stats(&scores, filter_mod, playcount);
-            let pp = p.pp;
-            let current_p_mode = p.mode;
-            p.enqueue_stats();
-            drop(s_write);
+            if !p.is_restricted {
+                p.calculate_stats(&scores, filter_mod, playcount);
+                let pp = p.pp;
+                let current_p_mode = p.mode;
+                p.enqueue_stats();
+                drop(s_write);
 
-            if let Some(key) = api_key {
-                let state_clone = Arc::clone(&state);
-                tokio::spawn(async move {
-                    if let Some(r) = utils::get_rank_from_daily(&http, &key, pp, current_p_mode).await {
-                        let mut s_write = state_clone.write().await;
-                        if let Some(ref mut p) = s_write.player {
-                            p.rank = r;
-                            p.enqueue_stats();
+                if let Some(key) = api_key {
+                    let state_clone = Arc::clone(&state);
+                    tokio::spawn(async move {
+                        if let Some(r) = utils::get_rank_from_daily(&http, &key, pp, current_p_mode).await {
+                            let mut s_write = state_clone.write().await;
+                            if let Some(ref mut p) = s_write.player {
+                                if !p.is_restricted {
+                                    p.rank = r;
+                                    p.enqueue_stats();
+                                }
+                            }
                         }
-                    }
-                });
+                    });
+                }
+            } else {
+                p.rank = 0;
+                p.pp = 0;
+                p.bancho_privs = 0;
+                p.enqueue_stats();
+                drop(s_write);
             }
         }
     }
@@ -521,26 +534,29 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         personal_candidates.sort_by_key(|a| std::cmp::Reverse(a.score));
     }
 
-    if let Some(best) = personal_candidates.first() {
-        let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
-        lb.personal_score = Some(personal_entry.clone());
+    let is_restricted = s.player.as_ref().map_or(false, |p| p.is_restricted);
+    if !is_restricted {
+        if let Some(best) = personal_candidates.first() {
+            let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
+            lb.personal_score = Some(personal_entry.clone());
 
-        if is_global {
-            let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
+            if is_global {
+                let entry_for_list = if pp_leaderboard || current_mode.is_some() { personal_entry } else { best.as_leaderboard_entry(false, false, current_mode) };
 
-            lb.scores.push(entry_for_list);
-            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
+                lb.scores.push(entry_for_list);
+                lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
 
-            if let Some(pos) = lb.scores.iter().position(|s| s.score_id == lb.personal_score.as_ref().unwrap().score_id && s.username == player_name) {
-                if pos >= 100 {
-                    lb.scores.remove(pos);
+                if let Some(pos) = lb.scores.iter().position(|s| s.score_id == lb.personal_score.as_ref().unwrap().score_id && s.username == player_name) {
+                    if pos >= 100 {
+                        lb.scores.remove(pos);
+                    }
                 }
+            } else if rank_type == LeaderboardTypes::Friends
+                && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
+            {
+                lb.scores.push(personal_entry);
+                lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
             }
-        } else if rank_type == LeaderboardTypes::Friends
-            && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
-        {
-            lb.scores.push(personal_entry);
-            lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
         }
     }
 
@@ -1560,6 +1576,35 @@ mod tests {
 
         let s = shared_state.read().await;
         assert!(s.pending_login_name.is_none(), "Leaderboard queries while a player is active must NEVER pollute pending_login_name");
+    }
+
+    #[tokio::test]
+    async fn test_score_sub_while_restricted_returns_error_ban() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "RestrictedSubUser").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("RestrictedSubUser".to_string());
+        player.is_restricted = true;
+        app_state.player = Some(player);
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let headers = hyper::HeaderMap::new();
+        let params = std::collections::HashMap::new();
+        let resp = handle(
+            shared_state,
+            "/osu-submit-modular-selector.php",
+            &params,
+            &hyper::Method::POST,
+            &headers,
+            b"test_body",
+        ).await;
+
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        assert_eq!(resp.body, b"error: ban\n");
     }
 }
 
