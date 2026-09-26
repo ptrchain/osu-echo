@@ -1,3 +1,4 @@
+use colored::Colorize;
 use md5::Digest;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
@@ -167,35 +168,7 @@ pub fn detect_osu_path() -> Option<PathBuf> {
 }
 
 pub fn write_dotenv_country(country: &str) -> std::io::Result<()> {
-    let env_path = Path::new(".env");
-    let mut map = std::collections::BTreeMap::new();
-
-    if env_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(env_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with('#') || trimmed.is_empty() {
-                    continue;
-                }
-                if let Some((k, v)) = trimmed.split_once('=') {
-                    map.insert(k.trim().to_string(), v.trim().to_string());
-                }
-            }
-        }
-    }
-
-    map.insert("COUNTRY".to_string(), country.to_uppercase());
-
-    map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
-    map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
-
-    let mut out = String::from("# osu-echo - Environment Configuration\n");
-    for (k, v) in &map {
-        out.push_str(&format!("{}={}\n", k, v));
-    }
-
-    std::fs::write(env_path, out)?;
-    Ok(())
+    write_dotenv_full(None, None, Some(country), None, None, None, None, None, None, None, None)
 }
 
 pub fn write_dotenv(
@@ -206,6 +179,34 @@ pub fn write_dotenv(
     pp_leaderboard: Option<bool>,
     show_pp_for_personal_best: Option<bool>,
     amount_of_scores: Option<i32>,
+) -> std::io::Result<()> {
+    write_dotenv_full(
+        None,
+        None,
+        None,
+        username,
+        password_hash,
+        api_key,
+        daily_key,
+        pp_leaderboard,
+        show_pp_for_personal_best,
+        amount_of_scores,
+        None,
+    )
+}
+
+pub fn write_dotenv_full(
+    host: Option<&str>,
+    port: Option<u16>,
+    country: Option<&str>,
+    username: Option<&str>,
+    password_hash: Option<&str>,
+    api_key: Option<&str>,
+    daily_key: Option<&str>,
+    pp_leaderboard: Option<bool>,
+    show_pp_for_personal_best: Option<bool>,
+    amount_of_scores: Option<i32>,
+    enable_recent_channel: Option<bool>,
 ) -> std::io::Result<()> {
     let env_path = Path::new(".env");
     let mut map = std::collections::BTreeMap::new();
@@ -224,6 +225,15 @@ pub fn write_dotenv(
         }
     }
 
+    if let Some(h) = host {
+        map.insert("SERVER_HOST".to_string(), h.to_string());
+    }
+    if let Some(p) = port {
+        map.insert("SERVER_PORT".to_string(), p.to_string());
+    }
+    if let Some(c) = country {
+        map.insert("COUNTRY".to_string(), c.to_uppercase());
+    }
     if let Some(u) = username {
         map.insert("OSU_USERNAME".to_string(), u.to_string());
     }
@@ -245,6 +255,9 @@ pub fn write_dotenv(
     if let Some(amt) = amount_of_scores {
         map.insert("AMOUNT_OF_SCORES_ON_LB".to_string(), amt.to_string());
     }
+    if let Some(recent) = enable_recent_channel {
+        map.insert("ENABLE_RECENT_CHANNEL".to_string(), recent.to_string());
+    }
 
     map.entry("SERVER_HOST".to_string()).or_insert_with(|| "127.0.0.1".to_string());
     map.entry("SERVER_PORT".to_string()).or_insert_with(|| "5000".to_string());
@@ -253,13 +266,19 @@ pub fn write_dotenv(
     out.push_str(&format!("SERVER_HOST={}\n", map.get("SERVER_HOST").unwrap()));
     out.push_str(&format!("SERVER_PORT={}\n\n", map.get("SERVER_PORT").unwrap()));
 
-    out.push_str("# External API Keys (Recommended)\n");
+    out.push_str("# Player Profile Settings\n");
+    out.push_str(&format!("COUNTRY={}\n\n", map.get("COUNTRY").cloned().unwrap_or_default()));
+
+    out.push_str("# Essential API Keys\n");
+    out.push_str("# (Stored strictly locally in this file; never sent to or shared with any remote server)\n");
     out.push_str("# Legacy v1 API key for online beatmap leaderboards: https://old.ppy.sh/p/api/\n");
+    out.push_str("# (Scroll down to 'Legacy API' -> 'New Legacy API Key' -> Name: localhost, URL: https://osu-echo.local)\n");
     out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
     out.push_str("# osudaily API key for real-time global rank calculation: https://osudaily.net/api.php\n");
     out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
 
     out.push_str("# Optional osu! Account Credentials (only needed for '!friend sync')\n");
+    out.push_str("# (Stored strictly locally; password is MD5 hashed and never stored in plaintext)\n");
     out.push_str(&format!("OSU_USERNAME={}\n", map.get("OSU_USERNAME").cloned().unwrap_or_default()));
     out.push_str(&format!("OSU_PASSWORD_HASH={}\n\n", map.get("OSU_PASSWORD_HASH").cloned().unwrap_or_default()));
 
@@ -269,32 +288,202 @@ pub fn write_dotenv(
     out.push_str("# Show PP in the personal best score panel\n");
     out.push_str(&format!("SHOW_PP_FOR_PERSONAL_BEST={}\n", map.get("SHOW_PP_FOR_PERSONAL_BEST").cloned().unwrap_or_else(|| "false".to_string())));
     out.push_str("# Number of scores shown on leaderboards (1-100)\n");
-    out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
+    out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
 
-    if let Some(country) = map.get("COUNTRY") {
-        out.push_str("\n# Player Profile Settings\n");
-        out.push_str(&format!("COUNTRY={}\n", country));
-    }
-
-    if let Some(recent) = map.get("ENABLE_RECENT_CHANNEL") {
-        out.push_str("\n# Chat Feed Settings\n");
-        out.push_str(&format!("ENABLE_RECENT_CHANNEL={}\n", recent));
-    }
+    out.push_str("# Chat Feed Settings\n");
+    out.push_str(&format!("ENABLE_RECENT_CHANNEL={}\n", map.get("ENABLE_RECENT_CHANNEL").cloned().unwrap_or_else(|| "true".to_string())));
 
     std::fs::write(env_path, out)?;
     Ok(())
 }
 
-pub fn setup_config(data_dir: &Path) -> Config {
+#[cfg(target_os = "windows")]
+fn setup_tls_and_hosts(data_dir: &Path) {
+    match crate::server::tls::get_or_create_certificates(data_dir) {
+        Ok(paths) => {
+            if let Err(e) = crate::server::tls::install_windows_trust(&paths.cert_der) {
+                crate::logger::warn(&format!("Failed to install certificate: {}", e));
+            }
+            if let Err(e) = crate::server::tls::setup_windows_hosts() {
+                crate::logger::warn(&format!("Failed to configure hosts file: {}", e));
+            }
+        }
+        Err(e) => {
+            crate::logger::warn(&format!("Failed to generate certificate: {}", e));
+        }
+    }
+}
+
+fn print_setup_header(title: &str, subtitle: &str) {
+    crate::clear_console();
+    println!("\n{}", crate::LOGO.magenta().bold());
+    println!("  {}", title.magenta().bold());
+    if !subtitle.is_empty() {
+        println!("  {}\n", subtitle.dimmed());
+    } else {
+        println!();
+    }
+}
+
+fn print_completion_guide(is_advanced: bool, host: &str, port: u16) {
+    print_setup_header(
+        if is_advanced { "✔ Advanced Setup Complete!" } else { "✔ Quick Setup Complete!" },
+        "Configuration saved to .env and database",
+    );
+    println!("  {}", "▶ HOW TO CONNECT YOUR OSU! CLIENT:".cyan().bold());
+    println!("    1. Right-click your osu! shortcut and choose Properties.");
+    println!("    2. In the Target field, append to the end:");
+    if host == "127.0.0.1" && port == 5000 {
+        println!("         {}", "-devserver localhost".yellow().bold());
+        println!("       Example: \"C:\\Games\\osu!\\osu!.exe\" -devserver localhost");
+    } else {
+        println!("         {}", format!("-devserver {}:{}", host, port).yellow().bold());
+        println!("       Example: \"C:\\Games\\osu!\\osu!.exe\" -devserver {}:{}", host, port);
+    }
+    println!("    3. Launch osu! using that shortcut.");
+    println!("    4. Log in with {} username and password!", "ANY".bold());
+    println!("       (Your account will be created automatically on first login)\n");
+}
+
+fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<String>) {
+    loop {
+        print_setup_header(title, subtitle);
+
+        println!("  {} All keys and credentials are stored strictly locally in your .env file", "Privacy Note:".green().bold());
+        println!("  {} and are NEVER sent to or shared with any remote servers.\n", "             ".normal());
+
+        println!("  1. osu! Legacy API Key (v1):");
+        println!("     Required for online beatmap leaderboards & global scores comparison.");
+        println!("     URL: {}", "https://old.ppy.sh/p/api/".cyan());
+        println!("     {}", "Tip: Scroll down to 'Legacy API' -> Click 'New Legacy API Key'.".dimmed());
+        println!("     {}", "     For Application Name & URL, enter 'localhost' and 'https://osu-echo.local'".dimmed());
+        let osu_key = prompt_optional_string("     API key (or Enter to skip): ");
+
+        println!("\n  2. osudaily API Key:");
+        println!("     Required for real-time global rank calculation based on your PP.");
+        println!("     URL: {}", "https://osudaily.net/api.php".cyan());
+        let daily_key = prompt_optional_string("     API key (or Enter to skip): ");
+
+        if osu_key.is_none() || daily_key.is_none() {
+            println!("\n  {}", "=========================================================================".red().bold());
+            println!("  {} {}", "CRITICAL WARNING:".red().bold(), "ESSENTIAL SERVER API KEYS ARE MISSING!".bright_red().bold());
+            println!("  {}", "=========================================================================".red().bold());
+            println!("  {}", "osu-echo requires these API keys to function as an authentic Bancho server.".white().bold());
+            println!("  {}", "Running without them severely degrades core gameplay and online features:".white().bold());
+            println!();
+            if osu_key.is_none() {
+                println!("  {} {}", "• osu! Legacy v1 API Key:".red().bold(), "MISSING".on_red().white().bold());
+                println!("    {} Online beatmap leaderboards will NOT load in-game.", "Consequence:".yellow().bold());
+                println!("    {} Score comparisons against official Bancho will be completely disabled.", "            ".dimmed());
+                println!("    {} In-game beatmap ranking and direct score fetching will fail.", "            ".dimmed());
+            }
+            if daily_key.is_none() {
+                if osu_key.is_none() {
+                    println!();
+                }
+                println!("  {} {}", "• osudaily API Key:".red().bold(), "MISSING".on_red().white().bold());
+                println!("    {} Real-time global rank calculation will be disabled.", "Consequence:".yellow().bold());
+                println!("    {} Your in-game profile rank will remain stuck as #unranked / #1.", "            ".dimmed());
+            }
+            println!();
+            println!("  {} {}", "NOTE:".cyan().bold(), "Both keys are completely free and take less than 1 minute to get!".yellow());
+            println!("  {}", "=========================================================================".red().bold());
+
+            let choice = prompt_input("\n  Configure keys now, or continue anyway? [Enter = configure (recommended), 'y' = continue]: ");
+            if !choice.eq_ignore_ascii_case("y") && !choice.eq_ignore_ascii_case("yes") && !choice.eq_ignore_ascii_case("continue") {
+                continue;
+            }
+        }
+
+        return (osu_key, daily_key);
+    }
+}
+
+fn setup_quick(data_dir: &Path) -> Config {
     let mut config = Config::default();
 
-    println!("\n=== osu-echo Quick Setup ===");
-    println!("Press Enter to accept recommended defaults.\n");
+    print_setup_header("Quick Setup [Step 1/3: osu! Directory]", "Locating your osu! installation folder");
+    let detected_osu = detect_osu_path();
+    let chosen_path = match detected_osu {
+        Some(ref path) => {
+            println!("  {} Found osu! at: {}", "✔".green(), path.display().to_string().cyan());
+            let use_detected = prompt_bool("  Use this directory? (Y/n) [default: yes]: ", true);
+            if use_detected {
+                Some(path.to_string_lossy().to_string())
+            } else {
+                prompt_existing_directory("  Enter osu! folder path (or Enter to skip): ")
+            }
+        }
+        None => {
+            println!("  Could not automatically detect your osu! directory.");
+            prompt_existing_directory("  Enter osu! folder path (or Enter to skip): ")
+        }
+    };
 
+    if let Some(p) = chosen_path {
+        println!("  {} osu! path set: {}", "✔".green(), p);
+        config.paths.osu_path = Some(p);
+    } else {
+        println!("  {} Skipped osu! path. Path-dependent features will be disabled.", "!".yellow());
+    }
+
+    let (osu_key, daily_key) = prompt_api_keys(
+        "Quick Setup [Step 2/3: Essential API Keys]",
+        "Required for online beatmaps, leaderboards, and rank calculation",
+    );
+    config.osu_api_key = osu_key;
+    config.osu_daily_api_key = daily_key;
+
+    #[cfg(target_os = "windows")]
+    {
+        print_setup_header("Quick Setup [Step 3/3: Local HTTPS Certificate]", "Trust local certificate for -devserver localhost connection");
+        println!("  osu! requires a trusted certificate to connect using '-devserver localhost'.");
+        let install_cert = prompt_bool("  Install certificate & update hosts file? (Y/n) [default: yes]: ", true);
+        if install_cert {
+            setup_tls_and_hosts(data_dir);
+            println!("\n  {} Certificate installed & hosts file updated successfully.", "✔".green());
+        } else {
+            println!("  {} Skipped certificate installation. (You can run 'osu-echo --trust-cert' later)", "!".yellow());
+        }
+        prompt_input("\n  Press Enter to continue...");
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = data_dir;
+    }
+
+    if let Err(e) = write_dotenv_full(
+        Some("127.0.0.1"),
+        Some(5000),
+        None,
+        None,
+        None,
+        config.osu_api_key.as_deref(),
+        config.osu_daily_api_key.as_deref(),
+        Some(config.pp_leaderboard),
+        Some(config.show_pp_for_personal_best),
+        Some(config.amount_of_scores_on_lb),
+        Some(config.enable_recent_channel),
+    ) {
+        crate::logger::warn(&format!("Could not write .env file: {}", e));
+    } else {
+        crate::logger::success("Configuration saved to .env");
+    }
+
+    print_completion_guide(false, "127.0.0.1", 5000);
+    prompt_input("Press Enter to start osu-echo...");
+
+    config
+}
+
+fn setup_advanced(data_dir: &Path) -> Config {
+    let mut config = Config::default();
+
+    print_setup_header("Advanced Setup [Step 1/5: Storage & Directories]", "Configure osu! game and data folders");
     let detected_osu = detect_osu_path();
     let prompt = match &detected_osu {
-        Some(path) => format!("osu! folder path [default: {}]:", path.to_string_lossy()),
-        None => "osu! folder path:".to_string(),
+        Some(path) => format!("  osu! folder path [default: {}]: ", path.to_string_lossy()),
+        None => "  osu! folder path (or Enter to skip): ".to_string(),
     };
 
     loop {
@@ -302,16 +491,13 @@ pub fn setup_config(data_dir: &Path) -> Config {
         if input.is_empty() {
             if let Some(ref detected) = detected_osu {
                 config.paths.osu_path = Some(detected.to_string_lossy().to_string());
-                break;
-            } else {
-                println!("No osu! path provided. Path-dependent features will be disabled.");
-                break;
             }
+            break;
         }
 
         let p = PathBuf::from(&input);
         if !p.exists() {
-            println!("Directory '{}' does not exist! Please try again.", input);
+            println!("  {} Directory '{}' does not exist! Please try again.", "✖".red(), input);
             continue;
         }
         config.paths.osu_path = Some(input);
@@ -319,75 +505,110 @@ pub fn setup_config(data_dir: &Path) -> Config {
     }
 
     if config.paths.osu_path.is_some() {
-        let customize_subfolders = prompt_bool("Customize Songs/Replays/Screenshots subfolders? (y/N) [default: no]", false);
-        if customize_subfolders {
-            config.paths.songs = prompt_optional_path("Songs folder path (or Enter for default)");
-            config.paths.replay = prompt_optional_path("Replays folder path (or Enter for default)");
-            config.paths.screenshots = prompt_optional_path("Screenshots folder path (or Enter for default)");
+        let customize = prompt_bool("  Customize Songs / Replays / Screenshots folders? (y/N) [default: no]: ", false);
+        if customize {
+            config.paths.songs = prompt_optional_path("    • Songs folder path (or Enter for default): ");
+            config.paths.replay = prompt_optional_path("    • Replays folder path (or Enter for default): ");
+            config.paths.screenshots = prompt_optional_path("    • Screenshots folder path (or Enter for default): ");
         }
     }
 
-    println!("\n--- External API Keys (Essential for Leaderboards & Rank) ---");
-    println!("1. osu! Legacy API Key (v1):");
-    println!("   Required for online beatmap leaderboards & global scores comparison.");
-    println!("   Get yours at: https://old.ppy.sh/p/api/");
-    config.osu_api_key = prompt_optional_string("osu! legacy API key (or Enter to skip):");
+    print_setup_header("Advanced Setup [Step 2/5: Server & Network Settings]", "Configure bind address, port, and TLS certificates");
+    let host_input = prompt_input("  Server Host IP [default: 127.0.0.1]: ");
+    let host = if host_input.is_empty() {
+        "127.0.0.1".to_string()
+    } else {
+        host_input
+    };
 
-    println!("\n2. osu!daily API Key:");
-    println!("   Required for real-time global rank calculation based on your PP.");
-    println!("   Get yours at: https://osudaily.net/api.php");
-    config.osu_daily_api_key = prompt_optional_string("osu!daily API key (or Enter to skip):");
-
-    println!("\n--- osu! Account Credentials (Optional) ---");
-    println!("In-game search and downloads work via Catboy mirror without credentials.");
-    println!("Credentials are only needed if you want to sync your friends list (!friend sync).");
-    let setup_creds = prompt_bool("Configure official osu! account credentials? (y/N) [default: no]", false);
-    if setup_creds {
-        let username = prompt_optional_string("osu! username (or Enter to skip):");
-        if let Some(ref u) = username {
-            let raw_pw = prompt_password("osu! password (will be MD5-hashed, or Enter to skip) [Hold Tab to reveal]:");
-            if let Some(pw) = raw_pw {
-                let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
-                config.osu_password = Some(hash);
-                println!("Password hashed successfully (plaintext password is never stored).");
-            }
-            config.osu_username = Some(u.clone());
-        }
-    }
-
-    println!("\n--- Leaderboard Settings ---");
-    config.pp_leaderboard = prompt_bool("Show PP instead of Score on leaderboards? (y/N) [default: no]", false);
-    config.show_pp_for_personal_best = prompt_bool("Show PP for personal best score panel? (y/N) [default: no]", false);
+    let port = prompt_port("  Server Port [default: 5000]: ", 5000);
 
     #[cfg(target_os = "windows")]
     {
-        println!("\n--- HTTPS Certificate Setup (-devserver localhost) ---");
-        println!("osu! requires a trusted certificate to connect using '-devserver localhost'.");
-        let install_cert = prompt_bool("Install & trust local certificate for osu! client? (Y/n) [default: yes]", true);
+        let install_cert = prompt_bool("  Install & trust local certificate for osu! client? (Y/n) [default: yes]: ", true);
         if install_cert {
-            match crate::server::tls::get_or_create_certificates(data_dir) {
-                Ok(paths) => {
-                    if let Err(e) = crate::server::tls::install_windows_trust(&paths.cert_der) {
-                        crate::logger::warn(&format!("Failed to install certificate: {}", e));
-                    }
-                    if let Err(e) = crate::server::tls::setup_windows_hosts() {
-                        crate::logger::warn(&format!("Failed to configure hosts file: {}", e));
-                    }
-                }
-                Err(e) => {
-                    crate::logger::warn(&format!("Failed to generate certificate: {}", e));
-                }
-            }
+            setup_tls_and_hosts(data_dir);
+            println!("\n  {} Certificate installed & hosts file updated successfully.", "✔".green());
         } else {
-            println!("Skipping certificate installation. You can run with '--trust-cert' later.");
+            println!("  {} Skipped certificate installation.", "!".yellow());
         }
+        prompt_input("\n  Press Enter to continue to API keys...");
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = data_dir;
     }
 
-    if let Err(e) = write_dotenv(
+    let (osu_key, daily_key) = prompt_api_keys(
+        "Advanced Setup [Step 3/5: Essential API Keys]",
+        "API keys for online beatmaps, leaderboards, and rank calculation",
+    );
+    config.osu_api_key = osu_key;
+    config.osu_daily_api_key = daily_key;
+
+    print_setup_header("Advanced Setup [Step 4/5: Gameplay & Scoring Rules]", "Configure leaderboard rules and chat feeds");
+    config.pp_leaderboard = prompt_bool("  Show PP instead of raw Score on leaderboards? (y/N) [default: no]: ", false);
+    config.show_pp_for_personal_best = prompt_bool("  Show PP in personal best score panel? (y/N) [default: no]: ", false);
+    config.amount_of_scores_on_lb = prompt_number("  Number of scores to show on leaderboards (1-100) [default: 50]: ", 50, 1, 100);
+    config.enable_recent_channel = prompt_bool("  Enable live score announcements in #recent chat channel? (Y/n) [default: yes]: ", true);
+
+    print_setup_header("Advanced Setup [Step 5/5: Profile & Account Sync]", "Configure player profile flag and official Bancho credentials");
+    config.country = prompt_optional_country("  Two-letter country code for profile flag (e.g. US, DE, JP, or Enter to skip): ");
+
+    println!("\n  Official osu! Account Credentials:");
+    println!("  In-game search and downloads work via Catboy mirror without credentials.");
+    println!("  Credentials are only needed if you want to sync your friends list (!friend sync).");
+    println!("  {} Credentials are saved only locally in your .env (password is MD5-hashed,", "Privacy Note:".green().bold());
+    println!("  {} never stored in plaintext, and never sent to any third-party server).", "             ".normal());
+    let setup_creds = prompt_bool("  Configure official osu! account credentials? (y/N) [default: no]: ", false);
+    if setup_creds {
+        let username = prompt_optional_string("    osu! username (or Enter to skip): ");
+        if let Some(ref u) = username {
+            let raw_pw = prompt_password("    osu! password (will be MD5-hashed, or Enter to skip) [Hold Tab to reveal]: ");
+            if let Some(pw) = raw_pw {
+                let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
+                config.osu_password = Some(hash);
+                println!("    {} Password hashed successfully (plaintext password is never stored).", "✔".green());
+            }
+            config.osu_username = Some(u.clone());
+        }
+    }
+
+    print_setup_header("Advanced Setup [Configuration Summary]", "Review your settings before saving");
+    println!("  • osu! Path:        {}", config.paths.osu_path.as_deref().unwrap_or("Not configured"));
+    println!("  • Bind Address:     {}:{}", host, port);
+    println!("  • Country Flag:     {}", config.country.as_deref().unwrap_or("None"));
+    println!("  • Leaderboard Mode: {}", if config.pp_leaderboard { "Performance Points (PP)" } else { "Score" });
+    println!("  • Leaderboard Size: {} scores", config.amount_of_scores_on_lb);
+    println!("  • #recent Feed:     {}", if config.enable_recent_channel { "Enabled" } else { "Disabled" });
+    println!(
+        "  • osu! v1 API Key:  {}",
+        if config.osu_api_key.is_some() {
+            "Configured".green()
+        } else {
+            "CRITICAL: Missing (online beatmap leaderboards disabled)".red().bold()
+        }
+    );
+    println!(
+        "  • osudaily API Key: {}",
+        if config.osu_daily_api_key.is_some() {
+            "Configured".green()
+        } else {
+            "CRITICAL: Missing (global rank calculation disabled)".red().bold()
+        }
+    );
+    println!("  • Bancho Account:   {}", if config.osu_username.is_some() { "Configured".green() } else { "None".normal() });
+
+    let save = prompt_bool("\nSave this configuration? (Y/n) [default: yes]: ", true);
+    if !save {
+        println!("  {} Setup cancelled. Using defaults.\n", "!".yellow());
+        return Config::default();
+    }
+
+    if let Err(e) = write_dotenv_full(
+        Some(&host),
+        Some(port),
+        config.country.as_deref(),
         config.osu_username.as_deref(),
         config.osu_password.as_deref(),
         config.osu_api_key.as_deref(),
@@ -395,14 +616,39 @@ pub fn setup_config(data_dir: &Path) -> Config {
         Some(config.pp_leaderboard),
         Some(config.show_pp_for_personal_best),
         Some(config.amount_of_scores_on_lb),
+        Some(config.enable_recent_channel),
     ) {
         crate::logger::warn(&format!("Could not write .env file: {}", e));
     } else {
         crate::logger::success("Configuration saved to .env");
     }
 
-    println!("\nConfiguration complete!\n");
+    print_completion_guide(true, &host, port);
+    prompt_input("Press Enter to start osu-echo...");
+
     config
+}
+
+pub fn setup_config(data_dir: &Path) -> Config {
+    print_setup_header("osu-echo Configuration Wizard", "Select your preferred setup experience:");
+    println!("  {} Quick Setup (Recommended)", "[1]".green().bold());
+    println!("      • Fast, streamlined setup with smart auto-detection.");
+    println!("      • Configures essential API keys and local HTTPS certificate.");
+    println!("      • Recommended defaults applied for all other settings.\n");
+    println!("  {} Advanced Setup", "[2]".cyan().bold());
+    println!("      • Custom folders (Songs, Replays, Screenshots).");
+    println!("      • Server host IP / port network settings.");
+    println!("      • Essential API keys for online leaderboards & rank calculation.");
+    println!("      • Scoring mode, profile country, and official Bancho account sync.\n");
+
+    let choice = prompt_input("Select setup mode [1-2, default: 1]: ");
+    let is_advanced = choice == "2" || choice.eq_ignore_ascii_case("advanced") || choice.eq_ignore_ascii_case("a");
+
+    if is_advanced {
+        setup_advanced(data_dir)
+    } else {
+        setup_quick(data_dir)
+    }
 }
 
 fn prompt_input(prompt: &str) -> String {
@@ -570,9 +816,110 @@ fn prompt_optional_path(prompt: &str) -> Option<String> {
     }
 }
 
+fn prompt_existing_directory(prompt: &str) -> Option<String> {
+    loop {
+        let input = prompt_input(prompt);
+        if input.is_empty() {
+            return None;
+        }
+        let p = PathBuf::from(&input);
+        if !p.exists() {
+            println!("  {} Directory '{}' does not exist! Please try again.", "✖".red(), input);
+            continue;
+        }
+        return Some(input);
+    }
+}
+
+pub fn parse_port_input(input: &str, default_val: u16) -> Option<u16> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Some(default_val);
+    }
+    match trimmed.parse::<u16>() {
+        Ok(port) if port > 0 => Some(port),
+        _ => None,
+    }
+}
+
+fn prompt_port(prompt: &str, default_val: u16) -> u16 {
+    loop {
+        let input = prompt_input(prompt);
+        if let Some(port) = parse_port_input(&input, default_val) {
+            return port;
+        }
+        println!("  {} Invalid port number (must be 1-65535). Please try again.", "✖".red());
+    }
+}
+
+pub fn parse_number_input(input: &str, default_val: i32, min: i32, max: i32) -> Option<i32> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Some(default_val);
+    }
+    match trimmed.parse::<i32>() {
+        Ok(n) if n >= min && n <= max => Some(n),
+        _ => None,
+    }
+}
+
+fn prompt_number(prompt: &str, default_val: i32, min: i32, max: i32) -> i32 {
+    loop {
+        let input = prompt_input(prompt);
+        if let Some(n) = parse_number_input(&input, default_val, min, max) {
+            return n;
+        }
+        println!("  {} Value must be between {} and {}. Please try again.", "✖".red(), min, max);
+    }
+}
+
+pub fn parse_country_code(input: &str) -> Option<String> {
+    let trimmed = input.trim().to_uppercase();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() == 2 && trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
+        Some(trimmed)
+    } else {
+        None
+    }
+}
+
+fn prompt_optional_country(prompt: &str) -> Option<String> {
+    loop {
+        let input = prompt_input(prompt);
+        if input.is_empty() {
+            return None;
+        }
+        if let Some(code) = parse_country_code(&input) {
+            return Some(code);
+        }
+        println!("  {} Country code must be a 2-letter ISO code (e.g. US, DE, JP). Please try again.", "✖".red());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_helpers() {
+        assert_eq!(parse_port_input("", 5000), Some(5000));
+        assert_eq!(parse_port_input("8080", 5000), Some(8080));
+        assert_eq!(parse_port_input("0", 5000), None);
+        assert_eq!(parse_port_input("invalid", 5000), None);
+
+        assert_eq!(parse_number_input("", 50, 1, 100), Some(50));
+        assert_eq!(parse_number_input("25", 50, 1, 100), Some(25));
+        assert_eq!(parse_number_input("0", 50, 1, 100), None);
+        assert_eq!(parse_number_input("150", 50, 1, 100), None);
+
+        assert_eq!(parse_country_code(""), None);
+        assert_eq!(parse_country_code("us"), Some("US".to_string()));
+        assert_eq!(parse_country_code("DE"), Some("DE".to_string()));
+        assert_eq!(parse_country_code("USA"), None);
+        assert_eq!(parse_country_code("12"), None);
+    }
 
     #[test]
     fn test_paths_resolution() {

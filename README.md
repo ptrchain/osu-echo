@@ -14,7 +14,7 @@ A local osu! server written in Rust. It lets you run your own private server on 
   - **BanchoBot**: Manages leaderboard statuses, personal bests, score announcements, and profile statistics.
   - **Tillerino**: Send `/np` in chat or PM to get instant difficulty breakdowns and PP calculations for Nomod, HD, HR, DT, etc.
 - **Local Leaderboards & Profiles**: Track personal bests, total score, hit accuracy, play count, and global rank estimates.
-- **Zero-Configuration Start**: Runs out of the box with zero required setup. External API keys and osu! account credentials are 100% optional.
+- **Streamlined Setup**: Quick interactive setup with auto-detection. External API keys (osu! v1 and osudaily) power online leaderboards and global rank calculations.
 
 ## Requirements
 
@@ -39,15 +39,18 @@ cargo run --release
 
 ### 2. First Launch & Setup
 
-When you start `osu-echo` for the first time, a **Quick Setup wizard** runs automatically in the terminal:
-- It auto-detects your local osu! installation folder.
-- Allows you to optionally enter API keys (or press Enter to skip).
-- Saves your preferences to `.data/server.db` and generates `.env`.
+When you start `osu-echo` for the first time, an interactive **Configuration Wizard** runs automatically in the terminal, asking which setup experience you prefer:
+
+- **[1] Quick Setup (Recommended)**: Auto-detects your osu! installation, prompts for essential API keys (osu! v1 & osudaily) for online leaderboards and global rank calculation, automatically sets up and trusts the local HTTPS certificate, and applies recommended defaults.
+- **[2] Advanced Setup**: Granular control for power users—customize directory paths (Songs/Replays/Screenshots), server host IP and port settings, essential API keys (osu! v1 API & osudaily ranking), leaderboard scoring modes, profile country flag, and official Bancho account sync.
+
+> [!NOTE]
+> **Privacy & Local Storage**: All API keys and account credentials entered during setup or configured in `.env` are stored strictly locally on your machine and are never transmitted to any third-party or remote server. Passwords for account sync are MD5-hashed before saving.
 
 > [!TIP]
-> You can simply press **Enter** through the prompts on first launch to accept all recommended defaults.
+> In **Quick Setup**, default values (such as detected osu! path and recommended settings) can be accepted instantly by pressing **Enter**.
 
-On future launches, the server will start immediately using your saved configuration. If you ever want to re-run the setup wizard later, pass the `--setup` flag:
+On future launches, the server will start immediately using your saved configuration. If you ever want to re-run the setup wizard later, pass the `--setup` (or `-s`) flag:
 ```bash
 osu-echo.exe --setup
 ```
@@ -83,9 +86,14 @@ You can send commands in chat channels or via private message to **BanchoBot** o
 | `!mode <std/taiko/ctb/mania>` | Switch active game mode |
 | `!country <code>` | Set country flag on your profile (e.g. `!country US`, `!country DE`) |
 | `!status <ranked/unranked/loved>` | Change the status of the current beatmap |
+| `!friend <add/remove/list/sync>` | Manage friends or sync with official Bancho |
 | `!recentfeed <on/off>` | Toggle live score announcements in the `#recent` channel |
-| `!recalc` | Recalculate profile PP and stats from stored scores |
+| `!recalc` / `!recalculate` | Recalculate profile PP and stats from stored scores |
+| `!restrictself [reason]` / `!unrestrict` | Simulate official Bancho ban / account restriction |
+| `!avatar <url or path>` | Change your in-game profile avatar |
+| `!config` | Show server settings and active configuration |
 | `!roll [max]` | Roll a random number (default 1-100) |
+| `!wipe` | Wipe profile stats and play count |
 
 ### Tillerino Commands
 
@@ -104,10 +112,11 @@ Send commands via PM to **Tillerino** or type `/np` in any channel:
 Usage: osu-echo [OPTIONS]
 
 Options:
-  -s, --setup, --reconfigure   Launch the interactive configuration wizard
-      --trust-cert             Install and trust the local TLS certificate in Windows Root store
-  -h, --help                   Print help information
-  -v, --version                Print version information
+  -h, --help           Print help information
+  -v, --version        Print version information
+  -s, --setup          Run or re-run the interactive setup wizard
+      --reconfigure    Alias for --setup
+      --trust-cert     Install and trust the local TLS certificate in Windows Root store
 ```
 
 ## Data & Backups

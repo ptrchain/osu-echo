@@ -27,7 +27,7 @@ use state::AppState;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const LOGO: &str = r#"                      ,───.                             
+pub const LOGO: &str = r#"                      ,───.                             
                       │   │            ,──.             
  ,───.  ,───. ,──.,──.│  .',───.  ,───.│  ,───.  ,───.  
 │ .─. │(  .─' │  ││  ││  ││ .─. :│ .──'│  .─.  ││ .─. │ 
@@ -35,7 +35,7 @@ const LOGO: &str = r#"                      ,───.
  `───' `────'  `────' .──. `────' `───'`──' `──' `───'  
                       '──'     "#;
 
-fn clear_console() {
+pub fn clear_console() {
     let mut stdout = std::io::stdout();
     let _ = crossterm::execute!(
         stdout,
@@ -59,7 +59,7 @@ fn print_help() {
     println!("Options:");
     println!("  -h, --help           Print help information");
     println!("  -v, --version        Print version information");
-    println!("      --setup          Run or re-run the interactive setup wizard");
+    println!("  -s, --setup          Run or re-run the interactive setup wizard");
     println!("      --reconfigure    Alias for --setup");
     println!("      --trust-cert     Install and trust the local TLS certificate in Windows Root store");
 }
@@ -110,7 +110,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let force_setup = args.iter().any(|arg| arg == "--setup" || arg == "--reconfigure");
+    let force_setup = args.iter().any(|arg| arg == "-s" || arg == "--setup" || arg == "--reconfigure");
 
     dotenvy::dotenv().ok();
 
@@ -124,8 +124,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = if force_setup {
         let config = types::config::setup_config(&data_dir);
         db::save_config(&conn, &config)?;
+        dotenvy::from_filename(".env").ok();
+        dotenvy::dotenv().ok();
         clear_console();
         print_banner();
+        logger::info("osu-echo is ready! Connect in osu! with: -devserver localhost");
         config
     } else {
         match db::load_config(&conn)? {
@@ -137,8 +140,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             None => {
                 let config = types::config::setup_config(&data_dir);
                 db::save_config(&conn, &config)?;
+                dotenvy::from_filename(".env").ok();
+                dotenvy::dotenv().ok();
                 clear_console();
                 print_banner();
+                logger::info("osu-echo is ready! Connect in osu! with: -devserver localhost");
                 config
             }
         }
