@@ -348,6 +348,20 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         }
     };
 
+    let mut bmap = bmap;
+    if let Some(ref mut b) = bmap {
+        if b.beatmap_id > 0 {
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(canonical)) = db::get_beatmap_by_id(&db_conn, b.beatmap_id) {
+                // If canonical entry has a ranked status and a different MD5, this is an altered/cloned diff
+                if canonical.approved > 0 && !canonical.file_md5.is_empty() && !canonical.file_md5.eq_ignore_ascii_case(&b.file_md5) && canonical.file_md5 != "old_draft_md5" {
+                    b.beatmap_id = 0;
+                    b.approved = 0;
+                }
+            }
+        }
+    }
+
     let Some(bmap) = bmap else {
         drop(s);
         let mut s_write = state.write().await;
@@ -985,5 +999,70 @@ mod tests {
         let s = shared_state.read().await;
         let p = s.player.as_ref().unwrap();
         assert!(!p.queue.is_empty(), "Notification must be queued for mismatch");
+    }
+
+    #[tokio::test]
+    async fn test_score_submit_rejects_altered_diff_with_stolen_beatmap_id() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "TestPlayer").unwrap();
+
+        let mut canonical_bmap = Beatmap::blank();
+        canonical_bmap.beatmap_id = 99999;
+        canonical_bmap.approved = 1;
+        canonical_bmap.file_md5 = "canonical_md5_hash".to_string();
+        db::insert_beatmap(&conn, &canonical_bmap).unwrap();
+
+        let mut altered_bmap = Beatmap::blank();
+        altered_bmap.beatmap_id = 99999;
+        altered_bmap.approved = 1;
+        altered_bmap.file_md5 = "altered_custom_diff_md5".to_string();
+        db::insert_beatmap(&conn, &altered_bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("TestPlayer".to_string());
+        player.map_id = 99999;
+        player.map_md5 = "altered_custom_diff_md5".to_string();
+        app_state.player = Some(player);
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let sub_score = Score {
+            scoreid: None,
+            md5: "altered_custom_diff_md5".to_string(),
+            name: "TestPlayer".to_string(),
+            score: 100000,
+            max_combo: 100,
+            mods: 0,
+            n300: 50,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            time: 12345,
+            perfect: true,
+            pp: None,
+            acc: Some(100.0),
+            mode: 0,
+            mods_str: None,
+            replay_md5: None,
+            replay_frames: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let sub = DecodedSubmission {
+            score: sub_score,
+            submission_checksum: String::new(),
+            passed: true,
+            date: String::new(),
+            osu_version: String::new(),
+            replay_frames: None,
+            identity: None,
+        };
+
+        let result = process_native_submission(shared_state.clone(), sub).await;
+        assert_eq!(result.err(), Some("Unranked map".to_string()));
     }
 }
