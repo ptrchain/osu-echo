@@ -227,6 +227,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     let player = s.player.as_ref().ok_or_else(|| "No player logged in".to_string())?;
 
     if sub.score.name != player.name {
+        drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
             p.queue.extend_from_slice(&packets::notification("Cannot submit another player's replay."));
@@ -929,5 +930,60 @@ mod tests {
         let found = db::get_beatmap_by_md5(&db_conn, "e10adc3949ba59abbe56e057f20f883e").unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().beatmap_id, 5315861);
+    }
+
+    #[tokio::test]
+    async fn test_player_mismatch_submission_does_not_deadlock() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut app_state = AppState::new(conn, crate::types::config::Config::default());
+        app_state.player = Some(crate::types::player::Player::new("ActivePlayer".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let sub_score = Score {
+            scoreid: None,
+            md5: "dummy_md5".to_string(),
+            name: "OtherPlayer".to_string(),
+            score: 1000,
+            max_combo: 10,
+            mods: 0,
+            n300: 10,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            time: 12345,
+            perfect: true,
+            pp: None,
+            acc: Some(100.0),
+            mode: 0,
+            mods_str: None,
+            replay_md5: None,
+            replay_frames: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let sub = DecodedSubmission {
+            score: sub_score,
+            submission_checksum: String::new(),
+            passed: true,
+            date: String::new(),
+            osu_version: String::new(),
+            replay_frames: None,
+            identity: None,
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            process_native_submission(shared_state.clone(), sub),
+        )
+        .await
+        .expect("Submission must not deadlock on player mismatch");
+
+        assert_eq!(result.err(), Some("Player mismatch".to_string()));
+        let s = shared_state.read().await;
+        let p = s.player.as_ref().unwrap();
+        assert!(!p.queue.is_empty(), "Notification must be queued for mismatch");
     }
 }
