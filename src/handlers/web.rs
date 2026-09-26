@@ -98,10 +98,13 @@ async fn get_replay(state: Arc<RwLock<AppState>>, params: &std::collections::Has
     let mode: i32 = params.get("m").and_then(|v| v.parse().ok()).unwrap_or(0);
 
     if scoreid > 0 {
-        let s = state.read().await;
-        if let Some(ref api_key) = s.config.osu_api_key {
+        let (api_key_opt, http) = {
+            let s = state.read().await;
+            (s.config.osu_api_key.clone(), s.http.clone())
+        };
+        if let Some(ref api_key) = api_key_opt {
             let url = format!("https://osu.ppy.sh/api/get_replay?k={}&s={}&m={}", api_key, scoreid, mode);
-            if let Ok(resp) = s.http.get(&url).send().await {
+            if let Ok(resp) = http.get(&url).send().await {
                 if resp.status() == 200 {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
                         if let Some(content) = json.get("content").and_then(|v| v.as_str()) {
@@ -338,8 +341,16 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         }
     }
 
-    let mut s = state.read().await;
-    let current_mode = s.mode;
+    let (current_mode, is_restricted, http, db, config) = {
+        let s = state.read().await;
+        (
+            s.mode,
+            s.player.as_ref().map_or(false, |p| p.is_restricted),
+            s.http.clone(),
+            s.db.clone(),
+            s.config.clone(),
+        )
+    };
 
     let status = api_to_server_status(bmap.approved);
     if !VALID_LB_STATUSES.contains(&status) {
@@ -350,31 +361,31 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     let is_global = rank_type == LeaderboardTypes::Top || rank_type == LeaderboardTypes::Mods || rank_type == LeaderboardTypes::Country;
 
     if is_global {
-        let api_key_opt = s.config.osu_api_key.clone();
+        let api_key_opt = config.osu_api_key.clone();
         let mods_filter = if rank_type == LeaderboardTypes::Mods { Some(mods_val) } else { None };
         let cache_key = (bmap.beatmap_id, mode, mods_filter, amount);
 
-        let cached_scores = s.bancho_score_cache.get(&cache_key).and_then(|(instant, scores)| {
-            if instant.elapsed() < std::time::Duration::from_secs(180) {
-                Some(scores.clone())
-            } else {
-                None
-            }
-        });
+        let cached_scores = {
+            let s = state.read().await;
+            s.bancho_score_cache.get(&cache_key).and_then(|(instant, scores)| {
+                if instant.elapsed() < std::time::Duration::from_secs(180) {
+                    Some(scores.clone())
+                } else {
+                    None
+                }
+            })
+        };
 
         let bancho_scores = if let Some(cs) = cached_scores {
             Some(cs)
         } else if let Some(ref api_key) = api_key_opt {
-            let fetched = utils::fetch_scores_from_bancho(&s.http, api_key, bmap.beatmap_id, mode, mods_filter, amount).await;
+            let fetched = utils::fetch_scores_from_bancho(&http, api_key, bmap.beatmap_id, mode, mods_filter, amount).await;
             if let Some(ref sc) = fetched {
-                drop(s);
                 let mut s_write = state.write().await;
                 s_write.bancho_score_cache.insert(cache_key, (std::time::Instant::now(), sc.clone()));
                 if s_write.bancho_score_cache.len() > 200 {
                     s_write.bancho_score_cache.retain(|_, (t, _)| t.elapsed() < std::time::Duration::from_secs(180));
                 }
-                drop(s_write);
-                s = state.read().await;
             }
             fetched
         } else {
@@ -383,7 +394,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
         if let Some(mut b_scores) = bancho_scores {
             if pp_leaderboard || current_mode.is_some() {
-                if let Some(content) = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await {
+                if let Some(content) = utils::get_or_fetch_beatmap_content(&http, &db, &config, &bmap).await {
                     if let Ok(parsed_map) = rosu_pp::Beatmap::from_bytes(content.as_bytes()) {
                         for sc in &mut b_scores {
                             utils::calculate_bancho_score_pp(&parsed_map, mode, sc);
@@ -403,12 +414,12 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         let mut friend_entries: Vec<LeaderboardEntry> = Vec::new();
 
         let friend_records = {
-            let db_conn = s.db.lock().await;
+            let db_conn = db.lock().await;
             db::get_friend_records(&db_conn, &player_name).unwrap_or_default()
         };
 
         {
-            let db_conn = s.db.lock().await;
+            let db_conn = db.lock().await;
             let mut users_to_check = vec![player_name.clone()];
             for f in &friend_records {
                 if !f.friend_name.is_empty() && !users_to_check.iter().any(|u| u.eq_ignore_ascii_case(&f.friend_name)) {
@@ -431,10 +442,10 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
             }
         }
 
-        if let Some(ref api_key) = s.config.osu_api_key {
+        if let Some(ref api_key) = config.osu_api_key {
             if bmap.beatmap_id > 0 {
                 let parsed_map = if pp_leaderboard || current_mode.is_some() {
-                    if let Some(content) = utils::get_or_fetch_beatmap_content(&s.http, &s.db, &s.config, &bmap).await {
+                    if let Some(content) = utils::get_or_fetch_beatmap_content(&http, &db, &config, &bmap).await {
                         rosu_pp::Beatmap::from_bytes(content.as_bytes()).ok()
                     } else {
                         None
@@ -446,7 +457,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                 let mut tasks = tokio::task::JoinSet::new();
                 for f in &friend_records {
                     if f.friend_id > 0 && f.friend_id != 3 && f.friend_id != 4 && f.friend_id != 2070907 {
-                        let http = s.http.clone();
+                        let http = http.clone();
                         let api_key = api_key.clone();
                         let bmap_id = bmap.beatmap_id;
                         let fid = f.friend_id;
@@ -487,7 +498,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         lb.scores = deduped;
     } else if rank_type == LeaderboardTypes::Local {
         let scores = if !player_name.is_empty() {
-            let db_conn = s.db.lock().await;
+            let db_conn = db.lock().await;
             db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default()
         } else {
             Vec::new()
@@ -512,7 +523,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
     }
 
     let local_scores = if !player_name.is_empty() {
-        let db_conn = s.db.lock().await;
+        let db_conn = db.lock().await;
         db::get_scores_on_map(&db_conn, &player_name, &md5, mode).unwrap_or_default()
     } else {
         Vec::new()
@@ -534,7 +545,6 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
         personal_candidates.sort_by_key(|a| std::cmp::Reverse(a.score));
     }
 
-    let is_restricted = s.player.as_ref().map_or(false, |p| p.is_restricted);
     if !is_restricted {
         if let Some(best) = personal_candidates.first() {
             let personal_entry = best.as_leaderboard_entry(pp_leaderboard, show_pp_pb, current_mode);
@@ -1605,6 +1615,108 @@ mod tests {
 
         assert_eq!(resp.status, hyper::StatusCode::OK);
         assert_eq!(resp.body, b"error: ban\n");
+    }
+
+    #[tokio::test]
+    async fn test_get_replay_local_flow() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "ReplayUser").unwrap();
+
+        let raw_frames = b"raw_replay_frame_data_for_test";
+        let b64_frames = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, raw_frames);
+
+        let score = Score {
+            mode: 0,
+            md5: "somereplaymd5".to_string(),
+            name: "ReplayUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1_000_000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(250.0),
+            replay_md5: None,
+            scoreid: Some(42),
+            replay_frames: Some(b64_frames),
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &score, "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("ReplayUser".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // Negative score ID (Bancho convention for local scores)
+        let mut params = std::collections::HashMap::new();
+        params.insert("c".to_string(), "-1".to_string());
+        params.insert("m".to_string(), "0".to_string());
+
+        let headers = hyper::HeaderMap::new();
+        let resp = handle(shared_state.clone(), "/osu-getreplay.php", &params, &hyper::Method::GET, &headers, &[]).await;
+
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        assert_eq!(resp.body, raw_frames);
+
+        // Positive score ID with no API key should not panic or hang
+        let mut params_pos = std::collections::HashMap::new();
+        params_pos.insert("c".to_string(), "1".to_string());
+        params_pos.insert("m".to_string(), "0".to_string());
+        let resp_pos = handle(shared_state, "/osu-getreplay.php", &params_pos, &hyper::Method::GET, &headers, &[]).await;
+        assert_eq!(resp_pos.status, hyper::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_leaderboard_concurrent_write_lock_acquisition() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "LockTester").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.beatmap_id = 5555;
+        bmap.beatmapset_id = 6666;
+        bmap.approved = 1;
+        bmap.file_md5 = "lock_test_md5".to_string();
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("LockTester".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let state_clone1 = shared_state.clone();
+        let handle1 = tokio::spawn(async move {
+            let mut params = std::collections::HashMap::new();
+            params.insert("c".to_string(), "lock_test_md5".to_string());
+            params.insert("m".to_string(), "0".to_string());
+            params.insert("v".to_string(), "1".to_string());
+            let headers = hyper::HeaderMap::new();
+            handle(state_clone1, "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, &[]).await
+        });
+
+        let state_clone2 = shared_state.clone();
+        let handle2 = tokio::spawn(async move {
+            // Must be able to immediately acquire write lock without waiting for leaderboard HTTP/DB operations
+            let mut s = state_clone2.write().await;
+            if let Some(ref mut p) = s.player {
+                p.action = 2; // e.g. player status updated concurrently
+            }
+        });
+
+        let (res1, res2) = tokio::join!(handle1, handle2);
+        assert!(res1.is_ok());
+        assert!(res2.is_ok());
     }
 }
 
