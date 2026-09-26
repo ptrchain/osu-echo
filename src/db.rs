@@ -143,6 +143,37 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("DELETE FROM profiles WHERE name = 'Friend 2'", []);
     let _ = conn.execute("DELETE FROM avatars WHERE player_name = 'Friend 2'", []);
 
+    // Clean up legacy corrupted practice/custom/lower diff records that inherited top diff IDs in pre-1.0.5 DBs
+    let _ = conn.execute(
+        "UPDATE beatmaps SET beatmap_id = 0, approved = 0 WHERE beatmap_id > 0 AND (
+            LOWER(version) LIKE '%practice%' OR
+            LOWER(version) LIKE '%prac%' OR
+            LOWER(version) LIKE '%edit%' OR
+            LOWER(version) LIKE '%nerf%' OR
+            LOWER(version) LIKE '%buff%' OR
+            LOWER(version) LIKE '%rate%' OR
+            LOWER(version) LIKE '%cut%'
+        )",
+        [],
+    );
+
+    // Structural self-healing: if multiple diffs have the same beatmap_id > 0, demote all but the highest ranked/primary entry
+    let _ = conn.execute(
+        "UPDATE beatmaps SET beatmap_id = 0, approved = 0
+         WHERE beatmap_id > 0
+           AND file_md5 NOT IN (
+               SELECT file_md5 FROM (
+                   SELECT file_md5, ROW_NUMBER() OVER (
+                       PARTITION BY beatmap_id
+                       ORDER BY approved DESC, difficultyrating DESC, rowid ASC
+                   ) as rn
+                   FROM beatmaps
+                   WHERE beatmap_id > 0
+               ) WHERE rn = 1
+           )",
+        [],
+    );
+
     Ok(())
 }
 

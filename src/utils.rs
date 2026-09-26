@@ -398,7 +398,17 @@ pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, f
         return None;
     }
 
-    if bmap.version.to_lowercase().contains("practice") {
+    let v_lower = bmap.version.to_lowercase();
+    let is_custom_diff = v_lower.contains("practice")
+        || v_lower.contains("prac")
+        || v_lower.contains("rate")
+        || v_lower.contains("edit")
+        || v_lower.contains("nerf")
+        || v_lower.contains("buff")
+        || v_lower.contains("cut")
+        || (v_lower.ends_with('x') && v_lower.chars().rev().nth(1).map_or(false, |c| c.is_ascii_digit()));
+
+    if is_custom_diff {
         bmap.beatmap_id = 0;
     } else if bmap.beatmap_id == 0 {
         bmap.beatmap_id = fallback_bmap_id.unwrap_or(0);

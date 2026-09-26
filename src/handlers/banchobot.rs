@@ -623,7 +623,13 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
                 let _ = db::insert_beatmap(&db_conn, &target_bmap);
                 let _ = db::set_beatmap_status_by_md5(&db_conn, &player_md5, status);
                 if target_bmap.beatmap_id > 0 {
-                    let _ = db::set_beatmap_status(&db_conn, target_bmap.beatmap_id, status);
+                    let is_canonical = db::get_beatmap_by_id(&db_conn, target_bmap.beatmap_id)
+                        .ok()
+                        .flatten()
+                        .map_or(false, |c| c.file_md5.eq_ignore_ascii_case(&player_md5));
+                    if is_canonical {
+                        let _ = db::set_beatmap_status(&db_conn, target_bmap.beatmap_id, status);
+                    }
                 }
                 (1, Some(target_bmap))
             } else {

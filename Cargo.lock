@@ -1254,7 +1254,7 @@ dependencies = [
 
 [[package]]
 name = "osu-echo"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "bitflags 2.13.2",
