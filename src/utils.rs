@@ -467,6 +467,99 @@ pub fn parse_osu_filename(hint: &str) -> (String, String, String, String) {
     (artist, title, creator, version)
 }
 
+pub fn parse_title_hint(hint: &str) -> (Option<String>, Option<String>, Option<String>) {
+    let trimmed = hint.trim();
+    if trimmed.is_empty() {
+        return (None, None, None);
+    }
+
+    let mut expected_version = None;
+    let mut title_part = trimmed;
+
+    if let Some(open_idx) = trimmed.rfind('[') {
+        if let Some(close_idx) = trimmed[open_idx..].find(']') {
+            let ver = trimmed[open_idx + 1..open_idx + close_idx].trim();
+            if !ver.is_empty() {
+                expected_version = Some(ver.to_string());
+            }
+            title_part = trimmed[..open_idx].trim();
+        }
+    }
+
+    let mut expected_artist = None;
+    let mut expected_title = None;
+
+    if !title_part.is_empty() {
+        if let Some(dash_idx) = title_part.find(" - ") {
+            let artist = title_part[..dash_idx].trim();
+            let mut title = title_part[dash_idx + 3..].trim();
+            if let Some(paren_idx) = title.rfind(" (") {
+                if title.ends_with(')') {
+                    title = title[..paren_idx].trim();
+                }
+            }
+            if !artist.is_empty() {
+                expected_artist = Some(artist.to_string());
+            }
+            if !title.is_empty() {
+                expected_title = Some(title.to_string());
+            }
+        } else {
+            let mut title = title_part;
+            if let Some(paren_idx) = title.rfind(" (") {
+                if title.ends_with(')') {
+                    title = title[..paren_idx].trim();
+                }
+            }
+            if !title.is_empty() {
+                expected_title = Some(title.to_string());
+            }
+        }
+    }
+
+    (expected_artist, expected_title, expected_version)
+}
+
+pub fn beatmap_matches_hint(bmap: &crate::types::beatmap::Beatmap, hint: &str) -> bool {
+    let (exp_artist, exp_title, exp_version) = parse_title_hint(hint);
+
+    if let Some(ref ev) = exp_version {
+        if !bmap.version.is_empty() {
+            let bv = bmap.version.to_lowercase();
+            let ev_lower = ev.to_lowercase();
+            if bv != ev_lower && !bv.contains(&ev_lower) && !ev_lower.contains(&bv) {
+                return false;
+            }
+        }
+    }
+
+    if let Some(ref et) = exp_title {
+        if !bmap.title.is_empty() {
+            let bt = bmap.title.to_lowercase();
+            let et_lower = et.to_lowercase();
+            if bt != et_lower && !bt.contains(&et_lower) && !et_lower.contains(&bt) {
+                if et_lower.len() >= 3 {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if let Some(ref ea) = exp_artist {
+        if !bmap.artist.is_empty() {
+            let ba = bmap.artist.to_lowercase();
+            let ea_lower = ea.to_lowercase();
+            if ba != ea_lower && !ba.contains(&ea_lower) && !ea_lower.contains(&ba) {
+                if ea_lower.len() >= 3 {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
 pub fn find_and_parse_local_osu_file(
     songs_dir: &std::path::Path,
     set_id: Option<i64>,
@@ -479,15 +572,17 @@ pub fn find_and_parse_local_osu_file(
     }
 
     if let Some(sid) = set_id {
-        let prefix = format!("{} ", sid);
-        if let Ok(entries) = std::fs::read_dir(songs_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if folder_name.starts_with(&prefix) || folder_name == sid.to_string() {
-                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, title_hint, Some(sid)) {
-                            return Some((b, c));
+        if sid > 0 {
+            let prefix = format!("{} ", sid);
+            if let Ok(entries) = std::fs::read_dir(songs_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        if folder_name.starts_with(&prefix) || folder_name == sid.to_string() {
+                            if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, title_hint, Some(sid)) {
+                                return Some((b, c));
+                            }
                         }
                     }
                 }
@@ -495,20 +590,69 @@ pub fn find_and_parse_local_osu_file(
         }
     }
 
+    if let Some(md5) = map_md5 {
+        if !md5.is_empty() {
+            if let Some(folder) = find_local_mapset_folder(songs_dir, set_id, Some(md5)) {
+                if let Some((b, c)) = scan_dir_for_osu_file(&folder, map_id, Some(md5), title_hint, set_id) {
+                    return Some((b, c));
+                }
+            }
+        }
+    }
+
     if let Some(hint) = title_hint {
-        let words: Vec<&str> = hint.split(&['-', ' ', '[', ']', '(', ')'][..]).filter(|w| w.len() >= 3).collect();
+        let (exp_artist, exp_title, _) = parse_title_hint(hint);
+        let mut candidate_folders: Vec<(i32, std::path::PathBuf)> = Vec::new();
+
         if let Ok(entries) = std::fs::read_dir(songs_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
                     let folder_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
-                    let matches_any = words.iter().any(|w| folder_name.contains(&w.to_lowercase()));
-                    if matches_any {
-                        if let Some((b, c)) = scan_dir_for_osu_file(&path, map_id, map_md5, Some(hint), None) {
-                            return Some((b, c));
+                    let mut folder_score = 0;
+
+                    if let Some(ref tit) = exp_title {
+                        let t_lower = tit.to_lowercase();
+                        if t_lower.len() >= 3 && folder_name.contains(&t_lower) {
+                            folder_score += 50;
+                        } else {
+                            let words: Vec<&str> = t_lower
+                                .split(&['-', ' ', '_', '[', ']', '(', ')'][..])
+                                .filter(|w| w.len() >= 3 && !matches!(*w, "the" | "and" | "for" | "ver" | "feat" | "remix"))
+                                .collect();
+                            let matched_words = words.iter().filter(|w| folder_name.contains(**w)).count();
+                            if matched_words > 0 && matched_words >= (words.len() + 1) / 2 {
+                                folder_score += 30;
+                            }
                         }
                     }
+
+                    if let Some(ref art) = exp_artist {
+                        let a_lower = art.to_lowercase();
+                        if a_lower.len() >= 3 && folder_name.contains(&a_lower) {
+                            folder_score += 30;
+                        }
+                    }
+
+                    if folder_score == 0 && exp_title.is_none() && exp_artist.is_none() {
+                        let h_lower = hint.to_lowercase();
+                        if h_lower.len() >= 3 && folder_name.contains(&h_lower) {
+                            folder_score += 40;
+                        }
+                    }
+
+                    if folder_score > 0 {
+                        candidate_folders.push((folder_score, path));
+                    }
                 }
+            }
+        }
+
+        candidate_folders.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, folder_path) in candidate_folders {
+            if let Some((b, c)) = scan_dir_for_osu_file(&folder_path, map_id, map_md5, Some(hint), None) {
+                return Some((b, c));
             }
         }
     }
@@ -559,7 +703,6 @@ pub fn find_local_mapset_folder(
                     }
                 }
             }
-            return None;
         }
     }
 
@@ -622,9 +765,10 @@ fn scan_dir_for_osu_file(
     title_hint: Option<&str>,
     fallback_set_id: Option<i64>,
 ) -> Option<(crate::types::beatmap::Beatmap, String)> {
-    let mut candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
-    let mut version_candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
-    let mut title_candidate: Option<(crate::types::beatmap::Beatmap, String)> = None;
+    let (exp_artist, exp_title, exp_version) = title_hint.map(parse_title_hint).unwrap_or((None, None, None));
+
+    let mut exact_id_match: Option<(crate::types::beatmap::Beatmap, String)> = None;
+    let mut best_match: Option<(i32, crate::types::beatmap::Beatmap, String)> = None;
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -632,6 +776,7 @@ fn scan_dir_for_osu_file(
             if path.extension().and_then(|e| e.to_str()) == Some("osu") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Some(mut bmap) = parse_osu_file_to_beatmap(&content, None, fallback_set_id) {
+                        // 1. Strict MD5 check
                         if let Some(md5) = map_md5 {
                             if !md5.is_empty() {
                                 if bmap.file_md5.eq_ignore_ascii_case(md5) {
@@ -643,43 +788,94 @@ fn scan_dir_for_osu_file(
                                 continue;
                             }
                         }
+
+                        // 2. Exact map_id match
                         if let Some(mid) = map_id {
-                            if bmap.beatmap_id == mid && mid > 0 {
-                                return Some((bmap, content));
-                            }
-                        }
-                        if let Some(hint) = title_hint {
-                            let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                            let diff_bracket = format!("[{}]", bmap.version);
-                            let hint_lower = hint.to_lowercase();
-                            if !bmap.version.is_empty()
-                                && (fname.to_lowercase().contains(&diff_bracket.to_lowercase())
-                                    || hint_lower.contains(&diff_bracket.to_lowercase())
-                                    || hint_lower.contains(&bmap.version.to_lowercase())
-                                    || bmap.version.to_lowercase() == hint_lower)
-                            {
-                                if version_candidate.is_none() {
-                                    if bmap.beatmap_id == 0 {
-                                        bmap.beatmap_id = map_id.unwrap_or(0);
+                            if mid > 0 && bmap.beatmap_id == mid {
+                                if let Some(ref exp_ver) = exp_version {
+                                    if bmap.version.eq_ignore_ascii_case(exp_ver) {
+                                        return Some((bmap, content));
                                     }
-                                    version_candidate = Some((bmap.clone(), content.clone()));
+                                } else {
+                                    return Some((bmap, content));
                                 }
-                            } else if (fname.to_lowercase().contains(&hint_lower)
-                                || hint_lower.contains(&bmap.title.to_lowercase())
-                                || bmap.title.to_lowercase().contains(&hint_lower))
-                                && title_candidate.is_none()
-                            {
-                                if bmap.beatmap_id == 0 {
-                                    bmap.beatmap_id = map_id.unwrap_or(0);
-                                }
-                                title_candidate = Some((bmap.clone(), content.clone()));
+                                exact_id_match = Some((bmap.clone(), content.clone()));
                             }
                         }
-                        if candidate.is_none() {
+
+                        // If map_id was specified and mid > 0, and this file has a DIFFERENT non-zero beatmap_id,
+                        // this file is definitively a different beatmap. Do not let it hijack.
+                        if let Some(mid) = map_id {
+                            if mid > 0 && bmap.beatmap_id > 0 && bmap.beatmap_id != mid {
+                                continue;
+                            }
+                        }
+
+                        // 3. Score against hint
+                        let mut score = 0;
+                        let mut version_matched = false;
+
+                        if let Some(ref exp_ver) = exp_version {
+                            let bv = bmap.version.to_lowercase();
+                            let ev = exp_ver.to_lowercase();
+                            if bv == ev {
+                                score += 50;
+                                version_matched = true;
+                            } else if bv.contains(&ev) || ev.contains(&bv) {
+                                score += 30;
+                                version_matched = true;
+                            } else {
+                                continue;
+                            }
+                        }
+
+                        if let Some(ref exp_tit) = exp_title {
+                            let bt = bmap.title.to_lowercase();
+                            let et = exp_tit.to_lowercase();
+                            if bt == et {
+                                score += 30;
+                            } else if bt.contains(&et) || et.contains(&bt) {
+                                score += 20;
+                            } else if !version_matched {
+                                continue;
+                            }
+                        }
+
+                        if let Some(ref exp_art) = exp_artist {
+                            let ba = bmap.artist.to_lowercase();
+                            let ea = exp_art.to_lowercase();
+                            if ba == ea {
+                                score += 20;
+                            } else if ba.contains(&ea) || ea.contains(&ba) {
+                                score += 10;
+                            }
+                        }
+
+                        if exp_version.is_none() && exp_title.is_none() {
+                            if let Some(hint) = title_hint {
+                                let h = hint.to_lowercase();
+                                let bt = bmap.title.to_lowercase();
+                                let bv = bmap.version.to_lowercase();
+                                if bt == h {
+                                    score += 40;
+                                } else if bt.contains(&h) || h.contains(&bt) {
+                                    score += 25;
+                                }
+                                if bv == h {
+                                    score += 35;
+                                } else if bv.contains(&h) || h.contains(&bv) {
+                                    score += 20;
+                                }
+                            }
+                        }
+
+                        if score > 0 {
                             if bmap.beatmap_id == 0 {
                                 bmap.beatmap_id = map_id.unwrap_or(0);
                             }
-                            candidate = Some((bmap, content));
+                            if best_match.as_ref().map_or(true, |(s, _, _)| score > *s) {
+                                best_match = Some((score, bmap, content));
+                            }
                         }
                     }
                 }
@@ -688,12 +884,14 @@ fn scan_dir_for_osu_file(
     }
 
     if map_md5.is_some() {
-        None
-    } else if fallback_set_id.is_some() {
-        version_candidate.or(title_candidate).or(candidate)
-    } else {
-        version_candidate.or(title_candidate)
+        return None;
     }
+
+    if let Some((_, bmap, content)) = best_match {
+        return Some((bmap, content));
+    }
+
+    exact_id_match
 }
 
 // Retrieves beatmap file content. Validates that local candidate matches the requested
@@ -718,7 +916,7 @@ pub async fn get_or_fetch_beatmap_content(
             let md5_match = !bmap.file_md5.is_empty() && local_bmap.file_md5.eq_ignore_ascii_case(&bmap.file_md5);
             let id_and_ver_match = bmap.beatmap_id > 0 && local_bmap.beatmap_id == bmap.beatmap_id && !bmap.version.is_empty() && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
 
-            if md5_match || (bmap.file_md5.is_empty() && id_and_ver_match) {
+            if md5_match || id_and_ver_match {
                 let conn = db.lock().await;
                 let _ = crate::db::update_beatmap_file_content(&conn, &bmap.file_md5, &local_c);
                 return Some(local_c);

@@ -27,6 +27,9 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
             tillerino::handle_np(&state, player_name, &reply_target, np_info).await;
             return;
         }
+    } else if let Some(np_info) = parse_np_message(message) {
+        tillerino::handle_np(&state, player_name, "", np_info).await;
+        return;
     }
 
     if trimmed.starts_with('\x01') {
@@ -657,6 +660,112 @@ mod tests {
             let s = shared_state.read().await;
             let p = s.player.as_ref().unwrap();
             assert!(!p.is_restricted, "Player must now be unrestricted");
+        }
+    }
+
+    #[test]
+    fn test_parse_np_message_action_without_link_and_angle_mods() {
+        let unlinked = parse_np_message("\x01ACTION is listening to Artist - Song Title [Hard Diff]\x01").unwrap();
+        assert_eq!(unlinked.map_id, None);
+        assert_eq!(unlinked.set_id, None);
+        assert_eq!(unlinked.title_hint.as_deref(), Some("Artist - Song Title [Hard Diff]"));
+        assert_eq!(unlinked.mods, None);
+
+        let angle_mods = parse_np_message("\x01ACTION is playing Artist - Song Title [Hard Diff] <+HDDT>\x01").unwrap();
+        assert_eq!(angle_mods.title_hint.as_deref(), Some("Artist - Song Title [Hard Diff]"));
+        assert_eq!(angle_mods.mods, Some((Mods::HIDDEN | Mods::DOUBLETIME).bits()));
+
+        let text_mods = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/s/12345 Artist - Song Title [Insane]] <Hidden, HardRock>\x01").unwrap();
+        assert_eq!(text_mods.set_id, Some(12345));
+        assert_eq!(text_mods.title_hint.as_deref(), Some("Artist - Song Title [Insane]"));
+        assert_eq!(text_mods.mods, Some((Mods::HIDDEN | Mods::HARDROCK).bits()));
+    }
+
+    #[test]
+    fn test_scan_dir_multidiff_matches_exact_difficulty() {
+        let temp_dir = std::env::temp_dir().join(format!("osu_test_multidiff_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let set_dir = temp_dir.join("555 Composer - Multi Song");
+        std::fs::create_dir_all(&set_dir).unwrap();
+
+        for (diff, id) in &[("Easy", 101), ("Normal", 102), ("Hard", 103), ("Insane", 104)] {
+            let content = format!(
+                "osu file format v14\n\n[Metadata]\nTitle:Multi Song\nArtist:Composer\nCreator:Mapper\nVersion:{}\nBeatmapID:{}\nBeatmapSetID:555\n[Difficulty]\nHPDrainRate:5\nCircleSize:4\nOverallDifficulty:7\nApproachRate:8\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n",
+                diff, id
+            );
+            let path = set_dir.join(format!("Composer - Multi Song (Mapper) [{}].osu", diff));
+            std::fs::write(&path, content).unwrap();
+        }
+
+        // Querying for "Hard" must return Hard, NOT Easy (first in dir)
+        let res_hard = utils::find_and_parse_local_osu_file(&temp_dir, Some(555), None, None, Some("Composer - Multi Song [Hard]"));
+        assert!(res_hard.is_some());
+        let (bmap_hard, _) = res_hard.unwrap();
+        assert_eq!(bmap_hard.version, "Hard", "Must pick Hard difficulty, not the first file in dir");
+        assert_eq!(bmap_hard.beatmap_id, 103);
+
+        // Querying for "Insane" must return Insane
+        let res_insane = utils::find_and_parse_local_osu_file(&temp_dir, Some(555), None, None, Some("Composer - Multi Song [Insane]"));
+        assert!(res_insane.is_some());
+        let (bmap_insane, _) = res_insane.unwrap();
+        assert_eq!(bmap_insane.version, "Insane");
+        assert_eq!(bmap_insane.beatmap_id, 104);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_tillerino_np_same_set_diff_switch() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PlayerSetSwitch").unwrap();
+
+        let map_easy_content = "osu file format v14\n\n[Metadata]\nTitle:SetSong\nArtist:SetArtist\nCreator:Mapper\nVersion:Normal\nBeatmapID:7001\nBeatmapSetID:9000\n[Difficulty]\nHPDrainRate:3\nCircleSize:3\nOverallDifficulty:3\nApproachRate:4\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n";
+        let mut bmap_easy = utils::parse_osu_file_to_beatmap(map_easy_content, Some(7001), Some(9000)).unwrap();
+        bmap_easy.file_content = Some(map_easy_content.to_string());
+        db::insert_beatmap(&conn, &bmap_easy).unwrap();
+        db::update_beatmap_file_content(&conn, &bmap_easy.file_md5, map_easy_content).unwrap();
+
+        let map_insane_content = "osu file format v14\n\n[Metadata]\nTitle:SetSong\nArtist:SetArtist\nCreator:Mapper\nVersion:Insane\nBeatmapID:7002\nBeatmapSetID:9000\n[Difficulty]\nHPDrainRate:7\nCircleSize:4\nOverallDifficulty:8\nApproachRate:9\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n300,200,2000,1,0,0:0:0:0:\n";
+        let mut bmap_insane = utils::parse_osu_file_to_beatmap(map_insane_content, Some(7002), Some(9000)).unwrap();
+        bmap_insane.file_content = Some(map_insane_content.to_string());
+        db::insert_beatmap(&conn, &bmap_insane).unwrap();
+        db::update_beatmap_file_content(&conn, &bmap_insane.file_md5, map_insane_content).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("PlayerSetSwitch".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // 1. NP on Normal difficulty
+        let np1 = "\x01ACTION is listening to [https://osu.ppy.sh/s/9000 SetArtist - SetSong [Normal]]\x01";
+        handle_chat_message(shared_state.clone(), "PlayerSetSwitch", np1, "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("Normal"), "Must calculate Normal diff");
+            assert_eq!(s.last_np_map.as_ref().unwrap().version, "Normal");
+        }
+
+        // 2. Switch to Insane difficulty of the same mapset via /s/ link
+        let np2 = "\x01ACTION is listening to [https://osu.ppy.sh/s/9000 SetArtist - SetSong [Insane]]\x01";
+        handle_chat_message(shared_state.clone(), "PlayerSetSwitch", np2, "Tillerino").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts[0].payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("Insane"), "Must calculate Insane diff, not stale Normal diff! Got: {}", msg);
+            assert_eq!(s.last_np_map.as_ref().unwrap().version, "Insane");
         }
     }
 }

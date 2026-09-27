@@ -41,9 +41,13 @@ pub struct NpBreakdown {
 }
 
 pub async fn reply(state: &Arc<RwLock<AppState>>, target: &str, text: &str) {
+    reply_with_sender(state, target, text, BOT_NAME, BOT_ID).await;
+}
+
+pub async fn reply_with_sender(state: &Arc<RwLock<AppState>>, target: &str, text: &str, sender_name: &str, sender_id: i32) {
     let mut s = state.write().await;
     if let Some(ref mut p) = s.player {
-        let msg_pkt = packets::send_msg(BOT_NAME, text, target, BOT_ID);
+        let msg_pkt = packets::send_msg(sender_name, text, target, sender_id);
         p.queue.extend_from_slice(&msg_pkt);
     }
 }
@@ -129,13 +133,13 @@ pub fn parse_np_message(msg: &str) -> Option<NpInfo> {
         let inner = &msg[start_bracket + 1..];
         let inner_end = inner.rfind(']').unwrap_or(inner.len());
         let inside = &inner[..inner_end];
-        if let Some(space_pos) = inside.find(' ') {
-            let title_part = inside[space_pos + 1..].trim();
-            if !title_part.is_empty() {
-                title_hint = Some(title_part.to_string());
+        if inside.starts_with("http://") || inside.starts_with("https://") {
+            if let Some(space_pos) = inside.find(' ') {
+                let title_part = inside[space_pos + 1..].trim();
+                if !title_part.is_empty() {
+                    title_hint = Some(title_part.to_string());
+                }
             }
-        } else if !inside.starts_with("http") {
-            title_hint = Some(inside.trim().to_string());
         }
     }
 
@@ -143,8 +147,15 @@ pub fn parse_np_message(msg: &str) -> Option<NpInfo> {
         for prefix in &["is listening to ", "is playing ", "is watching ", "is editing "] {
             if let Some(pos) = msg.find(prefix) {
                 let after = &msg[pos + prefix.len()..];
-                let clean = after.trim_matches(|c| c == '\x01' || c == '[' || c == ']').trim();
-                let title_only = if let Some(plus_idx) = clean.rfind(" +") { &clean[..plus_idx] } else { clean };
+                let clean = after.trim_matches(|c| c == '\x01').trim();
+                let mut title_only = clean;
+                if let Some(plus_idx) = title_only.rfind(" +") {
+                    title_only = title_only[..plus_idx].trim();
+                } else if let Some(plus_idx) = title_only.rfind(" <+") {
+                    title_only = title_only[..plus_idx].trim();
+                } else if let Some(angle_idx) = title_only.rfind(" <") {
+                    title_only = title_only[..angle_idx].trim();
+                }
                 if !title_only.is_empty() {
                     title_hint = Some(title_only.to_string());
                 }
@@ -153,22 +164,59 @@ pub fn parse_np_message(msg: &str) -> Option<NpInfo> {
         }
     }
 
-    if let Some(plus_pos) = msg.rfind(" +") {
-        let after = &msg[plus_pos + 2..];
-        let mod_str: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-        if !mod_str.is_empty() {
-            let parsed = Mods::from_short_str(&mod_str);
-            if !parsed.is_empty() {
-                mods = Some(parsed.bits());
+    if let Some(angle_pos) = msg.rfind('<') {
+        if let Some(close_pos) = msg[angle_pos..].rfind('>') {
+            let inner = &msg[angle_pos + 1..angle_pos + close_pos];
+            let clean_mods = inner.replace('+', "").replace(',', " ");
+            let parts: Vec<&str> = clean_mods.split_whitespace().collect();
+            let mut combined = Mods::empty();
+            for part in parts {
+                let parsed = Mods::from_short_str(part);
+                if !parsed.is_empty() {
+                    combined |= parsed;
+                } else {
+                    match part.to_lowercase().as_str() {
+                        "hidden" => combined |= Mods::HIDDEN,
+                        "hardrock" => combined |= Mods::HARDROCK,
+                        "doubletime" => combined |= Mods::DOUBLETIME,
+                        "nightcore" => combined |= Mods::NIGHTCORE,
+                        "nofail" => combined |= Mods::NOFAIL,
+                        "easy" => combined |= Mods::EASY,
+                        "halftime" => combined |= Mods::HALFTIME,
+                        "flashlight" => combined |= Mods::FLASHLIGHT,
+                        "spunout" => combined |= Mods::SPUNOUT,
+                        "relax" => combined |= Mods::RELAX,
+                        "autopilot" => combined |= Mods::AUTOPILOT,
+                        "perfect" => combined |= Mods::PERFECT,
+                        "suddendeath" => combined |= Mods::SUDDENDEATH,
+                        _ => {}
+                    }
+                }
+            }
+            if !combined.is_empty() {
+                mods = Some(combined.bits());
             }
         }
-    } else if let Some(plus_pos) = msg.rfind('+') {
-        let after = &msg[plus_pos + 1..];
-        let mod_str: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-        if !mod_str.is_empty() {
-            let parsed = Mods::from_short_str(&mod_str);
-            if !parsed.is_empty() {
-                mods = Some(parsed.bits());
+    }
+
+    if mods.is_none() {
+        if let Some(plus_pos) = msg.rfind(" +") {
+            let after = &msg[plus_pos + 2..];
+            let mod_str: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+            if !mod_str.is_empty() {
+                let parsed = Mods::from_short_str(&mod_str);
+                if !parsed.is_empty() {
+                    mods = Some(parsed.bits());
+                }
+            }
+        } else if let Some(plus_pos) = msg.rfind('+') {
+            let after = &msg[plus_pos + 1..];
+            let mod_str: String = after.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+            if !mod_str.is_empty() {
+                let parsed = Mods::from_short_str(&mod_str);
+                if !parsed.is_empty() {
+                    mods = Some(parsed.bits());
+                }
             }
         }
     }
@@ -259,65 +307,116 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
         (p_id, p_md5, p_text, mods)
     };
 
-    let target_map_id = np_info.map_id.or(player_map_id);
-    let target_md5 = if np_info.map_id.is_none() || np_info.map_id == player_map_id {
-        player_map_md5.clone()
+    let is_direct_np = np_info.map_id.is_none() && np_info.set_id.is_none() && np_info.title_hint.is_none();
+
+    let target_map_id = if is_direct_np {
+        player_map_id
     } else {
-        None
+        np_info.map_id
     };
+
     let target_set_id = np_info.set_id;
-    let target_hint = if let Some(ref th) = np_info.title_hint {
-        if th.contains('[') && th.contains(']') {
-            Some(th.clone())
-        } else if let Some(ref pt) = player_info_text {
-            if pt.contains('[') && pt.contains(']') {
-                Some(pt.clone())
-            } else {
-                Some(th.clone())
-            }
-        } else {
-            Some(th.clone())
-        }
+
+    let target_hint = if is_direct_np {
+        player_info_text.clone()
+    } else if let Some(ref th) = np_info.title_hint {
+        Some(th.clone())
     } else {
         player_info_text.clone()
     };
 
+    let target_md5 = if is_direct_np {
+        player_map_md5.clone()
+    } else if let Some(mid) = np_info.map_id {
+        if player_map_id == Some(mid) {
+            player_map_md5.clone()
+        } else {
+            None
+        }
+    } else if let (Some(ref pt), Some(ref th)) = (&player_info_text, &target_hint) {
+        if pt.eq_ignore_ascii_case(th) {
+            player_map_md5.clone()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let mut bmap: Option<Beatmap> = None;
 
-    {
-        let s = state.read().await;
-        let db_conn = s.db.lock().await;
-        if let Some(id) = target_map_id {
+    // 1. Try DB lookup by beatmap ID (mid > 0)
+    if let Some(id) = target_map_id {
+        if id > 0 {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
             if let Ok(Some(m)) = db::get_beatmap_by_id(&db_conn, id) {
-                bmap = Some(m);
-            }
-        }
-        if bmap.is_none() {
-            if let Some(ref md5) = target_md5 {
-                if let Ok(Some(m)) = db::get_beatmap_by_md5(&db_conn, md5) {
+                let matches_hint = target_hint.as_deref().map_or(true, |h| utils::beatmap_matches_hint(&m, h));
+                if matches_hint {
                     bmap = Some(m);
-                }
-            }
-        }
-        if bmap.is_none() {
-            if let Some(ref last) = s.last_np_map {
-                let set_matches = target_set_id.is_some() && Some(last.beatmapset_id) == target_set_id;
-                let id_matches = target_map_id.is_some() && target_map_id == Some(last.beatmap_id);
-                let md5_matches = target_md5.is_some() && target_md5.as_deref() == Some(&last.file_md5);
-                let no_filter = np_info.map_id.is_none() && np_info.set_id.is_none() && np_info.title_hint.is_none();
-                if set_matches || id_matches || md5_matches || no_filter {
-                    bmap = Some(last.clone());
                 }
             }
         }
     }
 
+    // 2. Try DB lookup by MD5
+    if bmap.is_none() {
+        if let Some(ref md5) = target_md5 {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(m)) = db::get_beatmap_by_md5(&db_conn, md5) {
+                bmap = Some(m);
+            }
+        }
+    }
+
+    // 3. Try DB lookup by beatmapset_id
+    if bmap.is_none() {
+        if let Some(sid) = target_set_id {
+            if sid > 0 {
+                let s = state.read().await;
+                let db_conn = s.db.lock().await;
+                if let Ok(maps) = db::get_beatmaps_by_set_id(&db_conn, sid) {
+                    if let Some(ref hint) = target_hint {
+                        for m in maps {
+                            if utils::beatmap_matches_hint(&m, hint) {
+                                bmap = Some(m);
+                                break;
+                            }
+                        }
+                    } else if !maps.is_empty() {
+                        bmap = maps.into_iter().next();
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Check last_np_map
+    if bmap.is_none() {
+        let s = state.read().await;
+        if let Some(ref last) = s.last_np_map {
+            let id_matches = target_map_id.is_some() && target_map_id == Some(last.beatmap_id) && target_map_id != Some(0);
+            let md5_matches = target_md5.is_some() && target_md5.as_deref() == Some(&last.file_md5);
+            let set_matches = target_set_id.is_some()
+                && Some(last.beatmapset_id) == target_set_id
+                && target_hint.as_deref().map_or(true, |h| utils::beatmap_matches_hint(last, h));
+            let no_filter = is_direct_np;
+            if id_matches || md5_matches || set_matches || no_filter {
+                bmap = Some(last.clone());
+            }
+        }
+    }
+
+    // 5. Try osu! API
     if bmap.is_none() {
         let s = state.read().await;
         if let Some(ref key) = s.config.osu_api_key {
             let mut fetched = None;
             if let Some(id) = target_map_id {
-                fetched = utils::fetch_beatmap_from_api(&s.http, key, &[("b", id.to_string())]).await;
+                if id > 0 {
+                    fetched = utils::fetch_beatmap_from_api(&s.http, key, &[("b", id.to_string())]).await;
+                }
             }
             if fetched.is_none() {
                 if let Some(ref md5) = target_md5 {
@@ -338,6 +437,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
         }
     }
 
+    // 6. Try local Songs folder
     if bmap.is_none() {
         let s = state.read().await;
         if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
@@ -359,7 +459,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
 
     if bmap.is_none() {
         let s = state.read().await;
-        if np_info.map_id.is_none() && np_info.set_id.is_none() && np_info.title_hint.is_none() {
+        if is_direct_np {
             if let Some(ref last) = s.last_np_map {
                 if target_md5.is_none() || target_md5.as_deref() == Some(&last.file_md5) {
                     bmap = Some(last.clone());
@@ -369,13 +469,24 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
     }
 
     let Some(bmap) = bmap else {
-        reply(state, target, "No beatmap selected or found! Select a beatmap in-game first.").await;
+        if !target.is_empty() {
+            reply(state, target, "No beatmap selected or found! Select a beatmap in-game first.").await;
+        }
         return;
     };
 
     {
         let mut s = state.write().await;
         s.last_np_map = Some(bmap.clone());
+        if let Some(ref mut p) = s.player {
+            p.map_id = bmap.beatmap_id as i32;
+            p.map_md5 = bmap.file_md5.clone();
+            p.info_text = format!("{} - {} [{}]", bmap.artist, bmap.title, bmap.version);
+        }
+    }
+
+    if target.is_empty() {
+        return;
     }
 
     let content = {
