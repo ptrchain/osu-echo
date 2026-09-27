@@ -41,6 +41,10 @@ pub struct Config {
     pub osu_username: Option<String>,
     pub osu_password: Option<String>,
     pub country: Option<String>,
+    #[serde(default)]
+    pub discord_webhook_url: Option<String>,
+    #[serde(default)]
+    pub discord_webhook_min_pp: Option<f64>,
 }
 
 impl Default for Config {
@@ -62,6 +66,8 @@ impl Default for Config {
             osu_username: None,
             osu_password: None,
             country: None,
+            discord_webhook_url: None,
+            discord_webhook_min_pp: None,
         }
     }
 }
@@ -152,6 +158,19 @@ impl Config {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
                 self.country = Some(trimmed.to_uppercase());
+            }
+        }
+
+        if let Ok(val) = std::env::var("DISCORD_WEBHOOK_URL") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                self.discord_webhook_url = Some(trimmed.to_string());
+            }
+        }
+
+        if let Ok(val) = std::env::var("DISCORD_WEBHOOK_MIN_PP") {
+            if let Ok(min_pp) = val.trim().parse::<f64>() {
+                self.discord_webhook_min_pp = Some(min_pp);
             }
         }
     }
@@ -291,7 +310,12 @@ pub fn write_dotenv_full(
     out.push_str(&format!("AMOUNT_OF_SCORES_ON_LB={}\n\n", map.get("AMOUNT_OF_SCORES_ON_LB").cloned().unwrap_or_else(|| "50".to_string())));
 
     out.push_str("# Chat Feed Settings\n");
-    out.push_str(&format!("ENABLE_RECENT_CHANNEL={}\n", map.get("ENABLE_RECENT_CHANNEL").cloned().unwrap_or_else(|| "true".to_string())));
+    out.push_str(&format!("ENABLE_RECENT_CHANNEL={}\n\n", map.get("ENABLE_RECENT_CHANNEL").cloned().unwrap_or_else(|| "true".to_string())));
+
+    out.push_str("# Discord Webhook Integration\n");
+    out.push_str("# (Posts submitted scores directly to a Discord channel via webhook)\n");
+    out.push_str(&format!("DISCORD_WEBHOOK_URL={}\n", map.get("DISCORD_WEBHOOK_URL").cloned().unwrap_or_default()));
+    out.push_str(&format!("DISCORD_WEBHOOK_MIN_PP={}\n", map.get("DISCORD_WEBHOOK_MIN_PP").cloned().unwrap_or_default()));
 
     std::fs::write(env_path, out)?;
     Ok(())

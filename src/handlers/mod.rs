@@ -7,3 +7,4 @@ pub mod score_decode;
 pub mod score_submit;
 pub mod tillerino;
 pub mod web;
+pub mod webhook;

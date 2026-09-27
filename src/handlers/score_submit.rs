@@ -477,13 +477,15 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     }
     drop(s);
 
-    let (_after_stats, charts) = {
+    let (after_stats, charts, http, discord_webhook_url, discord_webhook_min_pp) = {
         let s = state.read().await;
         let db_conn = s.db.lock().await;
         let scores = db::get_ranked_scores(&db_conn, &player_name).unwrap_or_default();
         let playcount = db::get_playcount(&db_conn, &player_name).unwrap_or(1);
         let daily_key = s.config.osu_daily_api_key.clone();
         let http = s.http.clone();
+        let discord_webhook_url = s.config.discord_webhook_url.clone();
+        let discord_webhook_min_pp = s.config.discord_webhook_min_pp;
         drop(db_conn);
         drop(s);
 
@@ -550,8 +552,30 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         }
         player.enqueue_stats();
 
-        (after_stats, charts)
+        (after_stats, charts, http, discord_webhook_url, discord_webhook_min_pp)
     };
+
+    if let Some(webhook_url) = discord_webhook_url {
+        let meets_pp = match discord_webhook_min_pp {
+            Some(min_pp) => score.pp.unwrap_or(0.0) >= min_pp,
+            None => true,
+        };
+
+        if meets_pp {
+            let player_rank = after_stats.rank;
+            let player_pp = after_stats.pp;
+            crate::handlers::webhook::send_score_webhook(
+                http,
+                webhook_url,
+                player_name.clone(),
+                score,
+                bmap,
+                rank_after,
+                player_rank,
+                player_pp,
+            );
+        }
+    }
 
     utils::log_success(&format!("{} has successfully submitted a score!", player_name));
     Ok(charts)
