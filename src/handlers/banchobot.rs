@@ -49,6 +49,9 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "country" | "flag" => handle_country(state, player_name, reply_target, args).await,
         "mybest" | "pb" => handle_mybest(state, player_name, reply_target).await,
         "leaderboard" | "lb" => handle_leaderboard(state, player_name, reply_target).await,
+        "clearscores" | "clearmap" | "removescores" | "deletescores" | "clearscore" | "removemap" | "clear" => {
+            handle_clear_scores(state, player_name, reply_target, args).await
+        }
         "restrictself" | "restrict" => handle_restrictself(state, player_name, reply_target, args).await,
         "unrestrictself" | "unrestrict" => handle_unrestrictself(state, player_name, reply_target).await,
         _ => {
@@ -71,6 +74,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}stats / {p}profile : Show player stats\n\
         {p}mybest / {p}pb : Show your best score on the current map\n\
         {p}leaderboard / {p}lb : Show top scores on current map\n\
+        {p}clearscores / {p}clearmap [set] : Clear your scores on the current beatmap (or set)\n\
         {p}friend <add/remove/list/sync> : Manage friends\n\
         {p}mode <vn/rx/ap> : Switch game mode\n\
         {p}recentfeed [on/off] : Toggle #recent score channel feed\n\
@@ -1623,6 +1627,252 @@ pub async fn handle_wipe(state: &Arc<RwLock<AppState>>, player_name: &str, targe
     reply(state, target, "Profile stats and scores have been wiped!").await;
 }
 
+pub async fn refresh_player_stats(state: &Arc<RwLock<AppState>>, player_name: &str) {
+    let (db, http, config) = {
+        let s = state.read().await;
+        (s.db.clone(), s.http.clone(), s.config.clone())
+    };
+
+    let (ranked_scores, playcount) = {
+        let conn = db.lock().await;
+        let sc = db::get_ranked_scores(&conn, player_name).unwrap_or_default();
+        let pc = db::get_playcount(&conn, player_name).unwrap_or(0);
+        (sc, pc)
+    };
+
+    let (new_pp, new_acc, p_mode) = {
+        let mut s = state.write().await;
+        let filter_mod = s.mode;
+        if let Some(ref mut p) = s.player {
+            p.calculate_stats(&ranked_scores, filter_mod, playcount);
+            (p.pp, p.acc, p.mode)
+        } else {
+            let mut dummy = Player::new(player_name.to_string());
+            dummy.calculate_stats(&ranked_scores, filter_mod, playcount);
+            (dummy.pp, dummy.acc, dummy.mode)
+        }
+    };
+
+    let daily_key = config.osu_daily_api_key.clone();
+    let rank = if let Some(ref api_key) = daily_key {
+        utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await
+    } else {
+        None
+    };
+
+    {
+        let mut s = state.write().await;
+        if let Some(ref mut p) = s.player {
+            if let Some(r) = rank {
+                p.rank = r;
+            }
+            p.enqueue_stats();
+        }
+    }
+
+    {
+        let conn = db.lock().await;
+        let _ = db::update_profile_stats(&conn, player_name, new_pp as f64, new_acc);
+    }
+}
+
+pub async fn handle_clear_scores(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
+    let is_set = args.iter().any(|a| a.eq_ignore_ascii_case("set") || a.eq_ignore_ascii_case("mapset"));
+    let clear_all_players = args.iter().any(|a| a.eq_ignore_ascii_case("all") || a.eq_ignore_ascii_case("everyone"));
+
+    let mut explicit_md5: Option<String> = None;
+    let mut explicit_id: Option<i64> = None;
+
+    for arg in args {
+        let lower = arg.to_lowercase();
+        if lower == "set" || lower == "mapset" || lower == "all" || lower == "everyone" {
+            continue;
+        }
+        if lower.len() == 32 && lower.chars().all(|c| c.is_ascii_hexdigit()) {
+            explicit_md5 = Some(lower);
+        } else if let Ok(id) = lower.parse::<i64>() {
+            explicit_id = Some(id);
+        }
+    }
+
+    if is_set {
+        let mut target_set_id = 0i64;
+        let (player_md5, player_mid, last_np) = {
+            let s = state.read().await;
+            (
+                s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+                s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
+                s.last_np_map.clone(),
+            )
+        };
+
+        if let Some(num) = explicit_id {
+            target_set_id = num;
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, num) {
+                if b.beatmapset_id > 0 {
+                    target_set_id = b.beatmapset_id;
+                }
+            }
+        } else {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if !player_md5.is_empty() {
+                if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &player_md5) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 {
+                if let Some(ref np) = last_np {
+                    if np.beatmapset_id > 0 {
+                        target_set_id = np.beatmapset_id;
+                    }
+                }
+            }
+            if target_set_id == 0 && player_mid > 0 {
+                if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, player_mid) {
+                    if b.beatmapset_id > 0 {
+                        target_set_id = b.beatmapset_id;
+                    }
+                }
+            }
+        }
+
+        if target_set_id == 0 {
+            reply(state, target, "No beatmapset selected! Use /np or select a map first.").await;
+            return;
+        }
+
+        let set_title = {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(maps) = db::get_beatmaps_by_set_id(&db_conn, target_set_id) {
+                maps.first().map(|m| format!("{} - {}", m.artist, m.title))
+            } else {
+                None
+            }
+        }
+        .or_else(|| {
+            if let Some(ref np) = last_np {
+                if np.beatmapset_id == target_set_id {
+                    return Some(format!("{} - {}", np.artist, np.title));
+                }
+            }
+            None
+        })
+        .unwrap_or_else(|| format!("Set ID {}", target_set_id));
+
+        let deleted = {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if clear_all_players {
+                db::delete_all_scores_on_set(&db_conn, target_set_id).unwrap_or(0)
+            } else {
+                db::delete_scores_on_set(&db_conn, player_name, target_set_id).unwrap_or(0)
+            }
+        };
+
+        if deleted == 0 {
+            reply(state, target, &format!("No scores found on mapset {} to clear.", set_title)).await;
+        } else {
+            let s_plural = if deleted == 1 { "" } else { "s" };
+            reply(state, target, &format!("Cleared {} score{} across all difficulties of {}!", deleted, s_plural, set_title)).await;
+            refresh_player_stats(state, player_name).await;
+        }
+        return;
+    }
+
+    // Single beatmap clear
+    let (player_md5, player_mid, player_info, last_np) = {
+        let s = state.read().await;
+        (
+            s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
+            s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
+            s.player.as_ref().map(|p| p.info_text.clone()).unwrap_or_default(),
+            s.last_np_map.clone(),
+        )
+    };
+
+    let target_md5 = if let Some(md5) = explicit_md5 {
+        md5
+    } else if let Some(id) = explicit_id {
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, id) {
+            b.file_md5
+        } else if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
+            if let Some((local_bmap, _content)) = utils::find_and_parse_local_osu_file(&songs_dir, None, Some(id), None, None) {
+                let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                local_bmap.file_md5
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        }
+    } else if !player_md5.is_empty() {
+        player_md5
+    } else if let Some(ref np) = last_np {
+        np.file_md5.clone()
+    } else if player_mid > 0 {
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        if let Ok(Some(b)) = db::get_beatmap_by_id(&db_conn, player_mid) {
+            b.file_md5
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    if target_md5.is_empty() {
+        reply(state, target, "No beatmap selected! Use /np or select a map first.").await;
+        return;
+    }
+
+    let map_title = {
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &target_md5) {
+            format!("{} - {} [{}]", b.artist, b.title, b.version)
+        } else if let Some(ref np) = s.last_np_map {
+            if np.file_md5.eq_ignore_ascii_case(&target_md5) {
+                format!("{} - {} [{}]", np.artist, np.title, np.version)
+            } else if !player_info.is_empty() {
+                player_info.clone()
+            } else {
+                target_md5.clone()
+            }
+        } else if !player_info.is_empty() {
+            player_info.clone()
+        } else {
+            target_md5.clone()
+        }
+    };
+
+    let deleted = {
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        if clear_all_players {
+            db::delete_all_scores_on_map(&db_conn, &target_md5).unwrap_or(0)
+        } else {
+            db::delete_scores_on_map(&db_conn, player_name, &target_md5).unwrap_or(0)
+        }
+    };
+
+    if deleted == 0 {
+        reply(state, target, &format!("No scores found on {} to clear.", map_title)).await;
+    } else {
+        let s_plural = if deleted == 1 { "" } else { "s" };
+        reply(state, target, &format!("Cleared {} score{} on {}!", deleted, s_plural, map_title)).await;
+        refresh_player_stats(state, player_name).await;
+    }
+}
+
 pub async fn handle_avatar(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     if args.is_empty() {
         reply(state, target, "Usage: !avatar <image_url_or_path>").await;
@@ -2646,6 +2896,206 @@ mod tests {
         // Old mapset 12345 must NOT have been ranked!
         let old = db::get_beatmap_by_id(&db_conn, 8001).unwrap().unwrap();
         assert_eq!(old.approved, 0, "Old mapset must not be ranked by !rank set on unranked map");
+    }
+
+    #[tokio::test]
+    async fn test_clear_scores_while_on_map() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Player1").unwrap();
+
+        let mut b1 = Beatmap::blank();
+        b1.beatmap_id = 9001;
+        b1.beatmapset_id = 800;
+        b1.file_md5 = "map_md5_to_clear".to_string();
+        b1.artist = "Test Artist".to_string();
+        b1.title = "Test Song".to_string();
+        b1.version = "Hard".to_string();
+        b1.approved = 1;
+        db::insert_beatmap(&conn, &b1).unwrap();
+
+        let mut b2 = Beatmap::blank();
+        b2.beatmap_id = 9002;
+        b2.file_md5 = "other_map_md5".to_string();
+        b2.artist = "Other Artist".to_string();
+        b2.title = "Other Song".to_string();
+        b2.version = "Insane".to_string();
+        b2.approved = 1;
+        db::insert_beatmap(&conn, &b2).unwrap();
+
+        let make_score = |md5: &str, pp: f64, score_val: i64| crate::types::score::Score {
+            mode: 0,
+            md5: md5.to_string(),
+            name: "Player1".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: score_val,
+            max_combo: 400,
+            perfect: true,
+            mods: 0,
+            time: 1000,
+            acc: Some(100.0),
+            pp: Some(pp),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        db::insert_score(&conn, &make_score("map_md5_to_clear", 150.0, 500000), "ranked").unwrap();
+        db::insert_score(&conn, &make_score("map_md5_to_clear", 120.0, 400000), "ranked").unwrap();
+        db::insert_score(&conn, &make_score("other_map_md5", 200.0, 800000), "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("Player1".to_string());
+        player.map_md5 = "map_md5_to_clear".to_string();
+        player.info_text = "Test Artist - Test Song [Hard]".to_string();
+        player.pp = 300;
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Execute "!clearscores" while on the map
+        handle_command(&state, "Player1", "#osu", "clearscores", &[]).await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+
+        // Scores on map_md5_to_clear must be 0
+        let cleared_scores = db::get_scores_on_map(&db_conn, "Player1", "map_md5_to_clear", 0).unwrap();
+        assert_eq!(cleared_scores.len(), 0, "Scores on cleared map must be 0");
+
+        // Scores on other_map_md5 must remain 1
+        let remaining = db::get_scores_on_map(&db_conn, "Player1", "other_map_md5", 0).unwrap();
+        assert_eq!(remaining.len(), 1, "Scores on other map must remain intact");
+
+        // Profile stats recalculated: PP should now reflect only other_map_md5
+        let p = s.player.as_ref().unwrap();
+        assert_eq!(p.pp, 200, "Player PP must update to 200pp after score deletion");
+
+        // Packets in queue must include ChoUserStats and BanchoBot message
+        let queue = p.queue.clone();
+        drop(db_conn);
+        drop(s);
+
+        let pkts = packets::split_packets(&queue);
+        let has_user_stats = pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16);
+        assert!(has_user_stats, "Must send ChoUserStats packet to update in-game HUD immediately");
+
+        let bot_msg = pkts.iter().find(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Cleared 2 scores on Test Artist - Test Song [Hard]!")
+            } else {
+                false
+            }
+        });
+        assert!(bot_msg.is_some(), "BanchoBot message must confirm 2 scores were cleared on that map");
+    }
+
+    #[tokio::test]
+    async fn test_clear_scores_after_np() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Player1").unwrap();
+
+        let mut b1 = Beatmap::blank();
+        b1.beatmap_id = 9005;
+        b1.file_md5 = "np_map_md5".to_string();
+        b1.artist = "NP Artist".to_string();
+        b1.title = "NP Title".to_string();
+        b1.version = "Expert".to_string();
+        b1.approved = 1;
+        db::insert_beatmap(&conn, &b1).unwrap();
+
+        let make_score = |md5: &str, pp: f64| crate::types::score::Score {
+            mode: 0,
+            md5: md5.to_string(),
+            name: "Player1".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 750000,
+            max_combo: 300,
+            perfect: true,
+            mods: 0,
+            time: 1000,
+            acc: Some(100.0),
+            pp: Some(pp),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &make_score("np_map_md5", 250.0), "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("Player1".to_string());
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Simulate /np to select the map
+        let np_info = crate::handlers::tillerino::NpInfo {
+            map_id: Some(9005),
+            set_id: None,
+            title_hint: Some("NP Artist - NP Title [Expert]".to_string()),
+            mods: None,
+        };
+        crate::handlers::tillerino::handle_np(&state, "Player1", "Tillerino", np_info).await;
+
+        // Now run !clearmap
+        handle_command(&state, "Player1", "Tillerino", "clearmap", &[]).await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let scores = db::get_scores_on_map(&db_conn, "Player1", "np_map_md5", 0).unwrap();
+        assert_eq!(scores.len(), 0, "Scores on /np map must be cleared");
+    }
+
+    #[tokio::test]
+    async fn test_clear_scores_no_map_selected() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Player1").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("Player1".to_string());
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        handle_command(&state, "Player1", "#osu", "clearscores", &[]).await;
+
+        let s = state.read().await;
+        let p = s.player.as_ref().unwrap();
+        let pkts = packets::split_packets(&p.queue);
+        let msg_found = pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("No beatmap selected! Use /np or select a map first.")
+            } else {
+                false
+            }
+        });
+        assert!(msg_found, "Must notify user that no map is selected");
     }
 }
 

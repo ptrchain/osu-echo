@@ -14,6 +14,7 @@ pub fn register_commands(state: &mut AppState) {
         (vec!["stats", "p", "osu", "profile", "s"], Some("shows your stats!"), false, Arc::new(|state, args| Box::pin(cmd_stats(state, args)))),
         (vec!["recalc", "recalculate"], Some("recalculate all profiles!"), true, Arc::new(|state, _args| Box::pin(cmd_recalc(state)))),
         (vec!["wipe"], Some("wipes all stats from your current profile!"), true, Arc::new(|state, _args| Box::pin(cmd_wipe(state)))),
+        (vec!["clearscores", "clearmap", "removescores", "deletescores", "clearscore", "removemap", "clear"], Some("clears your scores on the current beatmap!"), true, Arc::new(|state, args| Box::pin(cmd_clearscores(state, args)))),
         (vec!["avatar"], Some("change your avatar! Example: !avatar (path or URL)"), true, Arc::new(|state, args| Box::pin(cmd_avatar(state, args)))),
         (vec!["config"], Some("shows current config!"), false, Arc::new(|state, _args| Box::pin(cmd_config(state)))),
         (vec!["restrictself", "restrict"], Some("mimic being banned on official osu! (toggle on/off)"), false, Arc::new(|state, args| Box::pin(cmd_restrictself(state, args)))),
@@ -202,5 +203,15 @@ async fn cmd_unrestrictself(state: Arc<RwLock<AppState>>) -> Option<Vec<u8>> {
     drop(s);
 
     crate::handlers::banchobot::handle_unrestrictself(&state, &player_name, &player_name).await;
+    None
+}
+
+async fn cmd_clearscores(state: Arc<RwLock<AppState>>, args: Vec<String>) -> Option<Vec<u8>> {
+    let s = state.read().await;
+    let player_name = s.player.as_ref()?.name.clone();
+    drop(s);
+
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    crate::handlers::banchobot::handle_clear_scores(&state, &player_name, &player_name, &str_args).await;
     None
 }

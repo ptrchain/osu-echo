@@ -44,7 +44,7 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
     let cmd_text = if let Some(stripped) = trimmed.strip_prefix(&prefix) {
         stripped
     } else if is_pm {
-        trimmed.strip_prefix('!').unwrap_or(trimmed)
+        trimmed.strip_prefix('!').or_else(|| trimmed.strip_prefix('/')).unwrap_or(trimmed)
     } else {
         return;
     };
@@ -80,6 +80,13 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
     }
 
     if is_tillerino {
+        match cmd.as_str() {
+            "clearscores" | "clearmap" | "removescores" | "deletescores" | "clearscore" | "removemap" | "clear" => {
+                banchobot::handle_clear_scores(&state, player_name, &reply_target, args).await;
+                return;
+            }
+            _ => {}
+        }
         tillerino::handle_command(&state, player_name, &reply_target, &cmd, args).await;
         return;
     }
@@ -767,5 +774,79 @@ mod tests {
             assert!(msg.contains("Insane"), "Must calculate Insane diff, not stale Normal diff! Got: {}", msg);
             assert_eq!(s.last_np_map.as_ref().unwrap().version, "Insane");
         }
+    }
+
+    #[tokio::test]
+    async fn test_chat_message_clearscores() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "ClearUser").unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.beatmap_id = 9991;
+        bmap.file_md5 = "clear_user_md5".to_string();
+        bmap.artist = "ClearArtist".to_string();
+        bmap.title = "ClearSong".to_string();
+        bmap.version = "Expert".to_string();
+        bmap.approved = 1;
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let sc = crate::types::score::Score {
+            mode: 0,
+            md5: "clear_user_md5".to_string(),
+            name: "ClearUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 500000,
+            max_combo: 300,
+            perfect: true,
+            mods: 0,
+            time: 12345,
+            acc: Some(100.0),
+            pp: Some(150.0),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        db::insert_score(&conn, &sc, "ranked").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let mut player = crate::types::player::Player::new("ClearUser".to_string());
+        player.map_md5 = "clear_user_md5".to_string();
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        // 1. In #osu channel: !clearscores
+        handle_chat_message(state.clone(), "ClearUser", "!clearscores", "#osu").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let scores = db::get_scores_on_map(&db_conn, "ClearUser", "clear_user_md5", 0).unwrap();
+        assert_eq!(scores.len(), 0, "Score must be cleared after !clearscores in channel");
+        drop(db_conn);
+        drop(s);
+
+        // 2. Re-insert score, then test in Tillerino PM
+        {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            db::insert_score(&db_conn, &sc, "ranked").unwrap();
+        }
+
+        handle_chat_message(state.clone(), "ClearUser", "!clearscores", "Tillerino").await;
+
+        let s = state.read().await;
+        let db_conn = s.db.lock().await;
+        let scores_after = db::get_scores_on_map(&db_conn, "ClearUser", "clear_user_md5", 0).unwrap();
+        assert_eq!(scores_after.len(), 0, "Score must be cleared after !clearscores in Tillerino PM");
     }
 }

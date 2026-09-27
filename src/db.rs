@@ -248,6 +248,31 @@ pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
     Ok(())
 }
 
+pub fn delete_scores_on_map(conn: &Connection, player_name: &str, md5: &str) -> SqlResult<usize> {
+    conn.execute(
+        "DELETE FROM scores WHERE player_name = ?1 AND md5 = ?2",
+        params![player_name, md5],
+    )
+}
+
+pub fn delete_all_scores_on_map(conn: &Connection, md5: &str) -> SqlResult<usize> {
+    conn.execute("DELETE FROM scores WHERE md5 = ?1", params![md5])
+}
+
+pub fn delete_scores_on_set(conn: &Connection, player_name: &str, set_id: i64) -> SqlResult<usize> {
+    conn.execute(
+        "DELETE FROM scores WHERE player_name = ?1 AND md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?2)",
+        params![player_name, set_id],
+    )
+}
+
+pub fn delete_all_scores_on_set(conn: &Connection, set_id: i64) -> SqlResult<usize> {
+    conn.execute(
+        "DELETE FROM scores WHERE md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?1)",
+        params![set_id],
+    )
+}
+
 pub fn insert_score(conn: &Connection, score: &Score, bmap_status: &str) -> SqlResult<i64> {
     conn.execute(
         "INSERT INTO scores (
@@ -1130,4 +1155,79 @@ mod tests {
         assert_eq!(loaded_after.pp, Some(150.25));
         assert_eq!(loaded_after.acc, Some(98.75));
     }
+
+    #[test]
+    fn test_delete_scores_on_map_and_set() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+        ensure_profile(&conn, "Bob").unwrap();
+
+        let mut b1 = Beatmap::blank();
+        b1.file_md5 = "map_hash_a".to_string();
+        b1.beatmap_id = 1001;
+        b1.beatmapset_id = 500;
+        insert_beatmap(&conn, &b1).unwrap();
+
+        let mut b2 = Beatmap::blank();
+        b2.file_md5 = "map_hash_b".to_string();
+        b2.beatmap_id = 1002;
+        b2.beatmapset_id = 500;
+        insert_beatmap(&conn, &b2).unwrap();
+
+        let make_score = |name: &str, md5: &str| Score {
+            mode: 0,
+            md5: md5.to_string(),
+            name: name.to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 123456,
+            acc: Some(100.0),
+            pp: Some(200.0),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        insert_score(&conn, &make_score("Alice", "map_hash_a"), "ranked").unwrap();
+        insert_score(&conn, &make_score("Alice", "map_hash_a"), "ranked").unwrap();
+        insert_score(&conn, &make_score("Bob", "map_hash_a"), "ranked").unwrap();
+        insert_score(&conn, &make_score("Alice", "map_hash_b"), "ranked").unwrap();
+
+        // Alice has 2 scores on map A, 1 on map B. Bob has 1 on map A.
+        assert_eq!(get_scores_on_map(&conn, "Alice", "map_hash_a", 0).unwrap().len(), 2);
+        assert_eq!(get_scores_on_map(&conn, "Bob", "map_hash_a", 0).unwrap().len(), 1);
+
+        // Delete Alice's scores on map A
+        let deleted = delete_scores_on_map(&conn, "Alice", "map_hash_a").unwrap();
+        assert_eq!(deleted, 2);
+        assert_eq!(get_scores_on_map(&conn, "Alice", "map_hash_a", 0).unwrap().len(), 0);
+        // Bob's score is untouched
+        assert_eq!(get_scores_on_map(&conn, "Bob", "map_hash_a", 0).unwrap().len(), 1);
+        // Alice's score on map B is untouched
+        assert_eq!(get_scores_on_map(&conn, "Alice", "map_hash_b", 0).unwrap().len(), 1);
+
+        // Delete on set 500
+        let set_deleted = delete_scores_on_set(&conn, "Alice", 500).unwrap();
+        assert_eq!(set_deleted, 1); // map B score deleted
+        assert_eq!(get_scores_on_map(&conn, "Alice", "map_hash_b", 0).unwrap().len(), 0);
+
+        // Bob's score deleted with delete_all_scores_on_set
+        let all_set_deleted = delete_all_scores_on_set(&conn, 500).unwrap();
+        assert_eq!(all_set_deleted, 1);
+        assert_eq!(get_scores_on_map(&conn, "Bob", "map_hash_a", 0).unwrap().len(), 0);
+    }
 }
+
