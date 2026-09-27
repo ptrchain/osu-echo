@@ -57,6 +57,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 
             let in_packets = packets::split_packets(body_bytes);
             for in_pkt in in_packets {
+                if crate::logger::is_debug() {
+                    crate::logger::debug(&format!("Bancho packet: ID {} ({} bytes)", in_pkt.id, in_pkt.payload.len()));
+                }
                 match in_pkt.id {
                     x if x == packets::PacketId::OsuPing as u16 => {}
                     x if x == packets::PacketId::OsuRequestStatusUpdate as u16 => {
@@ -386,7 +389,11 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         s.pending_login_name = None;
                         utils::log(&format!("Player {} logged out.", player_name));
                     }
-                    _ => {}
+                    _ => {
+                        if crate::logger::is_debug() {
+                            crate::logger::debug(&format!("Unhandled Bancho packet ID: {} ({} bytes)", in_pkt.id, in_pkt.payload.len()));
+                        }
+                    }
                 }
             }
 
@@ -407,6 +414,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 }
 
 async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, String) {
+    if crate::logger::is_debug() {
+        crate::logger::debug(&format!("Bancho login packet received ({} bytes)", body_bytes.len()));
+    }
     let mut body = Vec::new();
 
     // Extract username primarily from body_bytes (authoritative login request)
@@ -439,6 +449,9 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     }
 
     let Some(profile_name) = name else {
+        if crate::logger::is_debug() {
+            crate::logger::debug("Bancho login failed: could not extract username from body or pending session.");
+        }
         body.extend_from_slice(&packets::user_id(-5));
         body.extend_from_slice(&packets::notification("Please restart your game to login!"));
         utils::log("Player needs to restart game!");

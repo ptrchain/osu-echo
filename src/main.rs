@@ -59,9 +59,25 @@ fn print_help() {
     println!("Options:");
     println!("  -h, --help           Print help information");
     println!("  -v, --version        Print version information");
+    println!("  -d, --debug          Enable verbose debug logging (or hold Shift when starting)");
     println!("  -s, --setup          Run or re-run the interactive setup wizard");
     println!("      --reconfigure    Alias for --setup");
     println!("      --trust-cert     Install and trust the local TLS certificate in Windows Root store");
+}
+
+#[cfg(target_os = "windows")]
+fn is_shift_pressed() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(vKey: i32) -> i16;
+    }
+    const VK_SHIFT: i32 = 0x10;
+    unsafe { (GetAsyncKeyState(VK_SHIFT) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn is_shift_pressed() -> bool {
+    false
 }
 
 #[cfg(target_os = "windows")]
@@ -114,6 +130,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     dotenvy::dotenv().ok();
 
+    let shift_held = is_shift_pressed();
+    let debug_cli = args.iter().any(|arg| arg == "-d" || arg == "--debug" || arg == "--verbose");
+    let debug_env = std::env::var("DEBUG").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
+        || std::env::var("VERBOSE").map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false);
+
+    let debug_enabled = shift_held || debug_cli || debug_env;
+    if debug_enabled {
+        logger::set_debug(true);
+    }
+
+    let log_debug_info = || {
+        if logger::is_debug() {
+            let reason = if shift_held {
+                "Shift key held at startup"
+            } else if debug_cli {
+                "CLI flag"
+            } else {
+                "DEBUG/VERBOSE environment variable"
+            };
+            logger::info(&format!("Verbose debug logging enabled (via {}).", reason));
+        }
+    };
+
     let data_dir = std::env::current_dir()?.join(".data");
     std::fs::create_dir_all(&data_dir)?;
 
@@ -128,12 +167,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         dotenvy::dotenv().ok();
         clear_console();
         print_banner();
+        log_debug_info();
         logger::info("osu-echo is ready! Connect in osu! with: -devserver localhost");
         config
     } else {
         match db::load_config(&conn)? {
             Some(config) => {
                 print_banner();
+                log_debug_info();
                 logger::info("Found existing server configuration.");
                 config
             }
@@ -144,6 +185,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 dotenvy::dotenv().ok();
                 clear_console();
                 print_banner();
+                log_debug_info();
                 logger::info("osu-echo is ready! Connect in osu! with: -devserver localhost");
                 config
             }
@@ -219,7 +261,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                             tokio::task::spawn(async move {
                                 let tls_stream = match acceptor.accept(stream).await {
                                     Ok(s) => s,
-                                    Err(_) => return, // Suppress aborted TLS handshakes / abrupt disconnects
+                                    Err(e) => {
+                                        if logger::is_debug() {
+                                            logger::debug(&format!("Port 443 TLS handshake error: {}", e));
+                                        }
+                                        return;
+                                    }
                                 };
                                 let io = TokioIo::new(tls_stream);
                                 let service = service_fn(move |req| {
@@ -374,6 +421,15 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
 
     let host = headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("localhost").split(':').next().unwrap_or("localhost").to_lowercase();
 
+    if logger::is_debug() {
+        let q = if query_str.is_empty() { String::new() } else { format!("?{}", query_str) };
+        let token_info = match &osu_token {
+            Some(t) => format!(", token: {}", t),
+            None => String::new(),
+        };
+        logger::debug(&format!("Incoming HTTP {:<4} {}{} [host: {}{}, body: {}B]", method, path, q, host, token_info, body_bytes.len()));
+    }
+
     // Route normalization for -devserver localhost subdomains
     let normalized_path = match host.as_str() {
         "c.localhost" | "c4.localhost" | "c5.localhost" | "c6.localhost" | "ce.localhost" => {
@@ -522,6 +578,10 @@ async fn watch_replay_folder(state: state::SharedState, replay_folder: std::path
             None => continue,
         };
 
+        if logger::is_debug() {
+            logger::debug(&format!("Replay file detected: {}", latest_replay.display()));
+        }
+
         if !latest_replay.exists() {
             logger::warn("Replay file does not exist or was deleted.");
             continue;
@@ -529,6 +589,12 @@ async fn watch_replay_folder(state: state::SharedState, replay_folder: std::path
 
         match types::Replay::from_file(&latest_replay) {
             Ok(replay) => {
+                if logger::is_debug() {
+                    logger::debug(&format!(
+                        "Parsed replay: player={}, map_md5={}, score={}, combo={}",
+                        replay.player_name, replay.beatmap_md5, replay.total_score, replay.combo
+                    ));
+                }
                 let score = types::Score::from_replay(&replay);
                 handlers::score_submit::score_submit(state.clone(), score, &replay).await;
             }

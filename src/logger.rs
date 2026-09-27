@@ -1,5 +1,16 @@
 use colored::Colorize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_debug(enabled: bool) {
+    DEBUG_MODE.store(enabled, Ordering::Relaxed);
+}
+
+pub fn is_debug() -> bool {
+    DEBUG_MODE.load(Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
@@ -15,6 +26,10 @@ fn timestamp() -> String {
 }
 
 pub fn log(level: LogLevel, message: &str) {
+    if level == LogLevel::Debug && !is_debug() {
+        return;
+    }
+
     let ts = timestamp();
     let prefix = match level {
         LogLevel::Info => "[INFO]".cyan().bold(),
@@ -48,9 +63,11 @@ pub fn debug(message: &str) {
 }
 
 pub fn http_request(method: &str, path: &str, status: u16, duration: Duration) {
-    // Suppress high-frequency Bancho heartbeat polling in console
-    let clean_path = path.split('?').next().unwrap_or(path);
-    if (clean_path == "/" || clean_path == "/c" || clean_path == "/c/") && status == 200 {
+    let debug = is_debug();
+
+    // In normal (minimal) mode, suppress routine successful HTTP requests (status < 400).
+    // Only log HTTP errors (4xx / 5xx) so console stays clean and minimal.
+    if !debug && status < 400 {
         return;
     }
 
