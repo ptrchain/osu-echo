@@ -736,26 +736,33 @@ pub fn find_local_mapset_folder(
 }
 
 pub fn resolve_songs_folder(config: &crate::types::config::Config) -> Option<std::path::PathBuf> {
-    if let Some(folder) = config.songs_folder() {
-        if folder.exists() {
-            return Some(folder);
+    #[cfg(test)]
+    {
+        return config.songs_folder().filter(|p| p.exists());
+    }
+    #[cfg(not(test))]
+    {
+        if let Some(folder) = config.songs_folder() {
+            if folder.exists() {
+                return Some(folder);
+            }
         }
-    }
-    let fallback_d = std::path::PathBuf::from("D:/osu!/Songs");
-    if fallback_d.exists() {
-        return Some(fallback_d);
-    }
-    if let Some(detected) = crate::types::config::detect_osu_path() {
-        let songs = detected.join("Songs");
-        if songs.exists() {
-            return Some(songs);
+        let fallback_d = std::path::PathBuf::from("D:/osu!/Songs");
+        if fallback_d.exists() {
+            return Some(fallback_d);
         }
+        if let Some(detected) = crate::types::config::detect_osu_path() {
+            let songs = detected.join("Songs");
+            if songs.exists() {
+                return Some(songs);
+            }
+        }
+        let fallback_c = std::path::PathBuf::from("C:/osu!/Songs");
+        if fallback_c.exists() {
+            return Some(fallback_c);
+        }
+        None
     }
-    let fallback_c = std::path::PathBuf::from("C:/osu!/Songs");
-    if fallback_c.exists() {
-        return Some(fallback_c);
-    }
-    None
 }
 
 fn scan_dir_for_osu_file(

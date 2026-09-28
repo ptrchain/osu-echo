@@ -242,32 +242,46 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         {
             let _ = db::increment_playcount(&db_conn, &player.name);
             let playcount = db::get_playcount(&db_conn, &player.name).unwrap_or(1);
-            let bmap = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None);
-            if let Some(bmap) = bmap {
-                let existing_score = db::get_score_by_id(&db_conn, existing_id).unwrap_or(None);
-                let overall_max = db::get_max_combo_for_player(&db_conn, &player.name, sub.score.mode).unwrap_or(0);
-                let stats = ProfileStats {
-                    rank: player.rank,
-                    pp: player.pp as f64,
-                    acc: player.acc,
-                    ranked_score: player.ranked_score,
-                    total_score: player.total_score,
-                    max_combo: overall_max,
-                };
-                let charts = build_charts(
-                    &bmap,
-                    existing_score.as_ref().unwrap_or(&sub.score),
-                    &stats,
-                    &stats,
-                    existing_score.as_ref(),
-                    Some(1),
-                    Some(1),
-                    Some(overall_max),
-                    playcount,
-                );
-                return Ok(charts);
+            let bmap = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None).unwrap_or_else(Beatmap::blank);
+            let existing_score = db::get_score_by_id(&db_conn, existing_id).unwrap_or(None);
+            let overall_max = db::get_max_combo_for_player(&db_conn, &player.name, sub.score.mode).unwrap_or(0);
+            let stats = ProfileStats {
+                rank: player.rank,
+                pp: player.pp as f64,
+                acc: player.acc,
+                ranked_score: player.ranked_score,
+                total_score: player.total_score,
+                max_combo: overall_max,
+            };
+            let charts = build_charts(
+                &bmap,
+                existing_score.as_ref().unwrap_or(&sub.score),
+                &stats,
+                &stats,
+                existing_score.as_ref(),
+                Some(1),
+                Some(1),
+                Some(overall_max),
+                playcount,
+            );
+            drop(db_conn);
+            drop(s);
+            let mut s_write = state.write().await;
+            if let Some(ref mut p) = s_write.player {
+                p.playcount = playcount;
+                p.enqueue_stats();
             }
+            return Ok(charts);
         }
+    }
+
+    if !(0..=3).contains(&sub.score.mode) {
+        drop(s);
+        let mut s_write = state.write().await;
+        if let Some(ref mut p) = s_write.player {
+            p.queue.extend_from_slice(&packets::notification("Cannot submit: invalid game mode."));
+        }
+        return Err("Invalid game mode".to_string());
     }
 
     let score_mods = Mods::from_bits_truncate(sub.score.mods);
@@ -281,16 +295,91 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     }
 
     if !sub.passed {
-        return Err("Failed play".to_string());
-    }
+        let player_name = player.name.clone();
+        let (playcount, overall_max) = {
+            let db_conn = s.db.lock().await;
+            let _ = db::ensure_profile(&db_conn, &player_name);
+            let _ = db::increment_playcount(&db_conn, &player_name);
+            let pc = db::get_playcount(&db_conn, &player_name).unwrap_or(1);
+            let overall_max = db::get_max_combo_for_player(&db_conn, &player_name, sub.score.mode).unwrap_or(0);
+            (pc, overall_max)
+        };
 
-    if !(0..=3).contains(&sub.score.mode) {
+        let bmap = {
+            let db_conn = s.db.lock().await;
+            db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None)
+        };
+
+        let (prev_rank_str, prev_combo_str, prev_acc_str, prev_score_str, prev_pp_str) = if let Some(ref b) = bmap {
+            let db_conn = s.db.lock().await;
+            let all_local = db::get_all_scores_on_map(&db_conn, &sub.score.md5, sub.score.mode).unwrap_or_default();
+            drop(db_conn);
+
+            let api_key = s.config.osu_api_key.as_deref();
+            let pp_lb = s.config.pp_leaderboard;
+            let (prev, r_before, _, map_max_before) = calculate_map_ranks(
+                &s.http,
+                api_key,
+                b,
+                sub.score.mode,
+                s.mode,
+                pp_lb,
+                None,
+                &all_local,
+                &player_name,
+                &sub.score,
+            )
+            .await;
+
+            let prev_rank_str = r_before.map(|r| r.to_string()).unwrap_or_default();
+            let effective_combo = map_max_before.or_else(|| prev.as_ref().map(|s| s.max_combo));
+            let prev_combo_str = effective_combo.map(|c| c.to_string()).unwrap_or_default();
+            let prev_acc_str = prev.as_ref().map(|s| format!("{:.2}", s.acc.unwrap_or(0.0))).unwrap_or_default();
+            let prev_score_str = prev.as_ref().map(|s| s.score.to_string()).unwrap_or_default();
+            let prev_pp_str = prev.as_ref().map(|s| format!("{:.0}", s.pp.unwrap_or(0.0))).unwrap_or_default();
+            (prev_rank_str, prev_combo_str, prev_acc_str, prev_score_str, prev_pp_str)
+        } else {
+            (String::new(), String::new(), String::new(), String::new(), String::new())
+        };
+
+        let bmap_id = bmap.as_ref().map(|b| b.beatmap_id).unwrap_or(0);
+        let bmapset_id = bmap.as_ref().map(|b| b.beatmapset_id).unwrap_or(0);
+
+        let meta = format!(
+            "beatmapId:{}|beatmapSetId:{}|beatmapPlaycount:{}|beatmapPasscount:{}|approvedDate:0",
+            bmap_id, bmapset_id, playcount, playcount
+        );
+
+        let beatmap_chart = format!(
+            "chartId:beatmap|chartUrl:https://osu.ppy.sh/b/{}|chartName:Local Beatmap Ranking|rankBefore:{}|rankAfter:{}|maxComboBefore:{}|maxComboAfter:{}|accuracyBefore:{}|accuracyAfter:{}|rankedScoreBefore:{}|rankedScoreAfter:{}|ppBefore:{}|ppAfter:{}|onlineScoreId:0",
+            bmap_id,
+            prev_rank_str, prev_rank_str,
+            prev_combo_str, prev_combo_str,
+            prev_acc_str, prev_acc_str,
+            prev_score_str, prev_score_str,
+            prev_pp_str, prev_pp_str,
+        );
+
+        let overall_chart = format!(
+            "chartId:overall|chartUrl:http://127.0.0.1:5000/u/2|chartName:Overall Ranking|rankBefore:{}|rankAfter:{}|rankedScoreBefore:{}|rankedScoreAfter:{}|totalScoreBefore:{}|totalScoreAfter:{}|maxComboBefore:{}|maxComboAfter:{}|accuracyBefore:{:.2}|accuracyAfter:{:.2}|ppBefore:{:.0}|ppAfter:{:.0}|achievements-new:|onlineScoreId:0",
+            player.rank, player.rank,
+            player.ranked_score, player.ranked_score,
+            player.total_score, player.total_score,
+            overall_max, overall_max,
+            player.acc, player.acc,
+            player.pp, player.pp,
+        );
+
+        let charts = format!("{}\n{}\n{}", meta, beatmap_chart, overall_chart).into_bytes();
+
         drop(s);
         let mut s_write = state.write().await;
         if let Some(ref mut p) = s_write.player {
-            p.queue.extend_from_slice(&packets::notification("Cannot submit: invalid game mode."));
+            p.playcount = playcount;
+            p.enqueue_stats();
         }
-        return Err("Invalid game mode".to_string());
+
+        return Ok(charts);
     }
 
     let bmap = {
@@ -849,6 +938,7 @@ mod tests {
     async fn test_failed_play_does_not_queue_notification() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "TestPlayer").unwrap();
 
         let config = crate::types::config::Config::default();
         let mut app_state = AppState::new(conn, config);
@@ -892,12 +982,22 @@ mod tests {
         };
 
         let result = process_native_submission(shared_state.clone(), sub).await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "Failed play");
+        assert!(result.is_ok(), "Failed play must return Ok(charts) to prevent client getting stuck on submitting score");
+        let charts_str = String::from_utf8(result.unwrap()).unwrap();
+        assert!(charts_str.contains("chartId:beatmap"));
+        assert!(charts_str.contains("chartId:overall"));
 
         let s = shared_state.read().await;
         let p = s.player.as_ref().unwrap();
-        assert!(p.queue.is_empty(), "Failed plays must NOT send notification popups to the player");
+        assert_eq!(p.playcount, 1, "Failed play must increment playcount");
+
+        let pkts = packets::split_packets(&p.queue);
+        assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoNotification as u16), "Failed plays must NOT send notification popups to the player");
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Failed plays must enqueue ChoUserStats to update profile panel immediately");
+
+        let db_conn = s.db.lock().await;
+        let scores = db::get_all_scores_on_map(&db_conn, "abc", 0).unwrap();
+        assert!(scores.is_empty(), "Failed plays must NOT be inserted into database scores");
     }
 
     #[tokio::test]

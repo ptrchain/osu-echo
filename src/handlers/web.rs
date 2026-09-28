@@ -963,6 +963,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_score_sub_failed_play_returns_charts_and_updates_stats() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Alice").unwrap();
+
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "0123456789abcdef0123456789abcdef".to_string();
+        bmap.beatmap_id = 999;
+        bmap.beatmapset_id = 888;
+        bmap.approved = 1;
+        bmap.file_content = Some("osu file format v14\n[General]\nMode: 0\n[Difficulty]\nHPDrainRate:5\nCircleSize:5\nOverallDifficulty:5\nApproachRate:5\nSliderMultiplier:1.4\nSliderTickRate:1\n[TimingPoints]\n0,500,4,1,0,100,1,0\n[HitObjects]\n256,192,1000,1,0,0:0:0:0:\n".to_string());
+        db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Alice".to_string()));
+
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let osuver = "20260912";
+        let key = format!("osu!-scoreburgr---------{}", osuver).into_bytes();
+        let iv = vec![42u8; 32];
+        // Index 14 is "False", meaning the play was failed
+        let plaintext = format!("{}:Alice:{}:1:0:0:0:0:0:10000:1:False:F:0:False:0:260912120000:20260912", bmap.file_md5, "checksum_fail");
+
+        let cipher = RijndaelCbc::<Pkcs7Padding>::new(&key, 32).unwrap();
+        let encrypted = cipher.encrypt(&iv, plaintext.into_bytes()).unwrap();
+
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let iv_b64 = b64.encode(&iv);
+        let score_b64 = b64.encode(&encrypted);
+
+        let body = format!(
+            "--boundary\r\nContent-Disposition: form-data; name=\"osuver\"\r\n\r\n{}\r\n\
+--boundary\r\nContent-Disposition: form-data; name=\"iv\"\r\n\r\n{}\r\n\
+--boundary\r\nContent-Disposition: form-data; name=\"score\"\r\n\r\n{}\r\n\
+--boundary\r\nContent-Disposition: form-data; name=\"score\"; filename=\"replay.osr\"\r\n\r\nfake_replay_frames\r\n\
+--boundary--\r\n",
+            osuver, iv_b64, score_b64
+        );
+
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert("content-type", hyper::header::HeaderValue::from_static("multipart/form-data; boundary=boundary"));
+
+        let params = std::collections::HashMap::new();
+        let resp = handle(shared_state.clone(), "/osu-submit-modular-selector.php", &params, &hyper::Method::POST, &headers, body.as_bytes()).await;
+
+        let resp_str = String::from_utf8(resp.body).unwrap();
+        assert!(!resp_str.contains("error: no"), "Failed plays must not return error: no");
+        assert!(resp_str.contains("chartId:beatmap"), "Response must contain beatmap chart");
+        assert!(resp_str.contains("chartId:overall"), "Response must contain overall chart to conclude client submission");
+
+        let s = shared_state.read().await;
+        let p = s.player.as_ref().unwrap();
+        assert_eq!(p.playcount, 1, "Failed play must still increment playcount");
+
+        let pkts = packets::split_packets(&p.queue);
+        assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoNotification as u16), "Failed plays must NOT send notification popups to the player");
+        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Failed plays must queue ChoUserStats to update in-game HUD immediately");
+        assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoSendMessage as u16), "Failed plays must NOT send messages to #recent");
+    }
+
+    #[tokio::test]
     async fn test_leaderboard_local_flow() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();

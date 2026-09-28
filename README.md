@@ -14,6 +14,7 @@ A local osu! server written in Rust. It lets you run your own private server on 
   - **BanchoBot**: Manages leaderboard statuses, personal bests, score announcements, and profile statistics.
   - **Tillerino**: Send `/np` in chat or PM to get instant difficulty breakdowns and PP calculations for Nomod, HD, HR, DT, etc.
 - **Local Leaderboards & Profiles**: Track personal bests, total score, hit accuracy, play count, and global rank estimates.
+- **Discord Webhook Integration**: Automatically post submitted plays with Rich Embeds and configurable minimum PP thresholds directly to a Discord channel.
 - **Streamlined Setup**: Quick interactive setup with auto-detection. External API keys (osu! v1 and osudaily) power online leaderboards and global rank calculations.
 
 ## Requirements
@@ -94,6 +95,7 @@ You can send commands in chat channels or via private message to **BanchoBot** o
 | `!config` | Show server settings and active configuration |
 | `!roll [max]` | Roll a random number (default 1-100) |
 | `!wipe` | Wipe profile stats and play count |
+| `!clearscores` / `!clearmap` | Clear your scores on the current beatmap or /np selection |
 
 ### Tillerino Commands
 
@@ -114,6 +116,7 @@ Usage: osu-echo [OPTIONS]
 Options:
   -h, --help           Print help information
   -v, --version        Print version information
+  -d, --debug          Enable verbose debug logging (or hold Shift when starting)
   -s, --setup          Run or re-run the interactive setup wizard
       --reconfigure    Alias for --setup
       --trust-cert     Install and trust the local TLS certificate in Windows Root store
