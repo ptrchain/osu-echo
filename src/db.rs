@@ -53,6 +53,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_scores_player ON scores(player_name);
+        CREATE INDEX IF NOT EXISTS idx_scores_player_mode ON scores(player_name, mode);
         CREATE INDEX IF NOT EXISTS idx_scores_md5 ON scores(md5);
         CREATE INDEX IF NOT EXISTS idx_scores_status ON scores(bmap_status);
         CREATE INDEX IF NOT EXISTS idx_scores_replay_md5 ON scores(replay_md5);
@@ -153,6 +154,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE scores ADD COLUMN submission_identity TEXT", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_checksum ON scores(submission_checksum)", []);
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_identity ON scores(submission_identity)", []);
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_scores_player_mode ON scores(player_name, mode)", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN rank INTEGER NOT NULL DEFAULT 1", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN pp INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN acc REAL NOT NULL DEFAULT 0.0", []);
@@ -273,6 +275,14 @@ pub fn increment_playcount(conn: &Connection, name: &str) -> SqlResult<()> {
     Ok(())
 }
 
+pub fn decrement_playcount(conn: &Connection, name: &str) -> SqlResult<()> {
+    conn.execute(
+        "UPDATE profiles SET playcount = CASE WHEN playcount > 0 THEN playcount - 1 ELSE 0 END WHERE name = ?1",
+        params![name],
+    )?;
+    Ok(())
+}
+
 pub fn update_profile_stats(conn: &Connection, name: &str, pp: f64, acc: f64) -> SqlResult<()> {
     conn.execute("UPDATE profiles SET pp = ?1, acc = ?2 WHERE name = ?3", params![pp, acc, name])?;
     Ok(())
@@ -290,6 +300,26 @@ pub fn profile_exists(conn: &Connection, name: &str) -> SqlResult<bool> {
     let mut stmt = conn.prepare("SELECT COUNT(*) FROM profiles WHERE name = ?1")?;
     let count: i32 = stmt.query_row(params![name], |row| row.get(0))?;
     Ok(count > 0)
+}
+
+pub fn list_profiles(conn: &Connection) -> SqlResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM profiles ORDER BY name ASC")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    let mut names = Vec::new();
+    for r in rows {
+        names.push(r?);
+    }
+    Ok(names)
+}
+
+pub fn get_default_profile(conn: &Connection) -> SqlResult<Option<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM profiles ORDER BY playcount DESC, rowid ASC LIMIT 1")?;
+    let result = stmt.query_row([], |row| row.get(0));
+    match result {
+        Ok(name) => Ok(Some(name)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
@@ -1694,6 +1724,37 @@ mod tests {
         let deleted_by_alice = delete_score_by_id(&conn, "Alice", score_id).unwrap();
         assert!(deleted_by_alice);
         assert!(get_score_by_id(&conn, score_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_playcount_decrement_and_profile_discovery() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        assert_eq!(list_profiles(&conn).unwrap(), Vec::<String>::new());
+        assert_eq!(get_default_profile(&conn).unwrap(), None);
+
+        ensure_profile(&conn, "Charlie").unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+        ensure_profile(&conn, "Bob").unwrap();
+
+        let profiles = list_profiles(&conn).unwrap();
+        assert_eq!(profiles, vec!["Alice", "Bob", "Charlie"]);
+
+        increment_playcount(&conn, "Bob").unwrap();
+        increment_playcount(&conn, "Bob").unwrap();
+        increment_playcount(&conn, "Bob").unwrap();
+        increment_playcount(&conn, "Alice").unwrap();
+
+        assert_eq!(get_playcount(&conn, "Bob").unwrap(), 3);
+        assert_eq!(get_default_profile(&conn).unwrap(), Some("Bob".to_string()));
+
+        decrement_playcount(&conn, "Bob").unwrap();
+        assert_eq!(get_playcount(&conn, "Bob").unwrap(), 2);
+
+        // Decrement on 0 should stay at 0
+        decrement_playcount(&conn, "Charlie").unwrap();
+        assert_eq!(get_playcount(&conn, "Charlie").unwrap(), 0);
     }
 }
 
