@@ -1,5 +1,7 @@
 use crate::types::beatmap::Beatmap;
 use crate::types::config::Config;
+pub use crate::types::profile::default_section_order;
+pub use crate::types::ProfileDetails;
 use crate::types::score::Score;
 use rusqlite::{params, Connection, Result as SqlResult};
 
@@ -122,6 +124,27 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_friends_player ON friends(player_name);
+
+        CREATE TABLE IF NOT EXISTS profile_details (
+            player_name TEXT PRIMARY KEY,
+            about TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            devices TEXT NOT NULL DEFAULT '[]',
+            section_order TEXT NOT NULL DEFAULT '[\"me\",\"top-ranks\",\"historical\",\"beatmaps\",\"medals\",\"recent-activity\"]',
+            country TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS rank_history (
+            player_name TEXT NOT NULL,
+            mode INTEGER NOT NULL DEFAULT 0,
+            date TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            PRIMARY KEY (player_name, mode, date),
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_rank_history_player ON rank_history(player_name, mode);
     ",
     )?;
 
@@ -138,6 +161,33 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN total_score INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE friends ADD COLUMN playcount INTEGER NOT NULL DEFAULT 0", []);
     let _ = conn.execute("ALTER TABLE profiles ADD COLUMN country INTEGER NOT NULL DEFAULT 0", []);
+
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS profile_details (
+            player_name TEXT PRIMARY KEY,
+            about TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            devices TEXT NOT NULL DEFAULT '[]',
+            section_order TEXT NOT NULL DEFAULT '[\"me\",\"top-ranks\",\"historical\",\"beatmaps\",\"medals\",\"recent-activity\"]',
+            country TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        )",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN country TEXT NOT NULL DEFAULT ''", []);
+
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS rank_history (
+            player_name TEXT NOT NULL,
+            mode INTEGER NOT NULL DEFAULT 0,
+            date TEXT NOT NULL,
+            rank INTEGER NOT NULL,
+            PRIMARY KEY (player_name, mode, date),
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        )",
+        [],
+    );
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_rank_history_player ON rank_history(player_name, mode)", []);
 
     let _ = conn.execute("DELETE FROM friends WHERE friend_id <= 2 OR friend_id = 2070907", []);
     let _ = conn.execute("DELETE FROM profiles WHERE name = 'Friend 2'", []);
@@ -244,8 +294,189 @@ pub fn profile_exists(conn: &Connection, name: &str) -> SqlResult<bool> {
 
 pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
     conn.execute("DELETE FROM scores WHERE player_name = ?1", params![name])?;
+    conn.execute("DELETE FROM rank_history WHERE player_name = ?1", params![name])?;
     conn.execute("UPDATE profiles SET pp = 0, acc = 0, playcount = 0 WHERE name = ?1", params![name])?;
     Ok(())
+}
+
+pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<ProfileDetails> {
+    let mut stmt = conn.prepare(
+        "SELECT about, location, devices, section_order, country FROM profile_details WHERE player_name = ?1",
+    )?;
+    let result = stmt.query_row(params![player_name], |row| {
+        let about: String = row.get(0)?;
+        let location: String = row.get(1)?;
+        let devices_json: String = row.get(2)?;
+        let section_order_json: String = row.get(3)?;
+        let country: String = row.get(4)?;
+        Ok((about, location, devices_json, section_order_json, country))
+    });
+
+    match result {
+        Ok((about, location, devices_json, section_order_json, country)) => {
+            let devices: Vec<String> = serde_json::from_str(&devices_json).unwrap_or_default();
+            let section_order: Vec<String> = serde_json::from_str(&section_order_json)
+                .unwrap_or_else(|_| default_section_order());
+
+            let country = if country.is_empty() {
+                if let Ok(c_byte) = get_profile_country(conn, player_name) {
+                    if c_byte > 0 {
+                        crate::utils::country_byte_to_code(c_byte).to_string()
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                country
+            };
+
+            Ok(ProfileDetails {
+                about,
+                location,
+                devices,
+                section_order,
+                country,
+            })
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            let country = if let Ok(c_byte) = get_profile_country(conn, player_name) {
+                if c_byte > 0 {
+                    crate::utils::country_byte_to_code(c_byte).to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            let mut details = ProfileDetails::default();
+            details.country = country;
+            Ok(details)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn save_profile_details(conn: &Connection, player_name: &str, details: &ProfileDetails) -> SqlResult<()> {
+    ensure_profile(conn, player_name)?;
+
+    let devices_json = serde_json::to_string(&details.devices).unwrap_or_else(|_| "[]".to_string());
+    let section_order_json = serde_json::to_string(&details.section_order)
+        .unwrap_or_else(|_| serde_json::to_string(&default_section_order()).unwrap());
+
+    conn.execute(
+        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(player_name) DO UPDATE SET
+            about = excluded.about,
+            location = excluded.location,
+            devices = excluded.devices,
+            section_order = excluded.section_order,
+            country = excluded.country",
+        params![
+            player_name,
+            details.about,
+            details.location,
+            devices_json,
+            section_order_json,
+            details.country,
+        ],
+    )?;
+
+    if !details.country.is_empty() {
+        let country_byte = crate::utils::country_code_to_byte(&details.country);
+        let _ = save_profile_country(conn, player_name, country_byte);
+    }
+
+    Ok(())
+}
+
+pub fn record_rank_snapshot(conn: &Connection, player_name: &str, mode: i32, rank: i32) -> SqlResult<()> {
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    record_rank_snapshot_with_date(conn, player_name, mode, &today, rank)
+}
+
+pub fn record_rank_snapshot_with_date(conn: &Connection, player_name: &str, mode: i32, date: &str, rank: i32) -> SqlResult<()> {
+    ensure_profile(conn, player_name)?;
+    conn.execute(
+        "INSERT INTO rank_history (player_name, mode, date, rank)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(player_name, mode, date) DO UPDATE SET
+            rank = excluded.rank",
+        params![player_name, mode, date, rank],
+    )?;
+    Ok(())
+}
+
+pub fn get_rank_history(conn: &Connection, player_name: &str, mode: i32, limit: usize) -> SqlResult<Vec<(String, i32)>> {
+    let mut stmt = conn.prepare(
+        "SELECT date, rank FROM rank_history
+         WHERE player_name = ?1 AND mode = ?2
+         ORDER BY date DESC
+         LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![player_name, mode, limit as i64], |row| {
+        let date: String = row.get(0)?;
+        let rank: i32 = row.get(1)?;
+        Ok((date, rank))
+    })?;
+
+    let mut history = Vec::new();
+    for r in rows {
+        history.push(r?);
+    }
+    history.reverse();
+    Ok(history)
+}
+
+pub fn rename_profile(conn: &Connection, old_name: &str, new_name: &str) -> SqlResult<()> {
+    if old_name == new_name {
+        return Ok(());
+    }
+
+    if !profile_exists(conn, old_name)? {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+
+    if profile_exists(conn, new_name)? {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            Some(format!("Profile '{}' already exists", new_name)),
+        ));
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE; PRAGMA defer_foreign_keys = ON;")?;
+    let res: SqlResult<()> = (|| {
+        conn.execute("UPDATE profiles SET name = ?1 WHERE name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE scores SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE avatars SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE friends SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE friends SET friend_name = ?1 WHERE friend_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE profile_details SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE rank_history SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        Ok(())
+    })();
+
+    match res {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
+}
+
+pub fn delete_score_by_id(conn: &Connection, player_name: &str, score_id: i64) -> SqlResult<bool> {
+    let rows = conn.execute(
+        "DELETE FROM scores WHERE id = ?1 AND player_name = ?2",
+        params![score_id, player_name],
+    )?;
+    Ok(rows > 0)
 }
 
 pub fn delete_scores_on_map(conn: &Connection, player_name: &str, md5: &str) -> SqlResult<usize> {
@@ -1228,6 +1459,241 @@ mod tests {
         let all_set_deleted = delete_all_scores_on_set(&conn, 500).unwrap();
         assert_eq!(all_set_deleted, 1);
         assert_eq!(get_scores_on_map(&conn, "Bob", "map_hash_a", 0).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_profile_details_crud_and_defaults() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        // Reading details for a non-existent row yields default
+        let default_details = get_profile_details(&conn, "Newbie").unwrap();
+        assert_eq!(default_details.about, "");
+        assert_eq!(default_details.location, "");
+        assert!(default_details.devices.is_empty());
+        assert_eq!(default_details.section_order, default_section_order());
+        assert_eq!(default_details.country, "");
+
+        // Set country on profiles first and verify fallback
+        ensure_profile(&conn, "GermanUser").unwrap();
+        save_profile_country(&conn, "GermanUser", 56).unwrap(); // DE
+        let details_with_country = get_profile_details(&conn, "GermanUser").unwrap();
+        assert_eq!(details_with_country.country, "DE");
+
+        // Save customized details
+        let custom = ProfileDetails {
+            about: "Hello world from osu! userpage".to_string(),
+            location: "Berlin, Germany".to_string(),
+            devices: vec!["Keyboard".to_string(), "Tablet".to_string()],
+            section_order: vec![
+                "top-ranks".to_string(),
+                "me".to_string(),
+                "historical".to_string(),
+                "beatmaps".to_string(),
+                "medals".to_string(),
+                "recent-activity".to_string(),
+            ],
+            country: "DE".to_string(),
+        };
+
+        save_profile_details(&conn, "GermanUser", &custom).unwrap();
+        let loaded = get_profile_details(&conn, "GermanUser").unwrap();
+        assert_eq!(loaded, custom);
+        assert_eq!(get_profile_country(&conn, "GermanUser").unwrap(), 56);
+
+        // Update again with new info
+        let mut updated = custom;
+        updated.about = "Updated bio".to_string();
+        updated.country = "US".to_string();
+        save_profile_details(&conn, "GermanUser", &updated).unwrap();
+
+        let loaded2 = get_profile_details(&conn, "GermanUser").unwrap();
+        assert_eq!(loaded2.about, "Updated bio");
+        assert_eq!(loaded2.country, "US");
+        assert_eq!(get_profile_country(&conn, "GermanUser").unwrap(), 225); // US
+    }
+
+    #[test]
+    fn test_rank_history_and_snapshots() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+
+        // Insert rank snapshots across multiple days
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-01", 1000).unwrap();
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-02", 950).unwrap();
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-03", 900).unwrap();
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-04", 850).unwrap();
+
+        // Updating same date should overwrite rank, not duplicate
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-04", 820).unwrap();
+
+        // Different mode isolation
+        record_rank_snapshot_with_date(&conn, "Alice", 1, "2026-01-04", 300).unwrap();
+
+        let hist_mode0 = get_rank_history(&conn, "Alice", 0, 10).unwrap();
+        assert_eq!(hist_mode0.len(), 4);
+        assert_eq!(hist_mode0[0], ("2026-01-01".to_string(), 1000));
+        assert_eq!(hist_mode0[1], ("2026-01-02".to_string(), 950));
+        assert_eq!(hist_mode0[2], ("2026-01-03".to_string(), 900));
+        assert_eq!(hist_mode0[3], ("2026-01-04".to_string(), 820));
+
+        // Limit works and returns most recent records in chronological order
+        let hist_limited = get_rank_history(&conn, "Alice", 0, 2).unwrap();
+        assert_eq!(hist_limited.len(), 2);
+        assert_eq!(hist_limited[0], ("2026-01-03".to_string(), 900));
+        assert_eq!(hist_limited[1], ("2026-01-04".to_string(), 820));
+
+        let hist_mode1 = get_rank_history(&conn, "Alice", 1, 10).unwrap();
+        assert_eq!(hist_mode1.len(), 1);
+        assert_eq!(hist_mode1[0], ("2026-01-04".to_string(), 300));
+    }
+
+    #[test]
+    fn test_rename_profile_atomic_cascade() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+        ensure_profile(&conn, "Bob").unwrap();
+
+        // Set avatar
+        set_avatar(&conn, "Alice", "/data/avatars/alice.png").unwrap();
+
+        // Add a score
+        let score = Score {
+            mode: 0,
+            md5: "map_hash".to_string(),
+            name: "Alice".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 123456,
+            acc: Some(100.0),
+            pp: Some(250.0),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let score_id = insert_score(&conn, &score, "ranked").unwrap();
+
+        // Add friend relationships
+        add_friend(&conn, "Alice", 10, "Charlie").unwrap();
+        add_friend(&conn, "Bob", 20, "Alice").unwrap();
+
+        // Add details and rank history
+        let details = ProfileDetails {
+            about: "Alice's Bio".to_string(),
+            location: "Wonderland".to_string(),
+            devices: vec!["Mouse".to_string()],
+            section_order: default_section_order(),
+            country: "GB".to_string(),
+        };
+        save_profile_details(&conn, "Alice", &details).unwrap();
+        record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-01", 500).unwrap();
+
+        // Attempting to rename to an existing profile fails
+        assert!(rename_profile(&conn, "Alice", "Bob").is_err());
+        assert!(profile_exists(&conn, "Alice").unwrap());
+
+        // Attempting to rename a non-existent profile fails
+        assert!(rename_profile(&conn, "NonExistent", "NewName").is_err());
+
+        // Successful rename
+        rename_profile(&conn, "Alice", "AliceRenamed").unwrap();
+
+        assert!(!profile_exists(&conn, "Alice").unwrap());
+        assert!(profile_exists(&conn, "AliceRenamed").unwrap());
+
+        // Verify score player_name updated
+        let loaded_score = get_score_by_id(&conn, score_id).unwrap().unwrap();
+        assert_eq!(loaded_score.name, "AliceRenamed");
+
+        // Verify avatar updated
+        assert_eq!(get_avatar(&conn, "Alice").unwrap(), None);
+        assert_eq!(get_avatar(&conn, "AliceRenamed").unwrap(), Some("/data/avatars/alice.png".to_string()));
+
+        // Verify friends updated
+        let alice_friends = get_friends(&conn, "AliceRenamed").unwrap();
+        assert_eq!(alice_friends.len(), 1);
+        assert_eq!(alice_friends[0], (10, "Charlie".to_string()));
+
+        let bob_friends = get_friends(&conn, "Bob").unwrap();
+        assert_eq!(bob_friends.len(), 1);
+        assert_eq!(bob_friends[0], (20, "AliceRenamed".to_string()));
+
+        // Verify profile details updated
+        let loaded_details = get_profile_details(&conn, "AliceRenamed").unwrap();
+        assert_eq!(loaded_details.about, "Alice's Bio");
+        assert_eq!(loaded_details.location, "Wonderland");
+
+        // Verify rank history updated
+        let hist = get_rank_history(&conn, "AliceRenamed", 0, 10).unwrap();
+        assert_eq!(hist.len(), 1);
+        assert_eq!(hist[0].1, 500);
+
+        // Same-name rename is no-op
+        rename_profile(&conn, "AliceRenamed", "AliceRenamed").unwrap();
+    }
+
+    #[test]
+    fn test_delete_score_by_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+        ensure_profile(&conn, "Bob").unwrap();
+
+        let make_score = |name: &str| Score {
+            mode: 0,
+            md5: "map_md5".to_string(),
+            name: name.to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1000,
+            acc: Some(100.0),
+            pp: Some(150.0),
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+
+        let score_id = insert_score(&conn, &make_score("Alice"), "ranked").unwrap();
+
+        // Non-owner cannot delete Alice's score
+        let deleted_by_bob = delete_score_by_id(&conn, "Bob", score_id).unwrap();
+        assert!(!deleted_by_bob);
+        assert!(get_score_by_id(&conn, score_id).unwrap().is_some());
+
+        // Nonexistent score id returns false
+        let deleted_nonexistent = delete_score_by_id(&conn, "Alice", 99999).unwrap();
+        assert!(!deleted_nonexistent);
+
+        // Owner can delete score
+        let deleted_by_alice = delete_score_by_id(&conn, "Alice", score_id).unwrap();
+        assert!(deleted_by_alice);
+        assert!(get_score_by_id(&conn, score_id).unwrap().is_none());
     }
 }
 
