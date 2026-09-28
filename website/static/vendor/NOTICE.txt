@@ -1,0 +1,6 @@
+osu!web stylesheet and assets: Copyright (c) ppy Pty Ltd and contributors.
+Source: https://github.com/ppy/osu-web
+Stylesheet: https://osu.ppy.sh/assets/css/app.668ed329.css
+Licensed under AGPL-3.0-or-later; see LICENCE.txt. Third-party fonts retain their respective licences.
+Local profile interface adaptations are provided under AGPL-3.0-or-later.
+This local server is not affiliated with the official osu! service.

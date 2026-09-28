@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>player info · Local osu!</title>
+<link rel="stylesheet" href="/site/static/vendor/osu-web.css">
+<link rel="stylesheet" href="/site/static/profile.css">
+<script src="/site/static/profile.js" defer></script>
+</head>
+<body class="t-user">
+<header class="local-header">
+<div class="nav2-header__triangles"></div>
+<nav class="local-nav" aria-label="Main navigation"><a href="/" class="local-logo" aria-label="Local osu! home"><img src="/site/static/vendor/osu-logo-white.59d385da.svg" alt="osu!"></a><div class="nav-links"><a href="/">home</a><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">beatmaps</a><a href="https://osu.ppy.sh/rankings/osu/global" target="_blank" rel="noreferrer">rankings</a><a href="https://osu.ppy.sh/community/forums" target="_blank" rel="noreferrer">community</a><a href="https://osu.ppy.sh/store" target="_blank" rel="noreferrer">store</a><a href="https://osu.ppy.sh/wiki" target="_blank" rel="noreferrer">help</a></div><button id="account" class="account-button" type="button" title="Account" aria-expanded="false" aria-controls="account-panel"><img id="account-avatar" class="account-avatar" src="/site/static/vendor/avatar-guest@2x.01495bc4.png" alt=""><span id="account-name">Sign in</span></button></nav>
+<div id="account-panel" class="account-panel" hidden><div class="account-panel__heading"><span id="account-panel-name">Guest</span><small id="account-panel-status">Local osu!</small></div><a id="account-profile" href="#profile"><i class="fas fa-user"></i> My profile</a><button id="account-settings" type="button"><i class="fas fa-cog"></i> Settings</button><button id="account-switch" type="button"><i class="fas fa-exchange-alt"></i> Switch profile</button><button id="account-logout" type="button"><i class="fas fa-sign-out-alt"></i> Sign out</button></div>
+<div class="page-heading"><span class="header-v4__icon"></span>player info</div>
+</header>
+<header class="mobile-header"><a href="/" aria-label="Local osu! home"><img src="/site/static/vendor/osu-logo-white.59d385da.svg" alt="osu!"></a><span>player info</span><button id="mobile-menu-toggle" aria-label="Toggle navigation" aria-expanded="false" type="button"><i class="fas fa-chevron-down"></i></button></header>
+<nav id="mobile-menu" class="mobile-menu" hidden aria-label="Mobile navigation"><a href="/">home</a><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">beatmaps</a><a href="https://osu.ppy.sh/rankings/osu/global" target="_blank" rel="noreferrer">rankings</a><button id="mobile-account" type="button">Sign in / switch profile</button></nav>
+<main class="profile-shell">
+  <div class="profile-navigation"><a class="selected" href="#profile">info</a><div class="los-profile-nav"><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">modding</a><a href="https://osu.ppy.sh/seasons/latest" target="_blank" rel="noreferrer">playlists</a><a href="https://osu.ppy.sh/multiplayer" target="_blank" rel="noreferrer">multiplayer</a></div><div class="mode-controls"><i class="fal fa-extra-mode-osu" title="osu!"></i><select id="local-mode" aria-label="Score mode"><option value="vn">standard</option><option value="rx">relax</option><option value="ap">autopilot</option></select></div></div>
+  <div id="page-message" role="status" hidden></div>
+  <div id="profile-content" hidden>
+    <section id="profile" class="profile-overview">
+      <div class="profile-info profile-info--cover">
+        <div class="profile-info__bg local-cover"></div>
+        <div class="profile-info__details">
+          <div class="profile-info__avatar"><img id="avatar" alt="" class="profile-avatar"></div>
+          <div class="profile-info__info"><h1 class="profile-info__name" id="username"></h1><div class="profile-info__flags"><span id="profile-country"></span><span id="presence" class="presence"></span></div></div>
+          <button type="button" id="edit-profile" class="los-profile-edit" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i> Edit profile</button>
+        </div>
+      </div>
+      <div class="profile-detail">
+        <div class="profile-detail-stats">
+          <div>
+            <div class="profile-detail-stats__chart-numbers profile-detail-stats__chart-numbers--top"><div class="profile-detail-stats__values">
+              <div class="large-stat"><span>Global Ranking</span><strong id="global-rank">—</strong></div>
+              <div class="large-stat"><span>Country Ranking</span><strong id="country-rank" title="Calculated placement against the official osu!standard country leaderboard">—</strong></div>
+            </div></div>
+            <div class="profile-detail-stats__chart local-rank-chart"><div id="rank-history"></div></div>
+            <div class="profile-detail-stats__chart-numbers"><div class="profile-detail-stats__values">
+              <div class="small-stat"><span>Medals</span><strong>—</strong></div>
+              <div class="small-stat performance"><span>pp</span><strong><span id="pp">0</span></strong></div>
+              <div class="small-stat"><span>Total Play Time</span><strong title="Play duration is not stored by this server">—</strong></div>
+            </div><div class="profile-rank-count" id="grade-counts"></div></div>
+          </div>
+          <div class="profile-detail-stats__separator"></div>
+          <div class="profile-stats" id="statistics"></div>
+        </div>
+      </div>
+      <div class="profile-detail-bar">
+        <span class="local-social-count" title="Followers are not recorded by the local server"><i class="fas fa-user" aria-hidden="true"></i><span aria-label="Followers unavailable">—</span></span>
+        <span class="local-social-count" title="Mapping followers are not recorded by the local server"><i class="fas fa-bell" aria-hidden="true"></i><span aria-label="Mapping followers unavailable">—</span></span>
+        <div class="profile-detail-bar__level"><div class="profile-detail-bar__level-bar"><div id="level-progress" class="bar bar--user-profile" role="progressbar" aria-label="Progress to next level" aria-valuemin="0" aria-valuemax="100"><div id="level-fill" class="bar__fill"></div><div id="level-percent" class="bar__text"></div></div></div><div id="level-badge" class="user-level"><div class="user-level__icon"></div><span id="level-number" class="user-level__level"></span></div></div>
+      </div>
+      <div class="profile-links">
+        <div class="profile-links__row profile-links__row--0"><span class="profile-links__item" title="Creation dates were not saved for existing profiles">Joined <span class="profile-links__value">—</span></span><span id="last-play" class="profile-links__item profile-links__value"></span><span id="active-profile" class="profile-links__item"></span></div>
+        <div id="personal-details" class="profile-links__row"></div><div class="profile-links__edit"><button id="edit-profile-details" class="local-details-edit" type="button" title="Edit profile" aria-label="Edit profile details" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i></button></div>
+      </div>
+    </section>
+    <nav class="section-tabs" aria-label="Profile sections"><a href="#me" class="selected">me!</a><a href="#top-ranks">Scores</a><a href="#historical">Historical</a><a href="#beatmaps">Beatmaps</a><a href="#medals">Medals</a><a href="#recent-activity">Recent</a></nav>
+    <div class="user-profile-pages">
+      <section id="me" class="page-extra page-extra--userpage"><h2 class="title title--page-extra">me!</h2><div class="page-extra__actions"><button id="edit-about" class="local-details-edit" type="button" aria-label="Edit me! section" title="Edit me!" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i></button></div><div class="page-extra__content-overflow-wrapper-outer"><div class="page-extra__content-overflow-wrapper-inner"><div id="about-content" class="about-content bbcode"></div></div></div></section>
+      <section id="top-ranks" class="page-extra"><h2 class="title title--page-extra">Scores</h2><div class="section-content"><h3 class="title title--page-extra-small">Pinned Scores <span class="title__count">0</span></h3><h3 class="title title--page-extra-small">Best Performance <span id="top-count" class="title__count">0</span></h3><div id="top-scores" class="play-detail-list"></div><button id="more-top" class="show-more" type="button" hidden><i class="fas fa-angle-down" aria-hidden="true"></i> SHOW MORE <i class="fas fa-angle-down" aria-hidden="true"></i></button></div></section>
+      <section id="historical" class="page-extra"><h2 class="title title--page-extra">Historical</h2><div class="section-content"><h3 class="title title--page-extra-small">Play History</h3><div id="play-history" class="history-chart"></div><h3 class="title title--page-extra-small">Most Played Beatmaps <span id="most-count" class="title__count"></span></h3><div id="most-played"></div><button id="more-most" class="show-more" type="button" hidden>⌄ SHOW MORE ⌄</button><h3 class="title title--page-extra-small">Recent Plays (24h) <span id="recent-count" class="title__count">0</span></h3><div id="recent-scores" class="play-detail-list"></div><button id="more-recent" class="show-more" type="button" hidden><i class="fas fa-angle-down" aria-hidden="true"></i> SHOW MORE <i class="fas fa-angle-down" aria-hidden="true"></i></button></div></section>
+      <section id="beatmaps" class="page-extra"><h2 class="title title--page-extra">Beatmaps</h2><p class="section-empty">Beatmap ownership is not recorded by this local server.</p></section>
+      <section id="medals" class="page-extra"><h2 class="title title--page-extra">Medals</h2><p class="section-empty">Medals are not recorded by this local server.</p></section>
+      <section id="recent-activity" class="page-extra"><h2 class="title title--page-extra">Recent</h2><div id="activity" class="section-content"></div></section>
+    </div>
+  </div>
+  <section id="welcome" class="page-extra welcome" hidden><h1>Welcome to Local osu!</h1><p>Sign in with a username to create your first profile.</p><button id="first-login" class="pink-button" type="button">Sign in</button></section>
+</main>
+<footer class="local-footer">Local osu! server · <a href="https://github.com/ppy/osu-web" target="_blank" rel="noreferrer">osu!web design by ppy</a> · <a href="/site/static/vendor/NOTICE.txt">Credits</a> · <a href="/site/static/vendor/LICENCE.txt">AGPL-3.0</a><span>Independent local server. Navigation links open the official osu! website.</span></footer>
+<dialog id="login-dialog" class="login-dialog" aria-labelledby="login-title">
+  <button id="close-login" class="close-dialog" type="button" aria-label="Close sign in">×</button>
+  <h2 id="login-title">Sign in</h2>
+  <form id="login-form"><label for="login-username">username</label><input id="login-username" name="username" autocomplete="username" required maxlength="64" placeholder="Your local profile name" list="profile-names"><datalist id="profile-names"></datalist><p class="login-help">Use your in-game username. New names create a profile; existing names switch the server to that profile. No password is needed.</p><p id="login-error" role="alert" hidden></p><button id="login-submit" class="pink-button" type="submit">Sign in</button></form>
+  <div id="signed-in-actions" hidden><p id="signed-in-as"></p><button id="manage-profile" class="subtle-button" type="button">Edit profile</button><button id="logout" class="subtle-button" type="button">Sign out of website</button></div>
+</dialog>
+<dialog id="settings-dialog" class="login-dialog" aria-labelledby="settings-title"><button id="close-settings" class="close-dialog" type="button" aria-label="Close profile settings">×</button><h2 id="settings-title">Edit profile</h2><form id="settings-form"><div class="avatar-editor"><img id="settings-avatar" alt="Profile picture"><div><label for="avatar-file">Profile picture</label><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><p>PNG, JPEG, GIF or WebP · up to 2 MB</p><button id="reset-avatar" class="subtle-button" type="button">Use default picture</button></div></div><label for="settings-username">Username</label><input id="settings-username" autocomplete="off" maxlength="64" required><p class="login-help">Your scores stay with this profile when you rename it. Use the new name when signing in to the game.</p><label for="settings-country">Country</label><select id="settings-country"><option value="">Not specified</option></select><p class="login-help">Country rank compares your local pp against the official osu!standard country leaderboard.</p><label for="settings-location">Location</label><input id="settings-location" maxlength="100" placeholder="City or region (optional)"><fieldset class="device-options"><legend>Plays with</legend><label><input type="checkbox" name="device" value="Mouse"> Mouse</label><label><input type="checkbox" name="device" value="Keyboard"> Keyboard</label><label><input type="checkbox" name="device" value="Tablet"> Tablet</label><label><input type="checkbox" name="device" value="Touchscreen"> Touchscreen</label><label><input type="checkbox" name="device" value="Controller"> Controller</label></fieldset><fieldset class="section-order-editor"><legend>Profile section order</legend><div id="section-order-list"></div></fieldset><label for="settings-about">me!</label><textarea id="settings-about" rows="5" maxlength="5000" placeholder="Tell people about yourself"></textarea><p id="settings-error" role="alert" hidden></p><button id="settings-submit" type="submit" class="pink-button">Save changes</button></form></dialog>
+<noscript><p class="noscript">Enable JavaScript to view local profiles and sign in.</p></noscript>
+</body></html>
