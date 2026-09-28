@@ -1,5 +1,7 @@
 # Rust / Cargo build artifacts
 /target/
+/dist/
+*.zip
 **/*.rs.bk
 
 # Local database and data directory
@@ -31,3 +33,8 @@ desktop.ini
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Local release packaging scripts
+package.ps1
+package.bat
+
