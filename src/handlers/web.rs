@@ -25,6 +25,9 @@ pub async fn handle(
     headers: &hyper::HeaderMap,
     body: &[u8],
 ) -> Response {
+    // Older clients spell some endpoints differently; map the aliases onto the handlers that
+    // exist so they get a real answer instead of an empty body.
+    let sub_path = crate::server::compat::canonical_web_path(sub_path);
     match sub_path {
         "/bancho_connect.php" => crate::handlers::cho::bancho_connect(state, params).await,
         "/osu-submit-modular-selector.php" | "/osu-submit-modular.php" => score_sub(state, method, headers, body).await,
@@ -41,8 +44,32 @@ pub async fn handle(
         | "/osu-markasread.php"
         | "/osu-getbeatmapinfo.php"
         | "/osu-screenshot.php" => Response::empty(),
-        _ => Response::empty(),
+        // Unknown endpoints used to be swallowed silently, which hides whole features: a client
+        // that routes something through osu-web instead of bancho (chat, for instance) looks
+        // exactly like a client that never sent it.
+        _ => {
+            utils::log(&format!("unhandled web request: {} {}{}", method.as_str(), sub_path, describe_request(params, body)));
+            Response::empty()
+        }
     }
+}
+
+/// Renders the interesting parts of an unhandled web request for the log.
+fn describe_request(params: &std::collections::HashMap<String, String>, body: &[u8]) -> String {
+    let mut out = String::new();
+
+    if !params.is_empty() {
+        let mut pairs: Vec<String> = params.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        pairs.sort();
+        out.push_str(&format!(" params=[{}]", pairs.join(" ").chars().take(200).collect::<String>()));
+    }
+
+    if !body.is_empty() {
+        let text: String = body.iter().map(|b| if b.is_ascii_graphic() { *b as char } else { '.' }).collect();
+        out.push_str(&format!(" body=\"{}\"", text.chars().take(200).collect::<String>()));
+    }
+
+    out
 }
 
 async fn score_sub(state: Arc<RwLock<AppState>>, method: &hyper::Method, headers: &hyper::HeaderMap, body: &[u8]) -> Response {

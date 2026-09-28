@@ -63,6 +63,8 @@ fn print_help() {
     println!("  -s, --setup          Run or re-run the interactive setup wizard");
     println!("      --reconfigure    Alias for --setup");
     println!("      --trust-cert     Install and trust the local TLS certificate in Windows Root store");
+    println!("      --legacy-tls     Also accept TLS 1.0/1.1 (osu! clients older than 2023). Process-local; Windows' TLS policy is not changed.");
+    println!("      --no-hosts-edit  Never modify the Windows hosts file (use when DNS is managed elsewhere)");
 }
 
 #[cfg(target_os = "windows")]
@@ -230,66 +232,70 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Resolved up front: the legacy TLS front-end forwards to this port, so it has to be known
+    // before the HTTPS listener is set up.
+    let http_port: u16 = std::env::var("SERVER_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(5000);
+
     // Direct loopback HTTPS setup for -devserver localhost
+    let edit_hosts = !std::env::args().any(|arg| arg == "--no-hosts-edit" || arg == "--no-hosts");
+    let ensure_hosts = || {
+        if edit_hosts {
+            #[cfg(target_os = "windows")]
+            let _ = server::tls::setup_windows_hosts();
+        }
+    };
+
     let tls_paths = server::tls::get_or_create_certificates(&data_dir);
     if std::env::args().any(|arg| arg == "--trust-cert") {
         if let Ok(ref paths) = tls_paths {
             let _ = server::tls::install_windows_trust(&paths.cert_der);
         }
-        #[cfg(target_os = "windows")]
-        let _ = server::tls::setup_windows_hosts();
+        ensure_hosts();
     }
 
     if let Ok(ref paths) = tls_paths {
-        #[cfg(target_os = "windows")]
-        let _ = server::tls::setup_windows_hosts();
+        ensure_hosts();
+        // Re-assert trust on every launch: a previous run may have been interrupted (or the
+        // certificate may have been removed), and an untrusted certificate makes the client fail
+        // the TLS handshake silently and retry "connecting to server" forever.
+        let _ = server::tls::install_windows_trust(&paths.cert_der);
 
-        if let Ok(acceptor) = server::tls::create_tls_acceptor(&paths.cert_pem, &paths.key_pem) {
-            let https_state = shared_state.clone();
-            tokio::spawn(async move {
-                match TcpListener::bind("127.0.0.1:443").await {
-                    Ok(listener) => {
-                        logger::success("Direct HTTPS server listening on https://127.0.0.1:443 (for -devserver localhost)");
-                        loop {
-                            let (stream, _) = match listener.accept().await {
-                                Ok(s) => s,
-                                Err(_) => continue,
-                            };
-                            let acceptor = acceptor.clone();
-                            let state = https_state.clone();
+        let legacy_tls = std::env::args().any(|arg| arg == "--legacy-tls");
+        let https_port: u16 = std::env::var("OSU_ECHO_HTTPS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(443);
 
-                            tokio::task::spawn(async move {
-                                let tls_stream = match acceptor.accept(stream).await {
-                                    Ok(s) => s,
-                                    Err(e) => {
-                                        if logger::is_debug() {
-                                            logger::debug(&format!("Port 443 TLS handshake error: {}", e));
-                                        }
-                                        return;
-                                    }
-                                };
-                                let io = TokioIo::new(tls_stream);
-                                let service = service_fn(move |req| {
-                                    let state = state.clone();
-                                    async move {
-                                        let resp = handle_request(state, req).await;
-                                        Ok::<_, hyper::Error>(resp.into_hyper_response())
-                                    }
-                                });
+        if legacy_tls {
+            logger::warn("Legacy TLS enabled (--legacy-tls): accepting TLS 1.0/1.1 for osu! clients older than 2023.");
+            logger::warn("  Those protocols are deprecated and only offer weak cipher suites. Nothing outside this process is affected: Windows' own TLS policy is untouched and the listener is loopback-only.");
 
-                                let _ = http1::Builder::new().serve_connection(io, service).await;
-                            });
+            match server::tls::LegacyTlsAcceptor::new(&paths.cert_pem, &paths.key_pem) {
+                Ok(acceptor) => {
+                    // In-process OpenSSL stack (built with `--features legacy-tls`).
+                    logger::success("TLS mode: LEGACY (accepts TLS 1.0, 1.1 and 1.2+) - in-process stack");
+                    spawn_https_listener(shared_state.clone(), HttpsStack::Legacy(std::sync::Arc::new(acceptor)));
+                }
+                Err(in_process_error) => {
+                    // Fall back to a Python front-end, which needs no build-time C toolchain.
+                    logger::info(&format!("No in-process legacy TLS stack ({}).", in_process_error));
+                    match server::tls::spawn_legacy_tls_proxy(https_port, http_port, &paths.cert_pem, &paths.key_pem) {
+                        Ok(child) => {
+                            logger::success(&format!(
+                                "TLS mode: LEGACY (accepts TLS 1.0, 1.1 and 1.2+) - python front-end pid {} on https://127.0.0.1:{} -> http://127.0.0.1:{}",
+                                child.id(),
+                                https_port,
+                                http_port
+                            ));
+                            std::mem::forget(child); // Keep it running for the lifetime of the server
                         }
-                    }
-                    Err(e) => {
-                        if e.kind() == std::io::ErrorKind::AddrInUse {
-                            logger::warn("Port 443 is already in use. Direct HTTPS is disabled; port 5000 is still available.");
-                        } else {
-                            logger::warn(&format!("Could not bind port 443 for HTTPS ({}). Port 5000 is still available.", e));
+                        Err(e) => {
+                            logger::error(&format!("Could not start the legacy TLS front-end: {}", e));
+                            logger::error(&format!("  Port {} is therefore NOT being served; the osu! client cannot connect. Fix the problem above, or drop --legacy-tls.", https_port));
                         }
                     }
                 }
-            });
+            }
+        } else if let Ok(acceptor) = server::tls::create_tls_acceptor(&paths.cert_pem, &paths.key_pem) {
+            logger::info("TLS mode: MODERN (TLS 1.2+ only). An osu! client older than 2023 will not connect; restart with --legacy-tls to accept it.");
+            spawn_https_listener(shared_state.clone(), HttpsStack::Modern(acceptor));
         }
     }
 
@@ -355,6 +361,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     logger::success(&format!("Server listening on http://{}", addr));
     logger::info(&format!("osu-echo version: v{}", VERSION));
+    server::tls::report_client_readiness();
 
     tokio::select! {
         _ = async {
@@ -401,6 +408,126 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Which TLS stack serves the loopback HTTPS port.
+enum HttpsStack {
+    /// rustls: TLS 1.2/1.3 only, the default.
+    Modern(tokio_rustls::TlsAcceptor),
+    /// OpenSSL with TLS 1.0/1.1 allowed, for osu! builds from 2022 and earlier (`--legacy-tls`).
+    Legacy(std::sync::Arc<server::tls::LegacyTlsAcceptor>),
+}
+
+/// Serves one already-handshaked connection.
+async fn serve_over_tls<S>(state: state::SharedState, io: S)
+where
+    S: hyper::rt::Read + hyper::rt::Write + Unpin + Send + 'static,
+{
+    let service = service_fn(move |req| {
+        let state = state.clone();
+        async move {
+            let resp = handle_request(state, req).await;
+            Ok::<_, hyper::Error>(resp.into_hyper_response())
+        }
+    });
+
+    let _ = http1::Builder::new().serve_connection(io, service).await;
+}
+
+/// Binds the loopback HTTPS port and serves whichever TLS stack was selected.
+///
+/// Kept as one function so both stacks share the accept loop, the bind diagnostics and the fact
+/// that a failed handshake is always reported: a client that cannot complete the handshake
+/// (untrusted certificate, TLS version it does not speak) never produces an HTTP request, so
+/// without that the only symptom is the game saying "connection failed" with a healthy-looking log.
+fn spawn_https_listener(state: state::SharedState, stack: HttpsStack) {
+    let port: u16 = std::env::var("OSU_ECHO_HTTPS_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(443);
+
+    tokio::spawn(async move {
+        let listener = match TcpListener::bind(std::net::SocketAddr::from(([127, 0, 0, 1], port))).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::AddrInUse {
+                    logger::error(&format!(
+                        "Port {} is already in use, so -devserver localhost cannot connect: the client speaks HTTPS on {} and will sit on \"connecting to server\".",
+                        port, port
+                    ));
+                    logger::error(&format!("  Stop whatever holds port {} ({}) or set OSU_ECHO_HTTPS_PORT to a free port, then retry.", port, e));
+                } else {
+                    logger::error(&format!("Could not bind port {} for HTTPS ({}). -devserver localhost will not connect.", port, e));
+                }
+                return;
+            }
+        };
+
+        logger::success(&format!("Direct HTTPS server listening on https://127.0.0.1:{} (for -devserver localhost)", port));
+
+        loop {
+            let (stream, peer) = match listener.accept().await {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let state = state.clone();
+            let stack = match &stack {
+                HttpsStack::Modern(acceptor) => HttpsStackInner::Modern(acceptor.clone()),
+                HttpsStack::Legacy(acceptor) => HttpsStackInner::Legacy(acceptor.clone()),
+            };
+
+            tokio::task::spawn(async move {
+                match stack.handshake(stream).await {
+                    Ok(io) => serve_over_tls(state, io).await,
+                    Err(e) => {
+                        logger::warn(&format!("TLS handshake from {} failed: {}", peer, e));
+                        if let Some(hint) = server::tls::explain_handshake_failure(&e) {
+                            logger::warn(hint);
+                        }
+                    }
+                }
+            });
+        }
+    });
+}
+
+enum HttpsStackInner {
+    Modern(tokio_rustls::TlsAcceptor),
+    Legacy(std::sync::Arc<server::tls::LegacyTlsAcceptor>),
+}
+
+impl HttpsStackInner {
+    async fn handshake(self, stream: tokio::net::TcpStream) -> Result<TokioIo<Box<dyn HttpsIo>>, String> {
+        match self {
+            HttpsStackInner::Modern(acceptor) => {
+                let tls = acceptor.accept(stream).await.map_err(|e| e.to_string())?;
+                Ok(TokioIo::new(Box::new(tls) as Box<dyn HttpsIo>))
+            }
+            #[cfg(all(target_os = "windows", feature = "legacy-tls"))]
+            HttpsStackInner::Legacy(acceptor) => {
+                let ssl = acceptor.ssl();
+                let tls = tokio_openssl::SslStream::new(ssl, stream).await.map_err(|e| e.to_string())?;
+                Ok(TokioIo::new(Box::new(tls) as Box<dyn HttpsIo>))
+            }
+            #[cfg(not(all(target_os = "windows", feature = "legacy-tls")))]
+            HttpsStackInner::Legacy(_) => Err("this build has no legacy TLS support".to_string()),
+        }
+    }
+}
+
+/// Async byte stream that can sit under hyper, so both TLS stacks share one code path.
+trait HttpsIo: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> HttpsIo for T {}
+
+/// Decides which handler serves a request.
+///
+/// The osu! client addresses every endpoint through a subdomain of the base domain given to
+/// `-devserver` (`c4.` for bancho, `osu!`/`osu.` for the web API, `a.` avatars, `b.` osu!direct,
+/// `assets.` covers), so it is the *label* and not the domain that says what a path means. The base
+/// domain is the user's choice — `localhost`, a real domain, a tunnel — so it must never be matched
+/// by name: with a domain devserver every bancho request used to be answered with the status page,
+/// leaving the client with a connection that logs in and chats into the void.
+fn resolve_route(host: &str, path: &str, params: &std::collections::HashMap<String, String>, method: &hyper::Method, body_len: usize) -> RouteMatch {
+    let is_post_with_body = *method == hyper::Method::POST && body_len > 0;
+    let normalized_path = server::router::normalize_client_path(host, path, is_post_with_body);
+    match_route(&normalized_path, params)
+}
+
 async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::body::Incoming>) -> Response {
     let start_time = std::time::Instant::now();
     let (parts, incoming_body) = req.into_parts();
@@ -430,47 +557,7 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
         logger::debug(&format!("Incoming HTTP {:<4} {}{} [host: {}{}, body: {}B]", method, path, q, host, token_info, body_bytes.len()));
     }
 
-    // Route normalization for -devserver localhost subdomains
-    let normalized_path = match host.as_str() {
-        "c.localhost" | "c4.localhost" | "c5.localhost" | "c6.localhost" | "ce.localhost" => {
-            if path.starts_with("/c") {
-                path.clone()
-            } else {
-                format!("/c{}", path)
-            }
-        }
-        "osu.localhost" => {
-            if path.starts_with("/osu") {
-                path.clone()
-            } else {
-                format!("/osu{}", path)
-            }
-        }
-        "a.localhost" => {
-            if path.starts_with("/a") {
-                path.clone()
-            } else {
-                format!("/a{}", path)
-            }
-        }
-        "assets.localhost" => {
-            if path.starts_with("/assets") {
-                path.clone()
-            } else {
-                format!("/assets{}", path)
-            }
-        }
-        "b.localhost" => {
-            if path.starts_with("/b") {
-                path.clone()
-            } else {
-                format!("/b{}", path)
-            }
-        }
-        _ => path.clone(),
-    };
-
-    let route = match_route(&normalized_path, &params);
+    let route = resolve_route(&host, &path, &params, &method, body_bytes.len());
 
     let resp = match route {
         RouteMatch::Status => {
@@ -622,4 +709,49 @@ fn find_latest_replay(folder: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 
     latest.map(|(p, _)| p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// The client POSTs its bancho packet stream to `/` of the `c*` subdomain of whatever
+    /// `-devserver` was given. Regression test for a server used through a domain devserver,
+    /// where those requests used to resolve to the status page instead of the packet handler.
+    #[test]
+    fn test_bancho_traffic_is_routed_for_any_devserver_domain() {
+        let params = HashMap::new();
+        for host in ["c4.catboy.click", "c.catboy.click", "c5.catboy.click", "c6.catboy.click", "ce.catboy.click", "cho.localhost", "c1.localhost", "c4.localhost"] {
+            assert_eq!(resolve_route(host, "/", &params, &hyper::Method::POST, 128), RouteMatch::Cho, "bancho broken for {}", host);
+        }
+        // Same for a tunnel that rewrites Host to the upstream address.
+        assert_eq!(resolve_route("127.0.0.1", "/", &params, &hyper::Method::POST, 128), RouteMatch::Cho);
+    }
+
+    #[test]
+    fn test_web_and_direct_routes_for_any_devserver_domain() {
+        let params = HashMap::new();
+        let cases = [
+            ("osu!.catboy.click", "/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
+            ("osu.catboy.click", "/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
+            ("osu!.catboy.click", "/web/bancho_connect.php", RouteMatch::Web("/bancho_connect.php".to_string())),
+            ("b.catboy.click", "/d/2620610", RouteMatch::Download(2620610, false)),
+            ("b.catboy.click", "/thumb/2620610l.jpg", RouteMatch::Thumbnail("2620610l.jpg".to_string())),
+            ("a.catboy.click", "/4", RouteMatch::Avatar(4)),
+        ];
+
+        for (host, path, expected) in cases {
+            assert_eq!(resolve_route(host, path, &params, &hyper::Method::GET, 0), expected, "route failed for {}{}", host, path);
+        }
+    }
+
+    /// The status page is only for a human opening the site, never for client traffic.
+    #[test]
+    fn test_status_page_is_not_served_to_the_client() {
+        let params = HashMap::new();
+        assert_eq!(resolve_route("catboy.click", "/", &params, &hyper::Method::GET, 0), RouteMatch::Status);
+        assert_eq!(resolve_route("127.0.0.1:5000", "/", &params, &hyper::Method::GET, 0), RouteMatch::Status);
+        assert_ne!(resolve_route("c4.catboy.click", "/", &params, &hyper::Method::POST, 7), RouteMatch::Status);
+    }
 }

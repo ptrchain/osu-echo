@@ -177,7 +177,7 @@ fn write_uleb128(num: u32) -> Vec<u8> {
     result
 }
 
-fn write_string(s: &str) -> Vec<u8> {
+pub fn write_string(s: &str) -> Vec<u8> {
     if s.is_empty() {
         return vec![0x00];
     }

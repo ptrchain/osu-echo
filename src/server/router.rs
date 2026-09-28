@@ -1,5 +1,56 @@
 use std::collections::HashMap;
 
+/// Maps the first label of the request's `Host` header onto the internal path prefix that
+/// endpoint lives under.
+///
+/// The osu! client addresses a server through several subdomains of one base domain
+/// (`c4.<base>` for bancho, `osu!.<base>`/`osu.<base>` for the web API, `a.` avatars, `b.`
+/// osu!direct, `assets.` beatmap covers). The base domain is whatever the user passed to
+/// `-devserver`, so it cannot be matched by name: only the *label* is meaningful.
+///
+/// Returning `None` means the host carries no known label, which is what happens when the
+/// request arrives through a reverse proxy/tunnel that rewrites `Host` to the upstream
+/// address. Callers fall back to [`normalize_client_path`]'s body heuristic for those.
+pub fn host_route_prefix(host: &str) -> Option<&'static str> {
+    let label = host.split('.').next().unwrap_or("").to_ascii_lowercase();
+    match label.as_str() {
+        // The bancho host has been spelled `cho`, `c`, `c1`…`c6` and `ce` over the client's
+        // lifetime; which one a build asks for depends on its age.
+        "c" | "c1" | "c2" | "c3" | "c4" | "c5" | "c6" | "ce" | "cho" => Some("/c"),
+        "osu" | "osu!" => Some("/osu"),
+        "a" => Some("/a"),
+        "b" => Some("/b"),
+        "assets" => Some("/assets"),
+        _ => None,
+    }
+}
+
+/// Rewrites an incoming request path so that [`match_route`] sees the same layout it would see
+/// for `-devserver localhost`, whatever base domain the client was pointed at.
+///
+/// The client sends the same paths on every host (`/web/osu-search.php`, `/d/123`, `/`, ...), so
+/// the subdomain is the only thing distinguishing "bancho packet POST" from "beatmap download"
+/// and friends. Without this, a server reached through `-devserver <domain>` answers bancho
+/// traffic with the status page and in-game requests silently do nothing.
+///
+/// `is_post_with_body` covers the proxied case: bancho traffic is the only POST to `/` that
+/// carries a body (the packet stream), and the login POST is the one without an `osu-token`
+/// header, so neither can be recognised by header alone.
+pub fn normalize_client_path(host: &str, path: &str, is_post_with_body: bool) -> String {
+    let path = if path.is_empty() { "/" } else { path };
+    let mut normalized = match host_route_prefix(host) {
+        Some(prefix) if path == "/" => prefix.to_string(),
+        Some(prefix) if path != prefix && !path.starts_with(&format!("{}/", prefix)) => format!("{}{}", prefix, path),
+        _ => path.to_string(),
+    };
+
+    if is_post_with_body && normalized == "/" {
+        normalized = "/c".to_string();
+    }
+
+    normalized
+}
+
 pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
     if path.is_empty() || path == "/" {
         return RouteMatch::Status;
@@ -225,5 +276,61 @@ mod tests {
         for (path, expected) in cases {
             assert_eq!(match_route(path, &query), expected, "Route failed for {}", path);
         }
+    }
+
+    #[test]
+    fn test_host_route_prefix_ignores_base_domain() {
+        for host in ["c.localhost", "c4.localhost", "c.catboy.click", "c4.Catboy.Click", "c5.ppy.sh", "c6.ppy.sh", "ce.ppy.sh", "cho.localhost", "c1.localhost", "c3.ppy.sh"] {
+            assert_eq!(host_route_prefix(host), Some("/c"), "wrong prefix for {}", host);
+        }
+        assert_eq!(host_route_prefix("osu!.catboy.click"), Some("/osu"));
+        assert_eq!(host_route_prefix("osu.ppy.sh"), Some("/osu"));
+        assert_eq!(host_route_prefix("a.ppy.sh"), Some("/a"));
+        assert_eq!(host_route_prefix("b.ppy.sh"), Some("/b"));
+        assert_eq!(host_route_prefix("assets.ppy.sh"), Some("/assets"));
+
+        // Hosts without a known label must not be guessed at.
+        assert_eq!(host_route_prefix("localhost"), None);
+        assert_eq!(host_route_prefix("catboy.click"), None);
+        assert_eq!(host_route_prefix("127.0.0.1"), None);
+    }
+
+    #[test]
+    fn test_normalize_client_path_for_any_devserver_domain() {
+        let query = HashMap::new();
+
+        // Bancho traffic: the client POSTs its packet stream to `/` on a `c*` subdomain. With a
+        // domain devserver that used to fall through to the status page, so nothing in the game
+        // (login, chat, commands) ever got an answer.
+        for host in ["c4.catboy.click", "c.localhost", "c6.ppy.sh", "cho.localhost", "c1.localhost"] {
+            let path = normalize_client_path(host, "/", true);
+            assert_eq!(path, "/c", "wrong normalized path for {}", host);
+            assert_eq!(match_route(&path, &query), RouteMatch::Cho);
+        }
+
+        // Web API traffic.
+        assert_eq!(normalize_client_path("osu!.catboy.click", "/web/osu-search.php", false), "/osu/web/osu-search.php");
+        assert_eq!(normalize_client_path("osu.localhost", "/web/osu-search.php", false), "/osu/web/osu-search.php");
+        assert_eq!(normalize_client_path("osu.catboy.click", "/web/bancho_connect.php", true), "/osu/web/bancho_connect.php");
+
+        // osu!direct and avatars.
+        assert_eq!(normalize_client_path("b.catboy.click", "/d/2620610", false), "/b/d/2620610");
+        assert_eq!(normalize_client_path("b.catboy.click", "/thumb/2620610l.jpg", false), "/b/thumb/2620610l.jpg");
+        assert_eq!(normalize_client_path("a.catboy.click", "/4", false), "/a/4");
+        assert_eq!(normalize_client_path("assets.catboy.click", "/beatmaps/1/covers/card.jpg", false), "/assets/beatmaps/1/covers/card.jpg");
+
+        // Already-prefixed paths are left alone instead of being prefixed twice.
+        assert_eq!(normalize_client_path("c4.catboy.click", "/c/", true), "/c/");
+        assert_eq!(normalize_client_path("b.catboy.click", "/b/2620610l.jpg", false), "/b/2620610l.jpg");
+
+        // A proxy that rewrites Host to the upstream address loses the subdomain; the packet
+        // stream is still recognisable as a POST to `/` with a body.
+        assert_eq!(normalize_client_path("127.0.0.1", "/", true), "/c");
+        assert_eq!(normalize_client_path("catboy.click", "/", true), "/c");
+        // ...but a plain GET to `/` must still serve the status page.
+        assert_eq!(normalize_client_path("catboy.click", "/", false), "/");
+        assert_eq!(match_route(&normalize_client_path("catboy.click", "/", false), &query), RouteMatch::Status);
+        // And web requests through such a proxy keep working off the path alone.
+        assert_eq!(match_route(&normalize_client_path("127.0.0.1", "/web/osu-search.php", false), &query), RouteMatch::Web("/osu-search.php".to_string()));
     }
 }

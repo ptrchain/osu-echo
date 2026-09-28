@@ -106,11 +106,29 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         }
                     }
                     x if x == packets::PacketId::OsuSendPublicMessage as u16 || x == packets::PacketId::OsuSendPrivateMessage as u16 => {
-                        let mut reader = packets::PacketReader::new(in_pkt.payload);
-                        if let (Ok(_sender), Ok(message), Ok(target), Ok(_userid)) =
-                            (reader.read_string(), reader.read_string(), reader.read_string(), reader.read_i32())
-                        {
-                            crate::handlers::chat_commands::handle_chat_message(state.clone(), &player_name, &message, &target).await;
+                        // Client generations disagree on this payload (with/without the sender
+                        // field, 4- or 8-byte sender id), so it is parsed leniently.
+                        match crate::server::compat::parse_chat_payload(in_pkt.payload, &player_name) {
+                            Some((message, target)) => {
+                                // Log every message the client sends, not just commands: when a
+                                // command produces no visible reply this is the only record of what
+                                // actually arrived (and in what shape).
+                                let shown = if message.chars().count() > 60 {
+                                    let head: String = message.chars().take(60).collect();
+                                    format!("{}...", head)
+                                } else {
+                                    message.clone()
+                                };
+                                utils::log(&format!("chat from {}: \"{}\" -> {}", player_name, shown.replace('\n', " "), target));
+                                crate::handlers::chat_commands::handle_chat_message(state.clone(), &player_name, &message, &target).await;
+                            }
+                            None => {
+                                utils::log_error(&format!(
+                                    "Could not parse chat packet ({} bytes): {}",
+                                    in_pkt.payload.len(),
+                                    in_pkt.payload.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ")
+                                ));
+                            }
                         }
                     }
                     x if x == packets::PacketId::OsuUserPresenceRequestAll as u16 => {
@@ -461,6 +479,11 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
     {
         let mut s = state.write().await;
         s.pending_login_name = None;
+    }
+
+    let client = crate::server::compat::ClientInfo::from_login_body(body_bytes);
+    if client.build.is_some() {
+        utils::log(&format!("{} is using {}", profile_name, client.describe()));
     }
 
     let (api_key_opt, http_client, osu_uname_opt, config_country_opt, osu_daily_api_key_opt) = {

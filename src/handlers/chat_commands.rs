@@ -11,18 +11,33 @@ pub use crate::handlers::tillerino::{
     calculate_np_breakdown, format_np_reply, parse_np_message, reply as reply_tillerino, NpBreakdown, NpInfo,
 };
 
+/// The channel every player is in, and therefore where an answer to a command is shown when the
+/// client did not say which channel it was typed in.
+const PUBLIC_CHANNEL: &str = "#osu";
+
 pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str, message: &str, target: &str) {
     let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return;
-    }
 
     let is_tillerino = target.eq_ignore_ascii_case(tillerino::BOT_NAME);
     let is_banchobot = target.eq_ignore_ascii_case(banchobot::BOT_NAME);
-    let is_pm = is_tillerino || is_banchobot || !target.starts_with('#');
-    let reply_target = if is_pm { player_name.to_string() } else { target.to_string() };
+    let mut is_pm = is_tillerino || is_banchobot || !target.starts_with('#');
+    let mut reply_target = if is_pm { player_name.to_string() } else { target.to_string() };
 
-    if !is_banchobot {
+    let prefix = {
+        let s = state.read().await;
+        s.config.command_prefix.clone()
+    };
+
+    // Not every client sends `!cmd` as a message. The 2022 builds treat a leading `!` as a
+    // private-message shortcut, so the text arrives with an *empty* message and the command in
+    // the target field ("", "!help"). Left alone that is a PM to a user called "!help" and the
+    // command is silently dropped, which is why nothing happened in chat. Treat that shape as the
+    // command it obviously is, and answer in the channel the player is typing in rather than in a
+    // PM tab they may not be looking at.
+    let command_in_target = trimmed.is_empty() && !is_tillerino && !is_banchobot && (target.starts_with(&prefix) || target.starts_with('/'));
+    let effective_message = if command_in_target { target } else { trimmed };
+
+    if !is_banchobot && !command_in_target {
         if let Some(np_info) = parse_np_message(message) {
             tillerino::handle_np(&state, player_name, &reply_target, np_info).await;
             return;
@@ -32,19 +47,27 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
         return;
     }
 
-    if trimmed.starts_with('\x01') {
+    if effective_message.starts_with('\x01') {
         return;
     }
 
-    let prefix = {
-        let s = state.read().await;
-        s.config.command_prefix.clone()
-    };
+    if command_in_target {
+        is_pm = false;
+        reply_target = PUBLIC_CHANNEL.to_string();
+        crate::utils::log(&format!("{} ran `{}` (sent as a private-message target by the client)", player_name, target));
+    }
 
-    let cmd_text = if let Some(stripped) = trimmed.strip_prefix(&prefix) {
+    if effective_message.is_empty() {
+        return;
+    }
+
+    let cmd_text = if let Some(stripped) = effective_message.strip_prefix(&prefix) {
         stripped
+    } else if command_in_target {
+        // The client used a slash here, since the command came from the target field.
+        effective_message.strip_prefix('/').unwrap_or(effective_message)
     } else if is_pm {
-        trimmed.strip_prefix('!').or_else(|| trimmed.strip_prefix('/')).unwrap_or(trimmed)
+        effective_message.strip_prefix('!').or_else(|| effective_message.strip_prefix('/')).unwrap_or(effective_message)
     } else {
         return;
     };
@@ -114,6 +137,96 @@ mod tests {
     use crate::types::beatmap::Beatmap;
     use crate::types::mods::Mods;
     use crate::utils;
+
+    #[tokio::test]
+    async fn test_command_sent_as_private_message_target_is_answered_in_channel() {
+        // osu! 2022 builds treat a leading `!` as a private-message shortcut: typing `!help` in
+        // #osu arrives as an empty message with "!help" as the target. It has to run as a command
+        // and be answered in #osu, not be dropped as a PM to a user called "!help".
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Box").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Box".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        handle_chat_message(shared_state.clone(), "Box", "", "!help").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let queue = p.clear_queue();
+            let pkts = packets::split_packets(&queue);
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("command sent as target must still be answered");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            assert_eq!(r.read_string().unwrap(), "BanchoBot");
+            let msg = r.read_string().unwrap();
+            let target = r.read_string().unwrap();
+            assert_eq!(target, "#osu", "the answer must land in the channel the player is typing in");
+            assert!(msg.contains("BanchoBot Commands:"), "got: {}", msg);
+        }
+
+        // The same shape with a slash-prefixed command.
+        handle_chat_message(shared_state.clone(), "Box", "", "/commands").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let queue = p.clear_queue();
+            let pkts = packets::split_packets(&queue);
+            assert!(pkts.iter().any(|p| p.id == packets::PacketId::ChoSendMessage as u16), "/commands sent as a target must be answered too");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_normal_chat_and_command_shapes_still_work() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Box").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new("Box".to_string()));
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        // A command sent the normal way, in a channel.
+        handle_chat_message(shared_state.clone(), "Box", "!help", "#osu").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let queue = p.clear_queue();
+            let pkts = packets::split_packets(&queue);
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("in-channel command");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            r.read_string().unwrap();
+            assert!(r.read_string().unwrap().contains("BanchoBot Commands:"));
+            assert_eq!(r.read_string().unwrap(), "#osu");
+        }
+
+        // Ordinary chat is not a command and must produce no reply.
+        handle_chat_message(shared_state.clone(), "Box", "hello", "#osu").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let queue = p.clear_queue();
+            let pkts = packets::split_packets(&queue);
+            assert!(!pkts.iter().any(|p| p.id == packets::PacketId::ChoSendMessage as u16), "plain chat must not trigger a command");
+        }
+
+        // A PM to BanchoBot is still a PM, so the answer goes to the player.
+        handle_chat_message(shared_state.clone(), "Box", "!help", "BanchoBot").await;
+        {
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let queue = p.clear_queue();
+            let pkts = packets::split_packets(&queue);
+            let msg_pkt = pkts.iter().find(|p| p.id == packets::PacketId::ChoSendMessage as u16).expect("PM command");
+            let mut r = packets::PacketReader::new(msg_pkt.payload);
+            r.read_string().unwrap();
+            r.read_string().unwrap();
+            assert_eq!(r.read_string().unwrap(), "Box");
+        }
+    }
 
     #[test]
     fn test_parse_np_message_variants() {

@@ -4,6 +4,18 @@ version = "1.1.0"
 edition = "2021"
 description = "A local osu! private server written in Rust"
 
+[features]
+default = []
+# Opt-in support for osu! clients too old to negotiate TLS 1.2 (`--legacy-tls` at runtime).
+#
+# It needs its own TLS stack: Windows' SChannel refuses TLS 1.0/1.1 unless a machine-wide registry
+# policy is relaxed, which would weaken every other program on the PC, and rustls does not implement
+# those versions at all. So this pulls in a vendored OpenSSL, which ignores that policy and keeps the
+# legacy listener confined to this process. Vendored OpenSSL is a C build and needs perl, which is
+# why it is not part of a normal build. Without this feature the server still accepts `--legacy-tls`,
+# using a Python front-end instead (see README).
+legacy-tls = ["dep:openssl", "dep:tokio-openssl"]
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["full"] }
@@ -44,3 +56,8 @@ strip = true
 
 [target."cfg(windows)".build-dependencies]
 winres = "0.1.12"
+
+# Only compiled with `--features legacy-tls`; see the feature comment above.
+[target."cfg(windows)".dependencies]
+openssl = { version = "0.10", features = ["vendored"], optional = true }
+tokio-openssl = { version = "0.6", optional = true }

@@ -22,6 +22,41 @@ A local osu! server written in Rust. It lets you run your own private server on 
 - **osu! client (Stable)**
 - *Optional (only needed if compiling from source)*: **Rust (Cargo)**
 
+> [!IMPORTANT]
+> The client must be able to speak **TLS 1.2 or newer**, which every osu! build from 2023 onwards
+> does. Builds from 2022 and earlier only offer TLS 1.0/1.1, so they fail with `connection failed`
+> and no server-side request. The server says so explicitly when it sees such a handshake. If you
+> are on an old build, either update osu! or start the server with `--legacy-tls` (see below).
+
+### Connecting an old client (`--legacy-tls`)
+
+osu! builds from 2022 and earlier only offer TLS 1.0/1.1, and no current TLS stack speaks those by
+default. Windows' own stack can be coaxed into it, but only through a **machine-wide** registry
+policy that weakens TLS for every program on the PC — not something a game server should do to
+your computer.
+
+`--legacy-tls` avoids that by terminating TLS in a stack that ignores that policy, so the change
+stays inside the server process:
+
+```text
+osu-echo.exe --legacy-tls
+```
+
+It binds `https://127.0.0.1:443` as before but also accepts TLS 1.0/1.1, then forwards to the
+server's own plain HTTP listener. The certificate, hosts entries and everything else are unchanged,
+and TLS 1.2 clients keep working. Nothing outside the process is affected: Windows' TLS settings
+are untouched, the listener is loopback-only, and dropping the flag restores a TLS 1.2+ listener.
+
+It needs either:
+
+- **Python 3** on `PATH` (used automatically; nothing to install or configure), or
+- a build with the bundled TLS stack: `cargo build --release --features legacy-tls`. That path is
+  self-contained but compiles a vendored OpenSSL, which needs `perl` and a C toolchain — hence it
+  is not part of a normal build.
+
+TLS 1.0/1.1 are deprecated and only offer weak cipher suites. That is acceptable for a
+loopback-only listener talking to one local client, which is exactly what this mode is for.
+
 ## Getting Started
 
 ### 1. Get the Server
@@ -69,6 +104,36 @@ To connect your osu! client to the local server:
    ```
 3. Launch osu! using the shortcut.
 4. Log in with any username and password. The server will create your profile automatically.
+
+#### What "localhost" needs
+
+The client addresses the server through subdomains of the domain you pass to `-devserver`, so
+`localhost` means `osu.localhost` (web API), `c`/`c1`…`c6`/`ce`/`cho` (bancho), `a` (avatars),
+`b` (osu!direct) and `assets`. Two things have to be true, and the server checks both on startup
+and tells you which one is missing:
+
+- **Name resolution.** Windows does not resolve `*.localhost` on its own, so these names need a
+  hosts entry. The server adds it automatically (asking for Administrator once); pass
+  `--no-hosts-edit` if you manage DNS/hosts yourself.
+- **A trusted certificate.** The client speaks HTTPS, so it rejects an untrusted certificate and
+  then just sits on "connecting to server" without logging anything. The server generates a
+  self-signed certificate covering `localhost` and `*.localhost` and installs it into your user
+  trust store; `--trust-cert` re-runs that step.
+
+If the client cannot connect and the server logged no request at all, one of those two is the
+cause — the startup report says which.
+
+#### Using a domain instead of `localhost`
+
+Any base domain works, e.g. `-devserver catboy.click` — the client talks to subdomains of it
+(`c4.` for bancho, `osu.` for the web API, `a.` avatars, `b.` osu!direct, `assets.` covers), and
+the server routes on the subdomain label rather than the domain name. You need:
+
+- DNS for those subdomains pointing at the server (a wildcard `*.yourdomain` is easiest).
+- A TLS certificate the client trusts for them, e.g. via a reverse proxy or tunnel in front of
+  the server. The bundled self-signed certificate only covers `*.localhost`.
+- The proxy must forward the bancho POSTs to the server, preserving the body — including the
+  login POST, which carries no `osu-token` header.
 
 ## In-Game Commands
 
@@ -120,6 +185,8 @@ Options:
   -s, --setup          Run or re-run the interactive setup wizard
       --reconfigure    Alias for --setup
       --trust-cert     Install and trust the local TLS certificate in Windows Root store
+      --legacy-tls     Also accept TLS 1.0/1.1 (osu! clients older than 2023)
+      --no-hosts-edit  Never modify the Windows hosts file (use when DNS is managed elsewhere)
 ```
 
 ## Data & Backups
