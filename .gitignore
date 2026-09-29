@@ -38,3 +38,6 @@ desktop.ini
 package.ps1
 package.bat
 
+# Testing Folder
+/test/
+/test/*
