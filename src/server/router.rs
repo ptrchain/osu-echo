@@ -1,12 +1,20 @@
 use std::collections::HashMap;
 
 pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
-    if path.is_empty() || path == "/" {
-        return RouteMatch::Status;
+    if path.is_empty() || path == "/" || path == "/profile" || path == "/profile/" {
+        return RouteMatch::UserProfileWeb;
     }
 
     if path == "/favicon.ico" {
         return RouteMatch::Favicon;
+    }
+
+    if let Some(asset) = path.strip_prefix("/site/static/") {
+        return RouteMatch::WebStatic(asset.to_string());
+    }
+
+    if let Some(action) = path.strip_prefix("/site/") {
+        return RouteMatch::WebApi(action.to_string());
     }
 
     let cho_prefixes = ["/c4", "/c5", "/c6", "/ce", "/c"];
@@ -147,14 +155,21 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
 
     if let Some(ref upath) = user_path {
         let sub = if let Some(s) = upath.strip_prefix("/u/") { s } else { upath.strip_prefix("/users/").unwrap_or("") };
-        let uid = sub.split('/').next().unwrap_or("").parse::<i32>().unwrap_or(0);
-        if uid == 4 {
-            return RouteMatch::BeatmapWeb("/users/2070907".to_string());
-        } else if uid == 3 {
-            return RouteMatch::BeatmapWeb("/users/3".to_string());
-        } else if uid > 0 {
-            return RouteMatch::BeatmapWeb(format!("/users/{}", uid));
+        let first_segment = sub.split('/').next().unwrap_or("");
+        if let Ok(uid) = first_segment.parse::<i32>() {
+            if uid == 4 {
+                return RouteMatch::BeatmapWeb("/users/2070907".to_string());
+            } else if uid == 3 {
+                return RouteMatch::BeatmapWeb("/users/3".to_string());
+            } else if uid == 2 {
+                // Local player ID 2 -> display local osu!web profile
+                return RouteMatch::UserProfileWeb;
+            } else if uid > 0 {
+                return RouteMatch::BeatmapWeb(format!("/users/{}", uid));
+            }
         }
+        // Named user profile -> local osu!web profile
+        return RouteMatch::UserProfileWeb;
     }
 
     if path.starts_with("/ss/") {
@@ -176,9 +191,12 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
     RouteMatch::NotFound
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RouteMatch {
     Status,
+    UserProfileWeb,
+    WebStatic(String),
+    WebApi(String),
     Favicon,
     Cho,
     Web(String),
@@ -220,6 +238,21 @@ mod tests {
             ("/osu/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
             ("/web/osu-search.php", RouteMatch::Web("/osu-search.php".to_string())),
             ("/web/osu-osz2-getscores.php", RouteMatch::Web("/osu-osz2-getscores.php".to_string())),
+            ("/", RouteMatch::UserProfileWeb),
+            ("", RouteMatch::UserProfileWeb),
+            ("/profile", RouteMatch::UserProfileWeb),
+            ("/profile/", RouteMatch::UserProfileWeb),
+            ("/u/2", RouteMatch::UserProfileWeb),
+            ("/users/2", RouteMatch::UserProfileWeb),
+            ("/osu/u/2", RouteMatch::UserProfileWeb),
+            ("/users/PlayerName", RouteMatch::UserProfileWeb),
+            ("/u/PlayerName", RouteMatch::UserProfileWeb),
+            ("/u/5", RouteMatch::BeatmapWeb("/users/5".to_string())),
+            ("/site/static/profile.js", RouteMatch::WebStatic("profile.js".to_string())),
+            ("/site/static/vendor/osu-web.css", RouteMatch::WebStatic("vendor/osu-web.css".to_string())),
+            ("/site/session", RouteMatch::WebApi("session".to_string())),
+            ("/site/login", RouteMatch::WebApi("login".to_string())),
+            ("/site/logout", RouteMatch::WebApi("logout".to_string())),
         ];
 
         for (path, expected) in cases {

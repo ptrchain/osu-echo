@@ -9,6 +9,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 
+#[derive(Debug, Clone)]
+pub struct WebSession {
+    pub csrf_token: String,
+    pub username: Option<String>,
+    pub expires: u64,
+}
+
 pub struct AppState {
     pub db: Arc<Mutex<Connection>>,
     pub http: HttpClient,
@@ -24,6 +31,7 @@ pub struct AppState {
     pub last_np_map: Option<Beatmap>,
     pub recent_recommendations: Vec<String>,
     pub bancho_score_cache: HashMap<(i64, i32, Option<u32>, i32), (std::time::Instant, Vec<crate::types::score::BanchoScore>)>,
+    pub web_sessions: HashMap<String, WebSession>,
 }
 
 impl AppState {
@@ -47,6 +55,7 @@ impl AppState {
             last_np_map: None,
             recent_recommendations: Vec::new(),
             bancho_score_cache: HashMap::new(),
+            web_sessions: HashMap::new(),
         }
     }
 }

@@ -1296,6 +1296,7 @@ dependencies = [
  "colored",
  "crossterm",
  "dotenvy",
+ "getrandom 0.2.17",
  "http-body-util",
  "hyper",
  "hyper-util",

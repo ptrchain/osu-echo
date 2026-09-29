@@ -8,3 +8,4 @@ pub mod score_submit;
 pub mod tillerino;
 pub mod web;
 pub mod webhook;
+pub mod website;
