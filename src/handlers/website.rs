@@ -51,6 +51,38 @@ pub struct SuccessResponse {
     pub ok: bool,
 }
 
+#[derive(Deserialize)]
+pub struct DeleteScorePayload {
+    #[serde(deserialize_with = "deserialize_id")]
+    pub id: i64,
+}
+
+fn deserialize_id<'de, D>(deserializer: D) -> Result<i64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct IdVisitor;
+    impl<'de> serde::de::Visitor<'de> for IdVisitor {
+        type Value = i64;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("an integer or string containing an integer")
+        }
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(v)
+        }
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(v as i64)
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            v.parse::<i64>().map_err(serde::de::Error::custom)
+        }
+    }
+    deserializer.deserialize_any(IdVisitor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicBeatmap {
     pub title: String,
@@ -474,6 +506,7 @@ pub async fn handle(
         (&Method::POST, "login") => handle_login(state, headers, body).await,
         (&Method::POST, "logout") => handle_logout(state, headers).await,
         (&Method::POST, "settings") => handle_settings(state, headers, body).await,
+        (&Method::POST, "scores/delete") => handle_delete_score(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
 }
@@ -1082,6 +1115,85 @@ async fn handle_settings(
     json_ok(&LoginResponse { name: target_username })
 }
 
+async fn handle_delete_score(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to manage your scores."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Session expired. Please sign in again."),
+    };
+    drop(state_read);
+
+    if !can_write(Some(&session), headers) {
+        return json_error(StatusCode::FORBIDDEN, "Refresh the page and try again.");
+    }
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to manage your scores."),
+    };
+
+    let payload: DeleteScorePayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid request body: {}", e)),
+    };
+
+    {
+        let state_guard = state.read().await;
+        let conn = state_guard.db.lock().await;
+        let deleted = match db::delete_score_by_id(&conn, &current_user, payload.id) {
+            Ok(d) => d,
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Database error deleting score: {}", e),
+                );
+            }
+        };
+
+        if !deleted {
+            return json_error(
+                StatusCode::NOT_FOUND,
+                "Score not found or not owned by your current profile.",
+            );
+        }
+
+        let _ = db::decrement_playcount(&conn, &current_user);
+    }
+
+    // Recalculate profile PP, accuracy, total score, and osudaily rank
+    let (_recalc_count, new_pp, new_acc) =
+        crate::handlers::banchobot::recalculate_profile(&state, &current_user).await;
+
+    // If player is currently online in-game, immediately broadcast updated stats
+    let mut s_write = state.write().await;
+    if let Some(ref mut p) = s_write.player {
+        if p.name == current_user {
+            p.pp = new_pp;
+            p.acc = new_acc;
+            p.queue.extend_from_slice(&crate::packets::user_stats(p));
+            p.queue.extend_from_slice(&crate::packets::user_presence(p));
+        }
+    }
+    drop(s_write);
+
+    json_ok(&SuccessResponse { ok: true })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1590,6 +1702,105 @@ mod tests {
             assert_eq!(p.name, "NewName");
             assert_eq!(p.country, 56);
             assert!(!p.queue.is_empty(), "Packets must be queued for in-game client");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_score_route_and_stats_recalculation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "ScoreUser").unwrap();
+
+        // Insert beatmap and score
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "map_del_1".to_string();
+        bmap.title = "Delete Me".to_string();
+        bmap.artist = "Artist".to_string();
+        bmap.version = "Insane".to_string();
+        bmap.beatmap_id = 9991;
+        bmap.beatmapset_id = 9992;
+        crate::db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let s1 = crate::types::score::Score {
+            mode: 0,
+            md5: "map_del_1".to_string(),
+            name: "ScoreUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(250.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: None,
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let s1_id = crate::db::insert_score(&conn, &s1, "ranked").unwrap();
+        crate::db::increment_playcount(&conn, "ScoreUser").unwrap();
+
+        let mut app_state = AppState::new(conn, crate::types::config::Config::default());
+        let player = crate::types::player::Player::new("ScoreUser".to_string());
+        app_state.player = Some(player);
+
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // 1. Establish session
+        let s_resp = handle_session(shared_state.clone(), &HeaderMap::new()).await;
+        let s_data: SessionResponse = serde_json::from_slice(&s_resp.body).unwrap();
+        let set_cookie = s_resp.header("set-cookie").unwrap();
+        let session_token = extract_cookie(set_cookie, SESSION_COOKIE_NAME).unwrap().to_string();
+
+        // 2. Log in as ScoreUser
+        let mut login_headers = HeaderMap::new();
+        login_headers.insert("cookie", HeaderValue::from_str(&format!("los_session={}", session_token)).unwrap());
+        login_headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5000"));
+        login_headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
+        login_headers.insert("x-csrf-token", HeaderValue::from_str(&s_data.csrf).unwrap());
+        let login_body = serde_json::json!({ "username": "ScoreUser" }).to_string();
+        let l_resp = handle_login(shared_state.clone(), &login_headers, login_body.as_bytes()).await;
+        assert_eq!(l_resp.status, StatusCode::OK);
+
+        // 3. Test deleting non-existent score -> 404
+        let del_body_nf = serde_json::json!({ "id": 999999 }).to_string();
+        let resp_nf = handle_delete_score(shared_state.clone(), &login_headers, del_body_nf.as_bytes()).await;
+        assert_eq!(resp_nf.status, StatusCode::NOT_FOUND);
+
+        // 4. Delete score with string ID "s1_id"
+        let del_body = serde_json::json!({ "id": s1_id.to_string() }).to_string();
+        let resp_del = handle_delete_score(shared_state.clone(), &login_headers, del_body.as_bytes()).await;
+        assert_eq!(resp_del.status, StatusCode::OK);
+
+        // Verify score is deleted from scores table and present in deleted_scores
+        {
+            let s = shared_state.read().await;
+            let conn = s.db.lock().await;
+            let remaining = crate::db::get_player_scores_with_beatmaps(&conn, "ScoreUser").unwrap();
+            assert!(remaining.is_empty(), "Score should be deleted from scores table");
+
+            let archived_count: i32 = conn.query_row(
+                "SELECT COUNT(*) FROM deleted_scores WHERE player_name = 'ScoreUser' AND original_id = ?1",
+                rusqlite::params![s1_id],
+                |r| r.get(0),
+            ).unwrap();
+            assert_eq!(archived_count, 1, "Score should be archived in deleted_scores table");
+        }
+
+        // Verify live in-game player packet queue was updated
+        {
+            let s = shared_state.read().await;
+            let p = s.player.as_ref().unwrap();
+            assert!(!p.queue.is_empty(), "Packets must be queued for in-game stats update");
         }
     }
 }

@@ -502,6 +502,28 @@ pub fn rename_profile(conn: &Connection, old_name: &str, new_name: &str) -> SqlR
 }
 
 pub fn delete_score_by_id(conn: &Connection, player_name: &str, score_id: i64) -> SqlResult<bool> {
+    let now = chrono::Utc::now().timestamp();
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS deleted_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_id INTEGER,
+            player_name TEXT,
+            mode INTEGER,
+            md5 TEXT,
+            score INTEGER,
+            pp REAL,
+            acc REAL,
+            deleted_at INTEGER
+        )",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT INTO deleted_scores (original_id, player_name, mode, md5, score, pp, acc, deleted_at)
+         SELECT id, player_name, mode, md5, score, pp, acc, ?1
+         FROM scores WHERE id = ?2 AND player_name = ?3",
+        params![now, score_id, player_name],
+    );
+
     let rows = conn.execute(
         "DELETE FROM scores WHERE id = ?1 AND player_name = ?2",
         params![score_id, player_name],
