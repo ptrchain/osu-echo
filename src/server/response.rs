@@ -51,9 +51,17 @@ impl Response {
             "png" => "image/png",
             "jpg" | "jpeg" => "image/jpeg",
             "gif" => "image/gif",
+            "webp" => "image/webp",
             _ => "image/jpeg",
         };
         Self::new(data).with_header("Content-Type", mime)
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
     }
 
     pub fn redirect(location: &str) -> Self {

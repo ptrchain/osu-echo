@@ -1011,6 +1011,11 @@ pub fn ensure_avatar(conn: &Connection, name: &str) -> SqlResult<()> {
     Ok(())
 }
 
+pub fn clear_avatar(conn: &Connection, name: &str) -> SqlResult<()> {
+    conn.execute("UPDATE avatars SET avatar_url = NULL WHERE player_name = ?1", params![name])?;
+    Ok(())
+}
+
 pub fn add_friend(conn: &Connection, player_name: &str, friend_id: i32, friend_name: &str) -> SqlResult<()> {
     conn.execute(
         "INSERT INTO friends (player_name, friend_id, friend_name)
@@ -1241,6 +1246,8 @@ mod tests {
         assert_eq!(get_avatar(&conn, "TestUser").unwrap(), None);
         set_avatar(&conn, "TestUser", "https://example.com/pfp.png").unwrap();
         assert_eq!(get_avatar(&conn, "TestUser").unwrap(), Some("https://example.com/pfp.png".to_string()));
+        clear_avatar(&conn, "TestUser").unwrap();
+        assert_eq!(get_avatar(&conn, "TestUser").unwrap(), None);
 
         let score = Score {
             mode: 0,
@@ -1851,7 +1858,7 @@ mod tests {
         bmap.beatmapset_id = 6789;
         insert_beatmap(&conn, &bmap).unwrap();
 
-        let mut score = Score {
+        let score = Score {
             mode: 0,
             md5: "map_hash_1".to_string(),
             name: "Alice".to_string(),

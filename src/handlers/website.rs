@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use hyper::{Method, StatusCode};
@@ -6,15 +7,26 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::db;
+use crate::server::assets::EmbeddedAssets;
 use crate::server::response::Response;
 use crate::state::{SharedState, WebSession};
 use crate::types::mods::Mods;
 use crate::types::profile::ProfileDetails;
+use crate::utils;
 
 pub const SESSION_COOKIE_NAME: &str = "los_session";
 pub const SESSION_AGE_SECS: u64 = 86400; // 24 hours
 
-#[derive(Serialize)]
+#[derive(Deserialize)]
+pub struct SettingsPayload {
+    pub username: Option<String>,
+    #[serde(default)]
+    pub reset_avatar: bool,
+    pub details: Option<ProfileDetails>,
+    pub avatar: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct SessionResponse {
     pub csrf: String,
     pub user: Option<String>,
@@ -29,12 +41,12 @@ pub struct LoginPayload {
     pub username: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct LoginResponse {
     pub name: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct SuccessResponse {
     pub ok: bool,
 }
@@ -109,6 +121,146 @@ pub fn generate_token() -> String {
     let mut buf = [0u8; 32];
     let _ = getrandom::getrandom(&mut buf);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(buf)
+}
+
+pub fn generate_hex_token(nbytes: usize) -> String {
+    let mut buf = vec![0u8; nbytes];
+    let _ = getrandom::getrandom(&mut buf);
+    buf.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+pub fn validate_image_format_and_dimensions(bytes: &[u8]) -> Result<&'static str, &'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        if bytes.len() < 24 {
+            return Err("Invalid or truncated PNG image.");
+        }
+        if &bytes[12..16] != b"IHDR" {
+            return Err("Invalid PNG IHDR header.");
+        }
+        let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+        let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return Err("Image dimensions must not exceed 4096x4096 pixels.");
+        }
+        return Ok("png");
+    }
+
+    if bytes.len() >= 3 && bytes[0] == 0xFF && bytes[1] == 0xD8 && bytes[2] == 0xFF {
+        let mut idx = 2;
+        let mut found_dim = false;
+        while idx + 4 < bytes.len() {
+            if bytes[idx] != 0xFF {
+                idx += 1;
+                continue;
+            }
+            while idx < bytes.len() && bytes[idx] == 0xFF {
+                idx += 1;
+            }
+            if idx >= bytes.len() {
+                break;
+            }
+            let marker = bytes[idx];
+            idx += 1;
+            if marker == 0xD9 || marker == 0xDA {
+                break;
+            }
+            if (0xD0..=0xD7).contains(&marker) || marker == 0x01 || marker == 0x00 {
+                continue;
+            }
+            if idx + 2 > bytes.len() {
+                break;
+            }
+            let seg_len = u16::from_be_bytes([bytes[idx], bytes[idx + 1]]) as usize;
+            if seg_len < 2 || idx + seg_len > bytes.len() {
+                break;
+            }
+            let is_sof = matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF);
+            if is_sof && seg_len >= 7 {
+                let height = u16::from_be_bytes([bytes[idx + 3], bytes[idx + 4]]) as u32;
+                let width = u16::from_be_bytes([bytes[idx + 5], bytes[idx + 6]]) as u32;
+                if width == 0 || height == 0 || width > 4096 || height > 4096 {
+                    return Err("Image dimensions must not exceed 4096x4096 pixels.");
+                }
+                found_dim = true;
+                break;
+            }
+            idx += seg_len;
+        }
+        if !found_dim && bytes.len() < 24 {
+            return Err("Invalid or truncated JPEG image.");
+        }
+        return Ok("jpg");
+    }
+
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        if bytes.len() < 10 {
+            return Err("Invalid or truncated GIF image.");
+        }
+        let width = u16::from_le_bytes([bytes[6], bytes[7]]) as u32;
+        let height = u16::from_le_bytes([bytes[8], bytes[9]]) as u32;
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return Err("Image dimensions must not exceed 4096x4096 pixels.");
+        }
+        return Ok("gif");
+    }
+
+    if bytes.len() >= 16 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        if &bytes[12..16] == b"VP8 " && bytes.len() >= 30 {
+            let width = (u16::from_le_bytes([bytes[26], bytes[27]]) & 0x3FFF) as u32;
+            let height = (u16::from_le_bytes([bytes[28], bytes[29]]) & 0x3FFF) as u32;
+            if width > 4096 || height > 4096 {
+                return Err("Image dimensions must not exceed 4096x4096 pixels.");
+            }
+        } else if &bytes[12..16] == b"VP8L" && bytes.len() >= 25 && bytes[20] == 0x2F {
+            let width = 1 + (((bytes[22] as u32 & 0x3F) << 8) | bytes[21] as u32);
+            let height = 1 + (((bytes[24] as u32 & 0xF) << 10) | ((bytes[23] as u32) << 2) | ((bytes[22] as u32 & 0xC0) >> 6));
+            if width > 4096 || height > 4096 {
+                return Err("Image dimensions must not exceed 4096x4096 pixels.");
+            }
+        } else if &bytes[12..16] == b"VP8X" && bytes.len() >= 30 {
+            let width = 1 + (bytes[24] as u32 | ((bytes[25] as u32) << 8) | ((bytes[26] as u32) << 16));
+            let height = 1 + (bytes[27] as u32 | ((bytes[28] as u32) << 8) | ((bytes[29] as u32) << 16));
+            if width > 4096 || height > 4096 {
+                return Err("Image dimensions must not exceed 4096x4096 pixels.");
+            }
+        }
+        return Ok("webp");
+    }
+
+    Err("Choose a PNG, JPEG, GIF or WebP up to 2 MB.")
+}
+
+pub fn parse_and_validate_avatar(data_str: &str) -> Result<(&'static str, Vec<u8>), &'static str> {
+    let raw_b64 = if let Some((_prefix, payload)) = data_str.split_once("base64,") {
+        payload
+    } else if data_str.starts_with("data:") {
+        return Err("Invalid data URL format");
+    } else {
+        data_str
+    };
+
+    let cleaned: String = raw_b64.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    if cleaned.is_empty() {
+        return Err("Choose an image to upload.");
+    }
+    if cleaned.len() > 4 * 1024 * 1024 {
+        return Err("Image exceeds maximum size of 2 MB.");
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cleaned.as_bytes())
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(cleaned.as_bytes()))
+        .map_err(|_| "Failed to decode base64 image data.")?;
+
+    if bytes.is_empty() {
+        return Err("Choose an image to upload.");
+    }
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("Image exceeds maximum size of 2 MB.");
+    }
+
+    let ext = validate_image_format_and_dimensions(&bytes)?;
+    Ok((ext, bytes))
 }
 
 pub fn extract_cookie<'a>(cookie_header: &'a str, cookie_name: &str) -> Option<&'a str> {
@@ -315,8 +467,10 @@ pub async fn handle(
     match (method, action) {
         (&Method::GET, "session") => handle_session(state, headers).await,
         (&Method::GET, "profile") => handle_profile(state, params).await,
+        (&Method::GET, "avatar") => handle_avatar(state, params).await,
         (&Method::POST, "login") => handle_login(state, headers, body).await,
         (&Method::POST, "logout") => handle_logout(state, headers).await,
+        (&Method::POST, "settings") => handle_settings(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
 }
@@ -679,6 +833,252 @@ async fn handle_logout(state: SharedState, headers: &hyper::HeaderMap) -> Respon
     json_ok(&SuccessResponse { ok: true })
 }
 
+async fn serve_guest_avatar(state: &SharedState) -> Response {
+    if let Some(asset) = EmbeddedAssets::get("vendor/avatar-guest@2x.01495bc4.png") {
+        return Response::image(asset.data.to_vec(), "png")
+            .with_header("Cache-Control", "public, max-age=86400");
+    }
+
+    let state_read = state.read().await;
+    if !state_read.default_avatar.is_empty() {
+        return Response::image(state_read.default_avatar.clone(), "png")
+            .with_header("Cache-Control", "public, max-age=86400");
+    }
+
+    Response::not_found()
+}
+
+async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> Response {
+    let name = match params.get("name") {
+        Some(n) if !n.trim().is_empty() => n.trim(),
+        _ => return serve_guest_avatar(&state).await,
+    };
+
+    let state_read = state.read().await;
+    let conn = state_read.db.lock().await;
+    let avatar_url = db::get_avatar(&conn, name).unwrap_or(None);
+    drop(conn);
+    drop(state_read);
+
+    let Some(pfp) = avatar_url else {
+        return serve_guest_avatar(&state).await;
+    };
+
+    if let Some(path) = utils::is_path(&pfp) {
+        if let Ok(bytes) = tokio::fs::read(&path).await {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
+            return Response::image(bytes, ext)
+                .with_header("Cache-Control", "public, max-age=86400");
+        }
+    } else if pfp.starts_with("http://") || pfp.starts_with("https://") {
+        let state_read = state.read().await;
+        let client = state_read.http.clone();
+        drop(state_read);
+
+        if let Ok(resp) = client.get(&pfp).send().await {
+            if resp.status().is_success() {
+                if let Ok(bytes) = resp.bytes().await {
+                    let ext = if pfp.ends_with(".jpg") || pfp.ends_with(".jpeg") {
+                        "jpg"
+                    } else if pfp.ends_with(".gif") {
+                        "gif"
+                    } else if pfp.ends_with(".webp") {
+                        "webp"
+                    } else {
+                        "png"
+                    };
+                    return Response::image(bytes.to_vec(), ext)
+                        .with_header("Cache-Control", "public, max-age=86400");
+                }
+            }
+        }
+    }
+
+    serve_guest_avatar(&state).await
+}
+
+async fn handle_settings(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to update your profile."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Session expired. Please sign in again."),
+    };
+    drop(state_read);
+
+    if !can_write(Some(&session), headers) {
+        return json_error(StatusCode::FORBIDDEN, "Refresh the page and try again.");
+    }
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to update your profile."),
+    };
+
+    let payload: SettingsPayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid settings JSON: {}", e)),
+    };
+
+    // Validate details if present
+    if let Some(ref details) = payload.details {
+        if let Err(err_msg) = details.validate() {
+            return json_error(StatusCode::BAD_REQUEST, err_msg);
+        }
+    }
+
+    // Handle username rename if requested and different
+    let target_username = if let Some(ref new_name_raw) = payload.username {
+        let trimmed = new_name_raw.trim();
+        if trimmed != current_user {
+            let valid_name = match validate_username(trimmed) {
+                Ok(n) => n,
+                Err(e) => return json_error(StatusCode::BAD_REQUEST, e),
+            };
+
+            let s_read = state.read().await;
+            let conn = s_read.db.lock().await;
+            let exists = db::profile_exists(&conn, &valid_name).unwrap_or(false);
+            if exists {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("The username '{}' is already taken.", valid_name),
+                );
+            }
+            if let Err(e) = db::rename_profile(&conn, &current_user, &valid_name) {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to rename profile: {}", e),
+                );
+            }
+            drop(conn);
+            drop(s_read);
+            valid_name
+        } else {
+            current_user.clone()
+        }
+    } else {
+        current_user.clone()
+    };
+
+    // Handle avatar update or reset
+    let mut old_avatar_to_delete: Option<PathBuf> = None;
+    if payload.reset_avatar {
+        let s_read = state.read().await;
+        let conn = s_read.db.lock().await;
+        if let Ok(Some(old_url)) = db::get_avatar(&conn, &target_username) {
+            if let Some(p) = utils::is_path(&old_url) {
+                old_avatar_to_delete = Some(p);
+            }
+        }
+        let _ = db::clear_avatar(&conn, &target_username);
+        drop(conn);
+        drop(s_read);
+    } else if let Some(ref avatar_data_str) = payload.avatar {
+        let (ext, img_bytes) = match parse_and_validate_avatar(avatar_data_str) {
+            Ok(res) => res,
+            Err(err_msg) => return json_error(StatusCode::BAD_REQUEST, err_msg),
+        };
+
+        let avatar_dir = Path::new(".data").join("avatars");
+        let _ = tokio::fs::create_dir_all(&avatar_dir).await;
+        let token_hex = generate_hex_token(16);
+        let filename = format!("{}.{}", token_hex, ext);
+        let file_path = avatar_dir.join(&filename);
+
+        if let Err(e) = tokio::fs::write(&file_path, &img_bytes).await {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to save avatar image: {}", e),
+            );
+        }
+
+        let s_read = state.read().await;
+        let conn = s_read.db.lock().await;
+        if let Ok(Some(old_url)) = db::get_avatar(&conn, &target_username) {
+            if let Some(p) = utils::is_path(&old_url) {
+                old_avatar_to_delete = Some(p);
+            }
+        }
+        let stored_path = file_path.to_string_lossy().to_string();
+        let _ = db::set_avatar(&conn, &target_username, &stored_path);
+        drop(conn);
+        drop(s_read);
+    }
+
+    if let Some(old_path) = old_avatar_to_delete {
+        let p_str = old_path.to_string_lossy();
+        if p_str.contains(".data") && p_str.contains("avatars") {
+            let _ = tokio::fs::remove_file(old_path).await;
+        }
+    }
+
+    // Save profile details
+    let mut country_byte: u8 = 0;
+    if let Some(mut details) = payload.details {
+        details.country = details.country.trim().to_uppercase();
+        if !details.country.is_empty() {
+            country_byte = crate::utils::country_code_to_byte(&details.country);
+        }
+        let s_read = state.read().await;
+        let conn = s_read.db.lock().await;
+        if let Err(e) = db::save_profile_details(&conn, &target_username, &details) {
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("Failed to save profile details: {}", e),
+            );
+        }
+        drop(conn);
+        drop(s_read);
+    }
+
+    // Synchronize in-memory AppState, sessions, and live in-game Player
+    let mut s_write = state.write().await;
+    if target_username != current_user {
+        for s in s_write.web_sessions.values_mut() {
+            if s.username.as_deref() == Some(&current_user) {
+                s.username = Some(target_username.clone());
+            }
+        }
+        if s_write.pending_login_name.as_deref() == Some(&current_user) {
+            s_write.pending_login_name = Some(target_username.clone());
+        }
+        if s_write.config.osu_username.as_deref() == Some(&current_user) {
+            s_write.config.osu_username = Some(target_username.clone());
+        }
+    }
+
+    if let Some(ref mut p) = s_write.player {
+        if p.name == current_user || p.name == target_username {
+            if target_username != current_user {
+                p.name = target_username.clone();
+            }
+            if country_byte > 0 {
+                p.country = country_byte;
+            }
+            p.queue.extend_from_slice(&crate::packets::user_presence(p));
+            p.queue.extend_from_slice(&crate::packets::user_stats(p));
+        }
+    }
+    drop(s_write);
+
+    json_ok(&LoginResponse { name: target_username })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1009,5 +1409,184 @@ mod tests {
         assert_eq!(data_rx.playcount, 1);
         assert_eq!(data_rx.top.len(), 1);
         assert_eq!(data_rx.top[0].mods, "RX");
+    }
+
+    #[test]
+    fn test_image_validation_formats() {
+        // Valid 1x1 PNG
+        let valid_png = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // magic
+            0x00, 0x00, 0x00, 0x0D, // IHDR chunk length 13
+            b'I', b'H', b'D', b'R',
+            0x00, 0x00, 0x00, 0x01, // width: 1
+            0x00, 0x00, 0x00, 0x01, // height: 1
+            0x08, 0x06, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(validate_image_format_and_dimensions(&valid_png).unwrap(), "png");
+
+        // Oversized PNG (>4096)
+        let oversized_png = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            b'I', b'H', b'D', b'R',
+            0x00, 0x00, 0x10, 0x01, // width: 4097
+            0x00, 0x00, 0x00, 0x01, // height: 1
+            0x08, 0x06, 0x00, 0x00, 0x00,
+        ];
+        assert!(validate_image_format_and_dimensions(&oversized_png).is_err());
+
+        // Valid GIF89a 100x200
+        let mut valid_gif = vec![b'G', b'I', b'F', b'8', b'9', b'a'];
+        valid_gif.extend_from_slice(&100u16.to_le_bytes()); // width
+        valid_gif.extend_from_slice(&200u16.to_le_bytes()); // height
+        valid_gif.push(0x80);
+        assert_eq!(validate_image_format_and_dimensions(&valid_gif).unwrap(), "gif");
+
+        // Corrupted header
+        assert!(validate_image_format_and_dimensions(b"NOT_AN_IMAGE").is_err());
+    }
+
+    #[test]
+    fn test_parse_and_validate_avatar_data_url() {
+        let valid_png = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            b'I', b'H', b'D', b'R',
+            0x00, 0x00, 0x00, 0x02,
+            0x00, 0x00, 0x00, 0x02,
+            0x08, 0x06, 0x00, 0x00, 0x00,
+        ];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&valid_png);
+        let data_url = format!("data:image/png;base64,{}", b64);
+
+        let (ext, bytes) = parse_and_validate_avatar(&data_url).unwrap();
+        assert_eq!(ext, "png");
+        assert_eq!(bytes, valid_png);
+
+        // Invalid base64
+        assert!(parse_and_validate_avatar("data:image/png;base64,???bad_base64???").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_avatar_route_fallback_and_custom() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "Bob").unwrap();
+
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // Guest avatar when nonexistent or no custom avatar set
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "Bob".to_string());
+        let resp = handle_avatar(shared_state.clone(), &params).await;
+        assert_eq!(resp.status, StatusCode::OK);
+        assert_eq!(resp.header("content-type").unwrap(), "image/png");
+
+        // Custom avatar file path
+        let temp_avatar = std::path::Path::new(".data").join("avatars").join("test_avatar.png");
+        let _ = std::fs::create_dir_all(temp_avatar.parent().unwrap());
+        std::fs::write(&temp_avatar, b"\x89PNG\r\n\x1a\ntest").unwrap();
+
+        {
+            let s = shared_state.read().await;
+            let conn = s.db.lock().await;
+            crate::db::set_avatar(&conn, "Bob", temp_avatar.to_str().unwrap()).unwrap();
+        }
+
+        let resp_custom = handle_avatar(shared_state.clone(), &params).await;
+        assert_eq!(resp_custom.status, StatusCode::OK);
+        assert_eq!(resp_custom.body, b"\x89PNG\r\n\x1a\ntest");
+
+        let _ = std::fs::remove_file(&temp_avatar);
+    }
+
+    #[tokio::test]
+    async fn test_settings_route_rename_details_and_avatar() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "OldName").unwrap();
+
+        let mut app_state = AppState::new(conn, crate::types::config::Config::default());
+        let mut player = crate::types::player::Player::new("OldName".to_string());
+        player.country = 0;
+        app_state.player = Some(player);
+
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // 1. Establish session
+        let headers_session = HeaderMap::new();
+        let s_resp = handle_session(shared_state.clone(), &headers_session).await;
+        let s_data: SessionResponse = serde_json::from_slice(&s_resp.body).unwrap();
+        let set_cookie = s_resp.header("set-cookie").unwrap();
+        let session_token = extract_cookie(set_cookie, SESSION_COOKIE_NAME).unwrap().to_string();
+
+        // 2. Log in as OldName
+        let mut login_headers = HeaderMap::new();
+        login_headers.insert("cookie", HeaderValue::from_str(&format!("los_session={}", session_token)).unwrap());
+        login_headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5000"));
+        login_headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
+        login_headers.insert("x-csrf-token", HeaderValue::from_str(&s_data.csrf).unwrap());
+        let login_body = serde_json::json!({ "username": "OldName" }).to_string();
+        let l_resp = handle_login(shared_state.clone(), &login_headers, login_body.as_bytes()).await;
+        assert_eq!(l_resp.status, StatusCode::OK);
+
+        // 3. Update settings: rename to NewName, set country to DE, set details, upload avatar
+        let valid_png = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            b'I', b'H', b'D', b'R',
+            0x00, 0x00, 0x00, 0x10,
+            0x00, 0x00, 0x00, 0x10,
+            0x08, 0x06, 0x00, 0x00, 0x00,
+        ];
+        let avatar_b64 = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&valid_png));
+
+        let settings_body = serde_json::json!({
+            "username": "NewName",
+            "reset_avatar": false,
+            "avatar": avatar_b64,
+            "details": {
+                "country": "DE",
+                "location": "Berlin",
+                "about": "New bio",
+                "devices": ["Tablet", "Keyboard"],
+                "section_order": ["me", "top-ranks", "historical", "beatmaps", "medals", "recent-activity"]
+            }
+        }).to_string();
+
+        let settings_resp = handle_settings(shared_state.clone(), &login_headers, settings_body.as_bytes()).await;
+        assert_eq!(settings_resp.status, StatusCode::OK);
+        let ret: LoginResponse = serde_json::from_slice(&settings_resp.body).unwrap();
+        assert_eq!(ret.name, "NewName");
+
+        // Verify DB updates
+        {
+            let s = shared_state.read().await;
+            let conn = s.db.lock().await;
+            assert!(!crate::db::profile_exists(&conn, "OldName").unwrap());
+            assert!(crate::db::profile_exists(&conn, "NewName").unwrap());
+            assert_eq!(crate::db::get_profile_country(&conn, "NewName").unwrap(), 56); // DE = 56
+            let det = crate::db::get_profile_details(&conn, "NewName").unwrap();
+            assert_eq!(det.location, "Berlin");
+            assert_eq!(det.about, "New bio");
+            assert_eq!(det.country, "DE");
+
+            // Verify avatar was saved
+            let av = crate::db::get_avatar(&conn, "NewName").unwrap();
+            assert!(av.is_some());
+            let av_path = av.unwrap();
+            assert!(std::path::Path::new(&av_path).exists());
+            let _ = std::fs::remove_file(&av_path);
+        }
+
+        // Verify live in-game player sync
+        {
+            let s = shared_state.read().await;
+            let p = s.player.as_ref().unwrap();
+            assert_eq!(p.name, "NewName");
+            assert_eq!(p.country, 56);
+            assert!(!p.queue.is_empty(), "Packets must be queued for in-game client");
+        }
     }
 }
