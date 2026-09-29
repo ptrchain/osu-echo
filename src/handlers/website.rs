@@ -311,6 +311,9 @@ pub fn can_write(
             domain_name == host_domain
                 || (domain_name == "localhost" && host_domain == "127.0.0.1")
                 || (domain_name == "127.0.0.1" && host_domain == "localhost")
+                || (domain_name.ends_with(".localhost") && host_domain.ends_with(".localhost"))
+                || (domain_name.ends_with(".localhost") && (host_domain == "localhost" || host_domain == "127.0.0.1"))
+                || ((domain_name == "localhost" || domain_name == "127.0.0.1") && host_domain.ends_with(".localhost"))
         }
         None => false,
     };

@@ -1,19 +1,31 @@
 use std::collections::HashMap;
 
 pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
-    if path.is_empty() || path == "/" || path == "/profile" || path == "/profile/" {
+    if path.is_empty()
+        || path == "/"
+        || path == "/profile"
+        || path == "/profile/"
+        || path == "/osu"
+        || path == "/osu/"
+    {
         return RouteMatch::UserProfileWeb;
     }
 
-    if path == "/favicon.ico" {
+    if path == "/favicon.ico" || path == "/osu/favicon.ico" {
         return RouteMatch::Favicon;
     }
 
-    if let Some(asset) = path.strip_prefix("/site/static/") {
+    let site_static = path
+        .strip_prefix("/site/static/")
+        .or_else(|| path.strip_prefix("/osu/site/static/"));
+    if let Some(asset) = site_static {
         return RouteMatch::WebStatic(asset.to_string());
     }
 
-    if let Some(action) = path.strip_prefix("/site/") {
+    let site_api = path
+        .strip_prefix("/site/")
+        .or_else(|| path.strip_prefix("/osu/site/"));
+    if let Some(action) = site_api {
         return RouteMatch::WebApi(action.to_string());
     }
 
@@ -250,9 +262,13 @@ mod tests {
             ("/u/5", RouteMatch::BeatmapWeb("/users/5".to_string())),
             ("/site/static/profile.js", RouteMatch::WebStatic("profile.js".to_string())),
             ("/site/static/vendor/osu-web.css", RouteMatch::WebStatic("vendor/osu-web.css".to_string())),
+            ("/osu/site/static/vendor/osu-web.css", RouteMatch::WebStatic("vendor/osu-web.css".to_string())),
             ("/site/session", RouteMatch::WebApi("session".to_string())),
+            ("/osu/site/session", RouteMatch::WebApi("session".to_string())),
             ("/site/login", RouteMatch::WebApi("login".to_string())),
             ("/site/logout", RouteMatch::WebApi("logout".to_string())),
+            ("/osu", RouteMatch::UserProfileWeb),
+            ("/osu/", RouteMatch::UserProfileWeb),
         ];
 
         for (path, expected) in cases {

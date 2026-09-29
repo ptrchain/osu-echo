@@ -440,7 +440,16 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
             }
         }
         "osu.localhost" => {
-            if path.starts_with("/osu") {
+            if path.starts_with("/site")
+                || path == "/"
+                || path == "/profile"
+                || path == "/profile/"
+                || path.starts_with("/u/")
+                || path.starts_with("/users/")
+                || path == "/favicon.ico"
+            {
+                path.clone()
+            } else if path.starts_with("/osu") {
                 path.clone()
             } else {
                 format!("/osu{}", path)
