@@ -1148,6 +1148,83 @@ pub fn get_beatmaps_by_set_id(conn: &Connection, beatmapset_id: i64) -> SqlResul
     Ok(maps)
 }
 
+#[derive(Debug, Clone)]
+pub struct ScoreWithBeatmap {
+    pub id: i64,
+    pub mode: i32,
+    pub md5: String,
+    pub n300: i32,
+    pub n100: i32,
+    pub n50: i32,
+    pub ngeki: i32,
+    pub nkatu: i32,
+    pub nmiss: i32,
+    pub score: i64,
+    pub max_combo: i32,
+    pub perfect: bool,
+    pub mods: u32,
+    pub time: i64,
+    pub acc: f64,
+    pub pp: f64,
+    pub replay_md5: Option<String>,
+    pub mods_str: Option<String>,
+    pub bmap_status: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub version: Option<String>,
+    pub creator: Option<String>,
+    pub beatmap_id: Option<i64>,
+    pub beatmapset_id: Option<i64>,
+}
+
+pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> SqlResult<Vec<ScoreWithBeatmap>> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.mode, s.md5, s.n300, s.n100, s.n50, s.ngeki, s.nkatu, s.nmiss,
+                s.score, s.max_combo, s.perfect, s.mods, s.time, s.acc, s.pp,
+                s.replay_md5, s.mods_str, s.bmap_status,
+                b.title, b.artist, b.version, b.creator, b.beatmap_id, b.beatmapset_id
+         FROM scores s
+         LEFT JOIN beatmaps b ON s.md5 = b.file_md5
+         WHERE s.player_name = ?1
+         ORDER BY s.time DESC",
+    )?;
+
+    let scores = stmt
+        .query_map(params![player_name], |row| {
+            Ok(ScoreWithBeatmap {
+                id: row.get(0)?,
+                mode: row.get(1)?,
+                md5: row.get(2)?,
+                n300: row.get(3)?,
+                n100: row.get(4)?,
+                n50: row.get(5)?,
+                ngeki: row.get(6)?,
+                nkatu: row.get(7)?,
+                nmiss: row.get(8)?,
+                score: row.get(9)?,
+                max_combo: row.get(10)?,
+                perfect: row.get::<_, i32>(11)? != 0,
+                mods: row.get::<_, i64>(12)? as u32,
+                time: row.get(13)?,
+                acc: row.get::<_, Option<f64>>(14)?.unwrap_or(0.0),
+                pp: row.get::<_, Option<f64>>(15)?.unwrap_or(0.0),
+                replay_md5: row.get(16)?,
+                mods_str: row.get(17)?,
+                bmap_status: row.get::<_, Option<String>>(18)?.unwrap_or_else(|| "ranked".to_string()),
+                title: row.get(19)?,
+                artist: row.get(20)?,
+                version: row.get(21)?,
+                creator: row.get(22)?,
+                beatmap_id: row.get(23)?,
+                beatmapset_id: row.get(24)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(scores)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1755,6 +1832,62 @@ mod tests {
         // Decrement on 0 should stay at 0
         decrement_playcount(&conn, "Charlie").unwrap();
         assert_eq!(get_playcount(&conn, "Charlie").unwrap(), 0);
+    }
+
+    #[test]
+    fn test_get_player_scores_with_beatmaps() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        ensure_profile(&conn, "Alice").unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "map_hash_1".to_string();
+        bmap.title = "Test Song".to_string();
+        bmap.artist = "Test Artist".to_string();
+        bmap.version = "Insane".to_string();
+        bmap.creator = "Mapper".to_string();
+        bmap.beatmap_id = 12345;
+        bmap.beatmapset_id = 6789;
+        insert_beatmap(&conn, &bmap).unwrap();
+
+        let mut score = Score {
+            mode: 0,
+            md5: "map_hash_1".to_string(),
+            name: "Alice".to_string(),
+            n300: 300,
+            n100: 5,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1500000,
+            max_combo: 600,
+            perfect: true,
+            mods: 24, // HDHR
+            time: 1700000000,
+            acc: Some(99.45),
+            pp: Some(250.5),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: Some("HDHR".to_string()),
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        insert_score(&conn, &score, "ranked").unwrap();
+
+        let scores = get_player_scores_with_beatmaps(&conn, "Alice").unwrap();
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].title.as_deref(), Some("Test Song"));
+        assert_eq!(scores[0].artist.as_deref(), Some("Test Artist"));
+        assert_eq!(scores[0].beatmap_id, Some(12345));
+        assert_eq!(scores[0].pp, 250.5);
+        assert_eq!(scores[0].mods_str.as_deref(), Some("HDHR"));
+
+        let empty = get_player_scores_with_beatmaps(&conn, "Bob").unwrap();
+        assert_eq!(empty.len(), 0);
     }
 }
 

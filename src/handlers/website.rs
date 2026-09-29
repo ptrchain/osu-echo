@@ -1,12 +1,15 @@
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use hyper::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::db;
 use crate::server::response::Response;
 use crate::state::{SharedState, WebSession};
+use crate::types::mods::Mods;
+use crate::types::profile::ProfileDetails;
 
 pub const SESSION_COOKIE_NAME: &str = "los_session";
 pub const SESSION_AGE_SECS: u64 = 86400; // 24 hours
@@ -34,6 +37,65 @@ pub struct LoginResponse {
 #[derive(Serialize)]
 pub struct SuccessResponse {
     pub ok: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicBeatmap {
+    pub title: String,
+    pub artist: String,
+    pub version: String,
+    pub creator: String,
+    pub beatmap_id: i64,
+    pub beatmapset_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicScore {
+    pub id: String,
+    pub pp: f64,
+    pub acc: f64,
+    pub score: i64,
+    pub max_combo: i32,
+    pub time: i64,
+    pub n300: i32,
+    pub n100: i32,
+    pub n50: i32,
+    pub nmiss: i32,
+    pub grade: String,
+    pub mods: String,
+    pub beatmap: PublicBeatmap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MostPlayedEntry {
+    pub count: i32,
+    pub beatmap: PublicBeatmap,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileResponse {
+    pub name: String,
+    pub mode: String,
+    pub pp: i32,
+    pub acc: f64,
+    pub playcount: i32,
+    pub total_score: i64,
+    pub ranked_score: i64,
+    pub total_hits: i64,
+    pub max_combo: i32,
+    pub grades: HashMap<String, i32>,
+    pub active: bool,
+    pub details: ProfileDetails,
+    pub country_rank: Option<i32>,
+    pub global_rank: Option<i32>,
+    pub rank_history: Vec<(String, i32)>,
+    pub top: Vec<PublicScore>,
+    pub recent: Vec<PublicScore>,
+    pub last_play: Option<i64>,
+    pub performance_history: Vec<(String, f64)>,
+    pub play_history: Vec<(String, i32)>,
+    pub most_played: Vec<MostPlayedEntry>,
+    pub recent_24h: Vec<PublicScore>,
 }
 
 pub fn now_secs() -> u64 {
@@ -135,20 +197,348 @@ fn json_error(status: StatusCode, message: &str) -> Response {
     Response::json(&val).with_status(status).with_header("Cache-Control", "no-store")
 }
 
+static DAILY_CACHE: TokioMutex<Option<HashMap<i32, (Instant, Option<i32>)>>> =
+    TokioMutex::const_new(None);
+static DAILY_LAST_REQUEST: TokioMutex<Option<Instant>> = TokioMutex::const_new(None);
+
+pub async fn get_daily_rank(
+    http: &reqwest::Client,
+    api_key_opt: Option<&str>,
+    pp: i32,
+) -> Option<i32> {
+    let api_key = api_key_opt?;
+    if api_key.trim().is_empty() || pp <= 0 {
+        return None;
+    }
+
+    let mut cache_guard = DAILY_CACHE.lock().await;
+    let cache = cache_guard.get_or_insert_with(HashMap::new);
+
+    let now = Instant::now();
+    if let Some((cached_time, cached_rank)) = cache.get(&pp) {
+        if now.duration_since(*cached_time).as_secs() < 300 {
+            return *cached_rank;
+        }
+    }
+
+    // Rate limiting: sleep if last request was less than 1.1s ago
+    let mut last_req_guard = DAILY_LAST_REQUEST.lock().await;
+    if let Some(last_time) = *last_req_guard {
+        let elapsed = now.duration_since(last_time);
+        if elapsed.as_millis() < 1100 {
+            tokio::time::sleep(std::time::Duration::from_millis(1100 - elapsed.as_millis() as u64)).await;
+        }
+    }
+    *last_req_guard = Some(Instant::now());
+    drop(last_req_guard);
+
+    let url = format!("https://osudaily.net/api/pp.php?k={}&t=pp&v={}&m=0", api_key, pp);
+    let mut rank: Option<i32> = None;
+    if let Ok(resp) = http.get(&url).timeout(std::time::Duration::from_secs(8)).send().await {
+        if resp.status().is_success() {
+            if let Ok(json) = resp.json::<serde_json::Value>().await {
+                if let Some(r) = json.get("rank").and_then(|v| v.as_i64()) {
+                    if r > 0 {
+                        rank = Some(r as i32);
+                    }
+                }
+            }
+        }
+    }
+
+    cache.insert(pp, (Instant::now(), rank));
+    rank
+}
+
+fn score_grade(s: &db::ScoreWithBeatmap) -> &'static str {
+    let g = crate::utils::get_grade(
+        s.mode as u8,
+        s.n300,
+        s.n100,
+        s.n50,
+        s.ngeki,
+        s.nkatu,
+        s.nmiss,
+        s.mods,
+        s.acc,
+    );
+    match g {
+        "SSH" => "XH",
+        "SS" => "X",
+        other => other,
+    }
+}
+
+fn to_public_score(s: &db::ScoreWithBeatmap) -> PublicScore {
+    let mods_str = if let Some(ref ms) = s.mods_str {
+        if !ms.is_empty() {
+            ms.clone()
+        } else {
+            Mods::from_bits_truncate(s.mods).short_name()
+        }
+    } else {
+        Mods::from_bits_truncate(s.mods).short_name()
+    };
+
+    PublicScore {
+        id: s.id.to_string(),
+        pp: (s.pp * 100.0).round() / 100.0,
+        acc: (s.acc * 100.0).round() / 100.0,
+        score: s.score,
+        max_combo: s.max_combo,
+        time: s.time,
+        n300: s.n300,
+        n100: s.n100,
+        n50: s.n50,
+        nmiss: s.nmiss,
+        grade: score_grade(s).to_string(),
+        mods: mods_str,
+        beatmap: PublicBeatmap {
+            title: s.title.clone().unwrap_or_else(|| "Unknown beatmap".to_string()),
+            artist: s.artist.clone().unwrap_or_else(|| "unknown artist".to_string()),
+            version: s.version.clone().unwrap_or_else(|| "Unknown difficulty".to_string()),
+            creator: s.creator.clone().unwrap_or_default(),
+            beatmap_id: s.beatmap_id.unwrap_or(0),
+            beatmapset_id: s.beatmapset_id.unwrap_or(0),
+        },
+    }
+}
+
 pub async fn handle(
     state: SharedState,
     action: &str,
-    _params: &HashMap<String, String>,
+    params: &HashMap<String, String>,
     method: &Method,
     headers: &hyper::HeaderMap,
     body: &[u8],
 ) -> Response {
     match (method, action) {
         (&Method::GET, "session") => handle_session(state, headers).await,
+        (&Method::GET, "profile") => handle_profile(state, params).await,
         (&Method::POST, "login") => handle_login(state, headers, body).await,
         (&Method::POST, "logout") => handle_logout(state, headers).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
+}
+
+async fn handle_profile(state: SharedState, params: &HashMap<String, String>) -> Response {
+    let name = match params.get("name") {
+        Some(n) if !n.trim().is_empty() => n.trim(),
+        _ => return json_error(StatusCode::BAD_REQUEST, "Profile username is required."),
+    };
+
+    let mode_str = params.get("mode").map(|s| s.as_str()).unwrap_or("vn");
+    if !["vn", "rx", "ap"].contains(&mode_str) {
+        return json_error(StatusCode::BAD_REQUEST, "Unknown mode.");
+    }
+
+    let state_guard = state.read().await;
+    let conn = state_guard.db.lock().await;
+
+    if !db::profile_exists(&conn, name).unwrap_or(false) {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            "This local profile does not exist. Sign in with its username to create it.",
+        );
+    }
+
+    let details = db::get_profile_details(&conn, name).unwrap_or_default();
+    let scores = db::get_player_scores_with_beatmaps(&conn, name).unwrap_or_default();
+
+    let is_active = state_guard.player.as_ref().map_or(false, |p| p.name == name);
+    let http_client = state_guard.http.clone();
+    let daily_key = state_guard.config.osu_daily_api_key.clone();
+
+    drop(conn);
+    drop(state_guard);
+
+    // Filter scores by mode:
+    let (rx_bit, ap_bit) = (
+        Mods::RELAX.bits() as u32,
+        Mods::AUTOPILOT.bits() as u32,
+    );
+
+    let mode_scores: Vec<&db::ScoreWithBeatmap> = scores
+        .iter()
+        .filter(|s| match mode_str {
+            "rx" => (s.mods & rx_bit) != 0,
+            "ap" => (s.mods & ap_bit) != 0,
+            _ => (s.mods & (rx_bit | ap_bit)) == 0,
+        })
+        .collect();
+
+    // Ranked plays for PP, accuracy, and grades
+    let mut ranked: Vec<&&db::ScoreWithBeatmap> = mode_scores
+        .iter()
+        .filter(|s| s.bmap_status == "ranked" || s.bmap_status == "approved")
+        .collect();
+    ranked.sort_by(|a, b| b.pp.partial_cmp(&a.pp).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Deduplicate top plays by md5 taking best PP per map
+    let mut seen_md5 = std::collections::HashSet::new();
+    let mut top_scores: Vec<&&db::ScoreWithBeatmap> = Vec::new();
+    for s in &ranked {
+        if seen_md5.insert(&s.md5) {
+            top_scores.push(s);
+            if top_scores.len() == 100 {
+                break;
+            }
+        }
+    }
+
+    let mut weighted_pp = 0.0;
+    let mut weighted_acc = 0.0;
+    let mut weight_sum = 0.0;
+    for (i, s) in top_scores.iter().enumerate() {
+        let weight = 0.95_f64.powi(i as i32);
+        weighted_pp += s.pp * weight;
+        weighted_acc += s.acc * weight;
+        weight_sum += weight;
+    }
+    if !ranked.is_empty() {
+        weighted_pp += 416.6667 * (1.0 - 0.9994_f64.powi(ranked.len() as i32));
+    }
+    let calculated_pp = weighted_pp.round() as i32;
+    let calculated_acc = if weight_sum > 0.0 { weighted_acc / weight_sum } else { 0.0 };
+
+    // Grade tallies across deduplicated ranked plays
+    let mut grade_counts: HashMap<String, i32> = [
+        ("XH".to_string(), 0),
+        ("X".to_string(), 0),
+        ("SH".to_string(), 0),
+        ("S".to_string(), 0),
+        ("A".to_string(), 0),
+    ].into_iter().collect();
+
+    let mut seen_for_grades = std::collections::HashSet::new();
+    for s in &ranked {
+        if seen_for_grades.insert(&s.md5) {
+            let g = score_grade(s);
+            if let Some(cnt) = grade_counts.get_mut(g) {
+                *cnt += 1;
+            }
+        }
+    }
+
+    // Best score per map for ranked_score
+    let mut best_scores_per_map: HashMap<&str, i64> = HashMap::new();
+    for s in &ranked {
+        let entry = best_scores_per_map.entry(&s.md5).or_insert(0);
+        if s.score > *entry {
+            *entry = s.score;
+        }
+    }
+    let ranked_score: i64 = best_scores_per_map.values().sum();
+    let total_score: i64 = mode_scores.iter().map(|s| s.score).sum();
+    let total_hits: i64 = mode_scores.iter().map(|s| (s.n300 + s.n100 + s.n50) as i64).sum();
+    let max_combo: i32 = mode_scores.iter().map(|s| s.max_combo).max().unwrap_or(0);
+    let playcount = mode_scores.len() as i32;
+
+    // Recent plays (ordered by time DESC)
+    let recent_public: Vec<PublicScore> = mode_scores.iter().take(100).map(|s| to_public_score(s)).collect();
+    let top_public: Vec<PublicScore> = top_scores.iter().map(|s| to_public_score(s)).collect();
+
+    let now_ts = now_secs() as i64;
+    let recent_24h_public: Vec<PublicScore> = mode_scores
+        .iter()
+        .filter(|s| s.time >= now_ts - 86400)
+        .take(100)
+        .map(|s| to_public_score(s))
+        .collect();
+
+    let last_play = mode_scores.first().map(|s| s.time);
+
+    // Most played maps
+    let mut map_counts: HashMap<&str, (i32, &db::ScoreWithBeatmap)> = HashMap::new();
+    for s in &mode_scores {
+        let entry = map_counts.entry(&s.md5).or_insert((0, s));
+        entry.0 += 1;
+    }
+    let mut most_played: Vec<MostPlayedEntry> = map_counts
+        .into_iter()
+        .map(|(_, (count, rep))| MostPlayedEntry {
+            count,
+            beatmap: to_public_score(rep).beatmap,
+        })
+        .collect();
+    most_played.sort_by(|a, b| b.count.cmp(&a.count));
+    most_played.truncate(100);
+
+    // Play history (by YYYY-MM)
+    let mut month_counts: HashMap<String, i32> = HashMap::new();
+    for s in &mode_scores {
+        if s.time > 0 {
+            if let Some(dt) = chrono::DateTime::from_timestamp(s.time, 0) {
+                let month = dt.format("%Y-%m").to_string();
+                *month_counts.entry(month).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut play_history: Vec<(String, i32)> = month_counts.into_iter().collect();
+    play_history.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Performance history (daily peak PP)
+    let mut day_peaks: HashMap<String, f64> = HashMap::new();
+    for s in &mode_scores {
+        if s.time > 0 && s.pp > 0.0 {
+            if let Some(dt) = chrono::DateTime::from_timestamp(s.time, 0) {
+                let day = dt.format("%Y-%m-%d").to_string();
+                let entry = day_peaks.entry(day).or_insert(0.0);
+                if s.pp > *entry {
+                    *entry = s.pp;
+                }
+            }
+        }
+    }
+    let mut perf_history: Vec<(String, f64)> = day_peaks.into_iter().collect();
+    perf_history.sort_by(|a, b| a.0.cmp(&b.0));
+    if perf_history.len() > 90 {
+        perf_history = perf_history.split_off(perf_history.len() - 90);
+    }
+
+    // Rank snapshot and history
+    let mode_id = match mode_str {
+        "rx" => 100,
+        "ap" => 200,
+        _ => 0,
+    };
+
+    let global_rank = get_daily_rank(&http_client, daily_key.as_deref(), calculated_pp).await;
+
+    // Save rank snapshot if valid rank obtained
+    let state_guard = state.read().await;
+    let conn = state_guard.db.lock().await;
+    if let Some(rank) = global_rank {
+        let _ = db::record_rank_snapshot(&conn, name, mode_id, rank);
+    }
+    let rank_history = db::get_rank_history(&conn, name, mode_id, 90).unwrap_or_default();
+    drop(conn);
+    drop(state_guard);
+
+    json_ok(&ProfileResponse {
+        name: name.to_string(),
+        mode: mode_str.to_string(),
+        pp: calculated_pp,
+        acc: (calculated_acc * 100.0).round() / 100.0,
+        playcount,
+        total_score,
+        ranked_score,
+        total_hits,
+        max_combo,
+        grades: grade_counts,
+        active: is_active,
+        details,
+        country_rank: None,
+        global_rank,
+        rank_history,
+        top: top_public,
+        recent: recent_public,
+        last_play,
+        performance_history: perf_history,
+        play_history,
+        most_played,
+        recent_24h: recent_24h_public,
+    })
 }
 
 async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Response {
@@ -438,5 +828,186 @@ mod tests {
 
         let state_guard = shared_state.read().await;
         assert!(!state_guard.web_sessions.contains_key(expired_token));
+    }
+
+    #[tokio::test]
+    async fn test_handle_profile_not_found_and_invalid_mode() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // Missing profile name
+        let params_empty = HashMap::new();
+        let resp_empty = handle_profile(shared_state.clone(), &params_empty).await;
+        assert_eq!(resp_empty.status, StatusCode::BAD_REQUEST);
+
+        // Non-existent profile
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "GhostUser".to_string());
+        let resp_nf = handle_profile(shared_state.clone(), &params).await;
+        assert_eq!(resp_nf.status, StatusCode::NOT_FOUND);
+
+        // Invalid mode
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "Alice").unwrap();
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        params.insert("name".to_string(), "Alice".to_string());
+        params.insert("mode".to_string(), "invalid_mode".to_string());
+        let resp_bad_mode = handle_profile(shared_state.clone(), &params).await;
+        assert_eq!(resp_bad_mode.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_handle_profile_data_and_mode_filtering() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "Alice").unwrap();
+
+        // Insert beatmaps
+        let mut bmap = crate::types::beatmap::Beatmap::blank();
+        bmap.file_md5 = "map_1".to_string();
+        bmap.title = "Song One".to_string();
+        bmap.artist = "Artist A".to_string();
+        bmap.version = "Hard".to_string();
+        bmap.creator = "Mapper A".to_string();
+        bmap.beatmap_id = 1001;
+        bmap.beatmapset_id = 2001;
+        crate::db::insert_beatmap(&conn, &bmap).unwrap();
+
+        let mut bmap2 = crate::types::beatmap::Beatmap::blank();
+        bmap2.file_md5 = "map_2".to_string();
+        bmap2.title = "Song Two".to_string();
+        bmap2.artist = "Artist B".to_string();
+        bmap2.version = "Insane".to_string();
+        bmap2.creator = "Mapper B".to_string();
+        bmap2.beatmap_id = 1002;
+        bmap2.beatmapset_id = 2002;
+        crate::db::insert_beatmap(&conn, &bmap2).unwrap();
+
+        // 1. Standard ranked score on map_1 (300pp, SS / X)
+        let s1 = crate::types::score::Score {
+            mode: 0,
+            md5: "map_1".to_string(),
+            name: "Alice".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0, // NM
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(300.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: None,
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        crate::db::insert_score(&conn, &s1, "ranked").unwrap();
+
+        // 2. Standard ranked score on map_2 with HD (200pp, SSH / XH)
+        let s2 = crate::types::score::Score {
+            mode: 0,
+            md5: "map_2".to_string(),
+            name: "Alice".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1050000,
+            max_combo: 500,
+            perfect: true,
+            mods: 8, // HD
+            time: 1700086400,
+            acc: Some(100.0),
+            pp: Some(200.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: Some("HD".to_string()),
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        crate::db::insert_score(&conn, &s2, "ranked").unwrap();
+
+        // 3. Relax score (should only show in rx mode)
+        let s_rx = crate::types::score::Score {
+            mode: 0,
+            md5: "map_1".to_string(),
+            name: "Alice".to_string(),
+            n300: 290,
+            n100: 10,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 950000,
+            max_combo: 480,
+            perfect: false,
+            mods: 128, // RX
+            time: 1700172800,
+            acc: Some(98.5),
+            pp: Some(400.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: Some("RX".to_string()),
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        crate::db::insert_score(&conn, &s_rx, "ranked").unwrap();
+
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // Test VN mode
+        let mut params_vn = HashMap::new();
+        params_vn.insert("name".to_string(), "Alice".to_string());
+        params_vn.insert("mode".to_string(), "vn".to_string());
+        let resp_vn = handle_profile(shared_state.clone(), &params_vn).await;
+        assert_eq!(resp_vn.status, StatusCode::OK);
+
+        let data: ProfileResponse = serde_json::from_slice(&resp_vn.body).unwrap();
+        assert_eq!(data.name, "Alice");
+        assert_eq!(data.mode, "vn");
+        assert_eq!(data.playcount, 2);
+        assert!(data.pp > 0);
+        assert_eq!(data.top.len(), 2);
+        assert_eq!(data.top[0].beatmap.title, "Song One");
+        assert_eq!(data.top[0].grade, "X");
+        assert_eq!(data.top[1].beatmap.title, "Song Two");
+        assert_eq!(data.top[1].grade, "XH");
+        assert_eq!(*data.grades.get("X").unwrap(), 1);
+        assert_eq!(*data.grades.get("XH").unwrap(), 1);
+        assert_eq!(data.ranked_score, 2050000);
+        assert_eq!(data.total_score, 2050000);
+        assert_eq!(data.most_played.len(), 2);
+
+        // Test RX mode
+        let mut params_rx = HashMap::new();
+        params_rx.insert("name".to_string(), "Alice".to_string());
+        params_rx.insert("mode".to_string(), "rx".to_string());
+        let resp_rx = handle_profile(shared_state.clone(), &params_rx).await;
+        assert_eq!(resp_rx.status, StatusCode::OK);
+
+        let data_rx: ProfileResponse = serde_json::from_slice(&resp_rx.body).unwrap();
+        assert_eq!(data_rx.playcount, 1);
+        assert_eq!(data_rx.top.len(), 1);
+        assert_eq!(data_rx.top[0].mods, "RX");
     }
 }
