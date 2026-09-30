@@ -49,3 +49,17 @@ body{margin:0;background:hsl(var(--hsl-b6));color:#fff;font-family:Torus,Arial,s
 .bbcode-quote__author{font-weight:700;color:hsl(var(--hsl-h1));margin-bottom:4px;font-size:12px}
 .bbcode-list{margin:8px 0;padding-left:24px}
 .bbcode-list li{margin:3px 0}
+
+/* Official osu! profile import */
+.official-import-box{background:hsl(var(--hsl-b3));border:1px solid hsl(var(--hsl-b2));border-radius:6px;padding:12px;margin:0 0 18px}
+.official-import-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.official-import-header label{margin:0;font-size:13px;font-weight:600;color:white}
+.import-badge{font-size:11px;background:hsl(var(--hsl-h2));color:white;padding:2px 8px;border-radius:10px;font-weight:600}
+.official-import-row{display:flex;gap:8px;align-items:center}
+.official-import-row input{flex:1;min-width:0;background:hsl(var(--hsl-b5));border:1px solid hsl(var(--hsl-b2));padding:8px 10px;color:white;border-radius:4px;font-size:13px}
+.official-import-row button{flex:none;white-space:nowrap;padding:8px 14px;background:hsl(var(--hsl-b2));color:white;border:0;border-radius:4px;font-size:13px;font-weight:600}
+.official-import-row button:hover{background:hsl(var(--hsl-b1))}
+.import-status{font-size:12px;margin:8px 0 0;line-height:1.4}
+.import-status.success{color:#b4e67a}
+.import-status.error{color:#ffb0ba}
+.import-status.loading{color:hsl(var(--hsl-l1))}

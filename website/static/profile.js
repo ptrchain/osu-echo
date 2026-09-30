@@ -287,6 +287,7 @@ async function openSettings(){
   $('login-dialog').close();
   state.avatarUpload=null;state.resetAvatar=false;
   $('avatar-file').value='';$('settings-error').hidden=true;
+  $('import-official-query').value='';showImportStatus('','');
   $('settings-username').value=state.session.user;
   $('settings-avatar').src=`/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${Date.now()}`;
   $('settings-dialog').showModal();
@@ -302,6 +303,36 @@ async function openSettings(){
     $('settings-submit').disabled=false;
   }catch(error){$('settings-error').textContent=error.message;$('settings-error').hidden=false;}
 }
+function showImportStatus(msg,type){
+  const el=$('import-official-status');
+  el.textContent=msg;el.className='import-status '+(type||'');el.hidden=!msg;
+}
+$('import-official-btn').addEventListener('click',async()=>{
+  const query=$('import-official-query').value.trim();
+  if(!query){showImportStatus('Enter an official osu! username or user ID.','error');$('import-official-query').focus();return;}
+  const btn=$('import-official-btn');
+  btn.disabled=true;showImportStatus('Fetching profile from osu.ppy.sh...','loading');
+  try{
+    const res=await api('/site/import_official',{query,apply:false,import_avatar:true,import_bio:true,import_details:true});
+    const details=res.details||{};
+    if(details.about!==undefined)$('settings-about').value=details.about;
+    if(details.location!==undefined)$('settings-location').value=details.location;
+    if(details.country!==undefined)$('settings-country').value=details.country;
+    if(Array.isArray(details.devices)){
+      document.querySelectorAll('input[name=device]').forEach(input=>{input.checked=details.devices.includes(input.value);});
+    }
+    if(res.avatar_data_url){
+      $('settings-avatar').src=res.avatar_data_url;
+      state.avatarUpload=res.avatar_data_url;
+      state.resetAvatar=false;
+    }
+    showImportStatus(`Imported ${res.official_username} (#${res.official_id})! Review and click Save changes below.`,'success');
+  }catch(err){showImportStatus(err.message,'error');}
+  finally{btn.disabled=false;}
+});
+$('import-official-query').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();$('import-official-btn').click();}
+});
 $('edit-profile').addEventListener('click',openSettings);
 $('edit-profile-details').addEventListener('click',openSettings);
 $('manage-profile').addEventListener('click',openSettings);

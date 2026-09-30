@@ -57,6 +57,35 @@ pub struct DeleteScorePayload {
     pub id: i64,
 }
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Deserialize)]
+pub struct ImportOfficialPayload {
+    pub query: String,
+    #[serde(default)]
+    pub apply: bool,
+    #[serde(default = "default_true")]
+    pub import_avatar: bool,
+    #[serde(default = "default_true")]
+    pub import_bio: bool,
+    #[serde(default = "default_true")]
+    pub import_details: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ImportOfficialResponse {
+    pub ok: bool,
+    pub official_username: String,
+    pub official_id: i64,
+    pub details: ProfileDetails,
+    pub avatar_data_url: Option<String>,
+    pub avatar_updated: bool,
+    pub details_updated: bool,
+    pub message: String,
+}
+
 fn deserialize_id<'de, D>(deserializer: D) -> Result<i64, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -318,6 +347,143 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
+pub fn decode_html_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            let mut entity = String::new();
+            while let Some(&next_c) = chars.peek() {
+                if next_c == ';' || entity.len() >= 10 || next_c.is_whitespace() {
+                    break;
+                }
+                entity.push(chars.next().unwrap());
+            }
+            let has_semicolon = if chars.peek() == Some(&';') {
+                chars.next();
+                true
+            } else {
+                false
+            };
+            match entity.as_str() {
+                "quot" if has_semicolon => out.push('"'),
+                "amp" if has_semicolon => out.push('&'),
+                "lt" if has_semicolon => out.push('<'),
+                "gt" if has_semicolon => out.push('>'),
+                "apos" | "#039" | "#39" if has_semicolon => out.push('\''),
+                _ => {
+                    out.push('&');
+                    out.push_str(&entity);
+                    if has_semicolon {
+                        out.push(';');
+                    }
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+pub fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OfficialUserParsed {
+    pub id: i64,
+    pub username: String,
+    pub avatar_url: Option<String>,
+    pub country_code: Option<String>,
+    pub location: Option<String>,
+    pub playstyle: Vec<String>,
+    pub raw_bio: Option<String>,
+}
+
+pub fn parse_official_userpage_html(html: &str) -> Result<OfficialUserParsed, String> {
+    let marker_double = "data-initial-data=\"";
+    let marker_single = "data-initial-data='";
+
+    let (raw_data, _quote) = if let Some(pos) = html.find(marker_double) {
+        let start = pos + marker_double.len();
+        let end = html[start..]
+            .find('"')
+            .ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
+        (&html[start..start + end], '"')
+    } else if let Some(pos) = html.find(marker_single) {
+        let start = pos + marker_single.len();
+        let end = html[start..]
+            .find('\'')
+            .ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
+        (&html[start..start + end], '\'')
+    } else {
+        return Err("Could not locate profile initial data in official osu! page".to_string());
+    };
+
+    let decoded = decode_html_entities(raw_data);
+    let root: serde_json::Value = serde_json::from_str(&decoded)
+        .map_err(|e| format!("Failed to parse profile JSON: {}", e))?;
+
+    let user = if root.get("user").is_some() {
+        &root["user"]
+    } else {
+        &root
+    };
+
+    let id = user.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+    let username = user.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    if username.is_empty() {
+        return Err("Official user profile did not contain a valid username".to_string());
+    }
+
+    let avatar_url = user.get("avatar_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let country_code = user.get("country_code").and_then(|v| v.as_str()).map(|s| s.to_uppercase());
+    let location = user.get("location").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+    let mut playstyle = Vec::new();
+    if let Some(arr) = user.get("playstyle").and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                let normalized = match s.to_ascii_lowercase().as_str() {
+                    "mouse" => "Mouse",
+                    "keyboard" => "Keyboard",
+                    "tablet" => "Tablet",
+                    "touch" | "touchscreen" => "Touchscreen",
+                    "controller" => "Controller",
+                    _ => continue,
+                };
+                if !playstyle.contains(&normalized.to_string()) {
+                    playstyle.push(normalized.to_string());
+                }
+            }
+        }
+    }
+
+    let raw_bio = user
+        .get("page")
+        .and_then(|p| p.get("raw"))
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string());
+
+    Ok(OfficialUserParsed {
+        id,
+        username,
+        avatar_url,
+        country_code,
+        location,
+        playstyle,
+        raw_bio,
+    })
+}
+
 pub fn can_write(
     session: Option<&WebSession>,
     headers: &hyper::HeaderMap,
@@ -507,6 +673,7 @@ pub async fn handle(
         (&Method::POST, "logout") => handle_logout(state, headers).await,
         (&Method::POST, "settings") => handle_settings(state, headers, body).await,
         (&Method::POST, "scores/delete") => handle_delete_score(state, headers, body).await,
+        (&Method::POST, "import_official") => handle_import_official(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
 }
@@ -1194,6 +1361,257 @@ async fn handle_delete_score(
     json_ok(&SuccessResponse { ok: true })
 }
 
+async fn handle_import_official(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to import profile details."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to import profile details."),
+    };
+    drop(state_read);
+
+    if !can_write(Some(&session), headers) {
+        return json_error(StatusCode::FORBIDDEN, "Refresh the page and try again.");
+    }
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to import profile details."),
+    };
+
+    let payload: ImportOfficialPayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid request body: {}", e)),
+    };
+
+    let query = payload.query.trim();
+    if query.is_empty() {
+        return json_error(StatusCode::BAD_REQUEST, "Please provide an official osu! username or user ID.");
+    }
+
+    let encoded_query = percent_encoding::utf8_percent_encode(query, percent_encoding::NON_ALPHANUMERIC).to_string();
+    let url = format!("https://osu.ppy.sh/users/{}", encoded_query);
+
+    let http_client = {
+        let s = state.read().await;
+        s.http.clone()
+    };
+
+    let res = match http_client
+        .get(&url)
+        .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .timeout(std::time::Duration::from_secs(12))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return json_error(StatusCode::BAD_GATEWAY, &format!("Failed to reach osu.ppy.sh: {}", e));
+        }
+    };
+
+    if res.status() == StatusCode::NOT_FOUND {
+        return json_error(StatusCode::NOT_FOUND, &format!("User '{}' not found on osu.ppy.sh.", query));
+    }
+
+    if !res.status().is_success() {
+        return json_error(
+            StatusCode::BAD_GATEWAY,
+            &format!("osu.ppy.sh returned status {}.", res.status()),
+        );
+    }
+
+    let html = match res.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                &format!("Failed to read response from osu.ppy.sh: {}", e),
+            );
+        }
+    };
+
+    let parsed = match parse_official_userpage_html(&html) {
+        Ok(p) => p,
+        Err(err) => return json_error(StatusCode::UNPROCESSABLE_ENTITY, &err),
+    };
+
+    let mut current_details = {
+        let s = state.read().await;
+        let conn = s.db.lock().await;
+        db::get_profile_details(&conn, &current_user).unwrap_or_default()
+    };
+
+    let mut details_updated = false;
+    if payload.import_bio {
+        if let Some(bio) = parsed.raw_bio {
+            current_details.about = safe_truncate(&bio, 5000).to_string();
+            details_updated = true;
+        }
+    }
+
+    if payload.import_details {
+        if let Some(ref loc) = parsed.location {
+            current_details.location = safe_truncate(loc, 100).to_string();
+            details_updated = true;
+        }
+        if let Some(ref cc) = parsed.country_code {
+            if crate::utils::country_code_to_byte(cc) != 0 {
+                current_details.country = cc.clone();
+                details_updated = true;
+            }
+        }
+        if !parsed.playstyle.is_empty() {
+            current_details.devices = parsed.playstyle.clone();
+            details_updated = true;
+        }
+    }
+
+    let mut avatar_data_url: Option<String> = None;
+    let mut avatar_bytes_opt: Option<(Vec<u8>, &'static str)> = None;
+
+    if payload.import_avatar {
+        if let Some(ref av_url) = parsed.avatar_url {
+            let final_av_url = if av_url.starts_with("//") {
+                format!("https:{}", av_url)
+            } else if av_url.starts_with('/') {
+                format!("https://osu.ppy.sh{}", av_url)
+            } else {
+                av_url.clone()
+            };
+
+            if !final_av_url.contains("avatar-guest") {
+                if let Ok(av_res) = http_client
+                    .get(&final_av_url)
+                    .timeout(std::time::Duration::from_secs(10))
+                    .send()
+                    .await
+                {
+                    if av_res.status().is_success() {
+                        if let Ok(bytes) = av_res.bytes().await {
+                            if let Ok(ext) = validate_image_format_and_dimensions(&bytes) {
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                                let data_url = format!("data:image/{};base64,{}", ext, b64);
+                                avatar_data_url = Some(data_url);
+                                avatar_bytes_opt = Some((bytes.to_vec(), ext));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut avatar_updated = false;
+    if payload.apply {
+        let s_read = state.read().await;
+        let conn = s_read.db.lock().await;
+
+        if details_updated {
+            if let Err(e) = db::save_profile_details(&conn, &current_user, &current_details) {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to save profile details: {}", e),
+                );
+            }
+        }
+
+        let mut old_avatar_to_delete: Option<PathBuf> = None;
+        if let Some((img_bytes, ext)) = avatar_bytes_opt {
+            let avatar_dir = Path::new(".data").join("avatars");
+            let _ = tokio::fs::create_dir_all(&avatar_dir).await;
+            let token_hex = generate_hex_token(16);
+            let filename = format!("{}.{}", token_hex, ext);
+            let file_path = avatar_dir.join(&filename);
+
+            if let Ok(()) = tokio::fs::write(&file_path, &img_bytes).await {
+                if let Ok(Some(old_url)) = db::get_avatar(&conn, &current_user) {
+                    if let Some(p) = utils::is_path(&old_url) {
+                        old_avatar_to_delete = Some(p);
+                    }
+                }
+                let stored_path = file_path.to_string_lossy().to_string();
+                let _ = db::set_avatar(&conn, &current_user, &stored_path);
+                avatar_updated = true;
+            }
+        }
+
+        let country_byte = if !current_details.country.is_empty() {
+            crate::utils::country_code_to_byte(&current_details.country)
+        } else {
+            0
+        };
+        if country_byte != 0 {
+            let _ = conn.execute(
+                "UPDATE profiles SET country = ?1 WHERE name = ?2",
+                rusqlite::params![country_byte, current_user],
+            );
+        }
+
+        drop(conn);
+        drop(s_read);
+
+        if let Some(old_path) = old_avatar_to_delete {
+            let p_str = old_path.to_string_lossy();
+            if p_str.contains(".data") && p_str.contains("avatars") {
+                let _ = tokio::fs::remove_file(old_path).await;
+            }
+        }
+
+        let mut s_write = state.write().await;
+        if let Some(ref mut player) = s_write.player {
+            if player.name == current_user {
+                if country_byte != 0 {
+                    player.country = country_byte;
+                }
+                player.queue.extend_from_slice(&crate::packets::user_presence(player));
+                player.queue.extend_from_slice(&crate::packets::user_stats(player));
+            }
+        }
+        drop(s_write);
+    }
+
+    let message = if payload.apply {
+        format!(
+            "Successfully imported and applied official profile for '{}' (#{id})",
+            parsed.username,
+            id = parsed.id
+        )
+    } else {
+        format!(
+            "Successfully fetched official profile for '{}' (#{id})",
+            parsed.username,
+            id = parsed.id
+        )
+    };
+
+    json_ok(&ImportOfficialResponse {
+        ok: true,
+        official_username: parsed.username,
+        official_id: parsed.id,
+        details: current_details,
+        avatar_data_url,
+        avatar_updated,
+        details_updated,
+        message,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1802,5 +2220,111 @@ mod tests {
             let p = s.player.as_ref().unwrap();
             assert!(!p.queue.is_empty(), "Packets must be queued for in-game stats update");
         }
+    }
+
+    #[test]
+    fn test_decode_html_entities() {
+        assert_eq!(decode_html_entities(""), "");
+        assert_eq!(
+            decode_html_entities("&quot;hello&quot; &amp; &lt;world&gt; &#039;test&#39; &apos;123&apos;"),
+            "\"hello\" & <world> 'test' '123'"
+        );
+        assert_eq!(
+            decode_html_entities("normal text without entities"),
+            "normal text without entities"
+        );
+        assert_eq!(decode_html_entities("trailing & and &unknown; entity"), "trailing & and &unknown; entity");
+    }
+
+    #[test]
+    fn test_safe_truncate() {
+        let ascii = "hello world";
+        assert_eq!(safe_truncate(ascii, 5), "hello");
+        assert_eq!(safe_truncate(ascii, 20), "hello world");
+
+        let unicode = "こんにちは世界"; // 7 chars, each 3 bytes = 21 bytes
+        assert_eq!(safe_truncate(unicode, 6), "こん");
+        assert_eq!(safe_truncate(unicode, 5), "こ"); // byte 5 is in middle of ん (bytes 3..6), truncates to 3
+    }
+
+    #[test]
+    fn test_parse_official_userpage_html() {
+        let mock_html = r#"
+            <!DOCTYPE html>
+            <html>
+            <head><title>peppy</title></head>
+            <body>
+                <div class="js-react--profile-page" data-initial-data="{&quot;user&quot;:{&quot;id&quot;:2,&quot;username&quot;:&quot;peppy&quot;,&quot;country_code&quot;:&quot;AU&quot;,&quot;location&quot;:&quot;Melbourne&quot;,&quot;playstyle&quot;:[&quot;mouse&quot;,&quot;keyboard&quot;,&quot;touch&quot;],&quot;avatar_url&quot;:&quot;https://a.ppy.sh/2?1234&quot;,&quot;page&quot;:{&quot;raw&quot;:&quot;[b]Hi there[/b]&quot;}}}"></div>
+            </body>
+            </html>
+        "#;
+
+        let parsed = parse_official_userpage_html(mock_html).expect("Should parse valid profile HTML");
+        assert_eq!(parsed.id, 2);
+        assert_eq!(parsed.username, "peppy");
+        assert_eq!(parsed.country_code.as_deref(), Some("AU"));
+        assert_eq!(parsed.location.as_deref(), Some("Melbourne"));
+        assert_eq!(parsed.playstyle, vec!["Mouse", "Keyboard", "Touchscreen"]);
+        assert_eq!(parsed.raw_bio.as_deref(), Some("[b]Hi there[/b]"));
+        assert_eq!(parsed.avatar_url.as_deref(), Some("https://a.ppy.sh/2?1234"));
+    }
+
+    #[test]
+    fn test_parse_official_userpage_html_errors() {
+        // Missing data-initial-data
+        let html_no_data = "<html><body>No data here</body></html>";
+        assert!(parse_official_userpage_html(html_no_data).is_err());
+
+        // Malformed JSON
+        let html_bad_json = "<div data-initial-data=\"not valid json\"></div>";
+        assert!(parse_official_userpage_html(html_bad_json).is_err());
+
+        // Missing username
+        let html_no_user = "<div data-initial-data=\"{&quot;user&quot;:{&quot;id&quot;:1}}\"></div>";
+        assert!(parse_official_userpage_html(html_no_user).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_import_official_route_session_and_csrf() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "ImportUser").unwrap();
+
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // 1. Unauthenticated request -> 401
+        let empty_headers = HeaderMap::new();
+        let payload = serde_json::json!({ "query": "peppy" }).to_string();
+        let resp_unauth = handle_import_official(shared_state.clone(), &empty_headers, payload.as_bytes()).await;
+        assert_eq!(resp_unauth.status, StatusCode::UNAUTHORIZED);
+
+        // 2. Establish session
+        let s_resp = handle_session(shared_state.clone(), &HeaderMap::new()).await;
+        let s_data: SessionResponse = serde_json::from_slice(&s_resp.body).unwrap();
+        let set_cookie = s_resp.header("set-cookie").unwrap();
+        let session_token = extract_cookie(set_cookie, SESSION_COOKIE_NAME).unwrap().to_string();
+
+        let mut login_headers = HeaderMap::new();
+        login_headers.insert("cookie", HeaderValue::from_str(&format!("los_session={}", session_token)).unwrap());
+        login_headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5000"));
+        login_headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
+        login_headers.insert("x-csrf-token", HeaderValue::from_str(&s_data.csrf).unwrap());
+
+        // 3. Log in
+        let login_body = serde_json::json!({ "username": "ImportUser" }).to_string();
+        let l_resp = handle_login(shared_state.clone(), &login_headers, login_body.as_bytes()).await;
+        assert_eq!(l_resp.status, StatusCode::OK);
+
+        // 4. Bad CSRF token -> 403
+        let mut bad_csrf_headers = login_headers.clone();
+        bad_csrf_headers.insert("x-csrf-token", HeaderValue::from_static("bad-token"));
+        let resp_bad_csrf = handle_import_official(shared_state.clone(), &bad_csrf_headers, payload.as_bytes()).await;
+        assert_eq!(resp_bad_csrf.status, StatusCode::FORBIDDEN);
+
+        // 5. Empty query -> 400
+        let empty_query_body = serde_json::json!({ "query": "   " }).to_string();
+        let resp_bad_query = handle_import_official(shared_state.clone(), &login_headers, empty_query_body.as_bytes()).await;
+        assert_eq!(resp_bad_query.status, StatusCode::BAD_REQUEST);
     }
 }
