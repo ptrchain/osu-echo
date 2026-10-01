@@ -37,6 +37,10 @@ pub struct Config {
     pub disable_funorange_maps: bool,
     pub osu_api_key: Option<String>,
     pub osu_daily_api_key: Option<String>,
+    #[serde(default)]
+    pub osu_client_id: Option<String>,
+    #[serde(default)]
+    pub osu_client_secret: Option<String>,
     pub seasonal_bgs: Vec<String>,
     pub osu_username: Option<String>,
     pub osu_password: Option<String>,
@@ -62,6 +66,8 @@ impl Default for Config {
             disable_funorange_maps: false,
             osu_api_key: None,
             osu_daily_api_key: None,
+            osu_client_id: None,
+            osu_client_secret: None,
             seasonal_bgs: vec![],
             osu_username: None,
             osu_password: None,
@@ -118,6 +124,20 @@ impl Config {
             let trimmed = val.trim();
             if !trimmed.is_empty() {
                 self.osu_daily_api_key = Some(trimmed.to_string());
+            }
+        }
+
+        if let Ok(val) = std::env::var("OSU_CLIENT_ID") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                self.osu_client_id = Some(trimmed.to_string());
+            }
+        }
+
+        if let Ok(val) = std::env::var("OSU_CLIENT_SECRET") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                self.osu_client_secret = Some(trimmed.to_string());
             }
         }
 
@@ -187,7 +207,7 @@ pub fn detect_osu_path() -> Option<PathBuf> {
 }
 
 pub fn write_dotenv_country(country: &str) -> std::io::Result<()> {
-    write_dotenv_full(None, None, Some(country), None, None, None, None, None, None, None, None)
+    write_dotenv_full(None, None, Some(country), None, None, None, None, None, None, None, None, None, None)
 }
 
 pub fn write_dotenv(
@@ -207,6 +227,8 @@ pub fn write_dotenv(
         password_hash,
         api_key,
         daily_key,
+        None,
+        None,
         pp_leaderboard,
         show_pp_for_personal_best,
         amount_of_scores,
@@ -222,6 +244,8 @@ pub fn write_dotenv_full(
     password_hash: Option<&str>,
     api_key: Option<&str>,
     daily_key: Option<&str>,
+    client_id: Option<&str>,
+    client_secret: Option<&str>,
     pp_leaderboard: Option<bool>,
     show_pp_for_personal_best: Option<bool>,
     amount_of_scores: Option<i32>,
@@ -261,9 +285,19 @@ pub fn write_dotenv_full(
     }
     if let Some(k) = api_key {
         map.insert("OSU_API_KEY".to_string(), k.to_string());
+        std::env::set_var("OSU_API_KEY", k);
     }
     if let Some(d) = daily_key {
         map.insert("OSU_DAILY_API_KEY".to_string(), d.to_string());
+        std::env::set_var("OSU_DAILY_API_KEY", d);
+    }
+    if let Some(cid) = client_id {
+        map.insert("OSU_CLIENT_ID".to_string(), cid.to_string());
+        std::env::set_var("OSU_CLIENT_ID", cid);
+    }
+    if let Some(cs) = client_secret {
+        map.insert("OSU_CLIENT_SECRET".to_string(), cs.to_string());
+        std::env::set_var("OSU_CLIENT_SECRET", cs);
     }
     if let Some(pp) = pp_leaderboard {
         map.insert("PP_LEADERBOARD".to_string(), pp.to_string());
@@ -295,6 +329,10 @@ pub fn write_dotenv_full(
     out.push_str(&format!("OSU_API_KEY={}\n", map.get("OSU_API_KEY").cloned().unwrap_or_default()));
     out.push_str("# osudaily API key for real-time global rank calculation: https://osudaily.net/api.php\n");
     out.push_str(&format!("OSU_DAILY_API_KEY={}\n\n", map.get("OSU_DAILY_API_KEY").cloned().unwrap_or_default()));
+
+    out.push_str("# Official osu! API OAuth application credentials for country rankings (https://osu.ppy.sh/home/account/edit#oauth)\n");
+    out.push_str(&format!("OSU_CLIENT_ID={}\n", map.get("OSU_CLIENT_ID").cloned().unwrap_or_default()));
+    out.push_str(&format!("OSU_CLIENT_SECRET={}\n\n", map.get("OSU_CLIENT_SECRET").cloned().unwrap_or_default()));
 
     out.push_str("# Optional osu! Account Credentials (only needed for '!friend sync')\n");
     out.push_str("# (Stored strictly locally; password is MD5 hashed and never stored in plaintext)\n");
@@ -369,7 +407,7 @@ fn print_completion_guide(is_advanced: bool, host: &str, port: u16) {
     println!("       (Your account will be created automatically on first login)\n");
 }
 
-fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<String>) {
+fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
     loop {
         print_setup_header(title, subtitle);
 
@@ -387,6 +425,18 @@ fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<Strin
         println!("     Required for real-time global rank calculation based on your PP.");
         println!("     URL: {}", "https://osudaily.net/api.php".cyan());
         let daily_key = prompt_optional_string("     API key (or Enter to skip): ");
+
+        println!("\n  3. osu! OAuth Application Credentials (v2 API) [Optional]:");
+        println!("     Required for real-time country rank calculation on your user profile.");
+        println!("     URL: {}", "https://osu.ppy.sh/home/account/edit#oauth".cyan());
+        println!("     {}", "Tip: Scroll down to 'OAuth' -> Click 'New OAuth Application'.".dimmed());
+        println!("     {}", "     For Application Name & Callback URL, enter 'osu-echo' and 'http://localhost'".dimmed());
+        let client_id = prompt_optional_string("     Client ID (or Enter to skip): ");
+        let client_secret = if client_id.is_some() {
+            prompt_optional_string("     Client Secret (or Enter to skip): ")
+        } else {
+            None
+        };
 
         if osu_key.is_none() || daily_key.is_none() {
             println!("\n  {}", "=========================================================================".red().bold());
@@ -419,7 +469,7 @@ fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<Strin
             }
         }
 
-        return (osu_key, daily_key);
+        return (osu_key, daily_key, client_id, client_secret);
     }
 }
 
@@ -451,12 +501,14 @@ fn setup_quick(data_dir: &Path) -> Config {
         println!("  {} Skipped osu! path. Path-dependent features will be disabled.", "!".yellow());
     }
 
-    let (osu_key, daily_key) = prompt_api_keys(
+    let (osu_key, daily_key, client_id, client_secret) = prompt_api_keys(
         "Quick Setup [Step 2/3: Essential API Keys]",
         "Required for online beatmaps, leaderboards, and rank calculation",
     );
     config.osu_api_key = osu_key;
     config.osu_daily_api_key = daily_key;
+    config.osu_client_id = client_id;
+    config.osu_client_secret = client_secret;
 
     #[cfg(target_os = "windows")]
     {
@@ -484,6 +536,8 @@ fn setup_quick(data_dir: &Path) -> Config {
         None,
         config.osu_api_key.as_deref(),
         config.osu_daily_api_key.as_deref(),
+        config.osu_client_id.as_deref(),
+        config.osu_client_secret.as_deref(),
         Some(config.pp_leaderboard),
         Some(config.show_pp_for_personal_best),
         Some(config.amount_of_scores_on_lb),
@@ -563,12 +617,14 @@ fn setup_advanced(data_dir: &Path) -> Config {
         let _ = data_dir;
     }
 
-    let (osu_key, daily_key) = prompt_api_keys(
+    let (osu_key, daily_key, client_id, client_secret) = prompt_api_keys(
         "Advanced Setup [Step 3/5: Essential API Keys]",
         "API keys for online beatmaps, leaderboards, and rank calculation",
     );
     config.osu_api_key = osu_key;
     config.osu_daily_api_key = daily_key;
+    config.osu_client_id = client_id;
+    config.osu_client_secret = client_secret;
 
     print_setup_header("Advanced Setup [Step 4/5: Gameplay & Scoring Rules]", "Configure leaderboard rules and chat feeds");
     config.pp_leaderboard = prompt_bool("  Show PP instead of raw Score on leaderboards? (y/N) [default: no]: ", false);
@@ -621,6 +677,14 @@ fn setup_advanced(data_dir: &Path) -> Config {
             "CRITICAL: Missing (global rank calculation disabled)".red().bold()
         }
     );
+    println!(
+        "  • osu! OAuth (v2):  {}",
+        if config.osu_client_id.is_some() && config.osu_client_secret.is_some() {
+            "Configured".green()
+        } else {
+            "None (country rank calculation disabled)".normal()
+        }
+    );
     println!("  • Bancho Account:   {}", if config.osu_username.is_some() { "Configured".green() } else { "None".normal() });
 
     let save = prompt_bool("\nSave this configuration? (Y/n) [default: yes]: ", true);
@@ -637,6 +701,8 @@ fn setup_advanced(data_dir: &Path) -> Config {
         config.osu_password.as_deref(),
         config.osu_api_key.as_deref(),
         config.osu_daily_api_key.as_deref(),
+        config.osu_client_id.as_deref(),
+        config.osu_client_secret.as_deref(),
         Some(config.pp_leaderboard),
         Some(config.show_pp_for_personal_best),
         Some(config.amount_of_scores_on_lb),
@@ -964,6 +1030,8 @@ mod tests {
         std::env::set_var("OSU_PASSWORD", "secret123");
         std::env::set_var("OSU_API_KEY", "apikey_xyz");
         std::env::set_var("OSU_DAILY_API_KEY", "dailykey_123");
+        std::env::set_var("OSU_CLIENT_ID", "12345");
+        std::env::set_var("OSU_CLIENT_SECRET", "supersecret");
         std::env::set_var("PP_LEADERBOARD", "true");
         std::env::set_var("SHOW_PP_FOR_PERSONAL_BEST", "true");
         std::env::set_var("AMOUNT_OF_SCORES_ON_LB", "75");
@@ -979,6 +1047,8 @@ mod tests {
         assert_eq!(config.osu_username.as_deref(), Some("testuser"));
         assert_eq!(config.osu_api_key.as_deref(), Some("apikey_xyz"));
         assert_eq!(config.osu_daily_api_key.as_deref(), Some("dailykey_123"));
+        assert_eq!(config.osu_client_id.as_deref(), Some("12345"));
+        assert_eq!(config.osu_client_secret.as_deref(), Some("supersecret"));
         assert!(config.pp_leaderboard);
         assert!(config.show_pp_for_personal_best);
         assert_eq!(config.amount_of_scores_on_lb, 75);
@@ -991,6 +1061,8 @@ mod tests {
         std::env::remove_var("OSU_PASSWORD");
         std::env::remove_var("OSU_API_KEY");
         std::env::remove_var("OSU_DAILY_API_KEY");
+        std::env::remove_var("OSU_CLIENT_ID");
+        std::env::remove_var("OSU_CLIENT_SECRET");
         std::env::remove_var("PP_LEADERBOARD");
         std::env::remove_var("SHOW_PP_FOR_PERSONAL_BEST");
         std::env::remove_var("AMOUNT_OF_SCORES_ON_LB");

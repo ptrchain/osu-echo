@@ -603,6 +603,187 @@ pub async fn get_daily_rank(
     rank
 }
 
+static COUNTRY_RANK_CACHE: TokioMutex<Option<HashMap<(String, i32), (Instant, Option<i32>)>>> =
+    TokioMutex::const_new(None);
+static OAUTH_TOKEN: TokioMutex<Option<(String, Instant)>> = TokioMutex::const_new(None);
+
+async fn fetch_oauth_token(
+    http: &reqwest::Client,
+    client_id: u64,
+    client_secret: &str,
+    token_guard: &mut tokio::sync::MutexGuard<'_, Option<(String, Instant)>>,
+) -> Option<String> {
+    let payload = serde_json::json!({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+        "scope": "public"
+    });
+
+    let resp = http
+        .post("https://osu.ppy.sh/oauth/token")
+        .header("Accept", "application/json")
+        .json(&payload)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .ok()?;
+
+    if !resp.status().is_success() {
+        return None;
+    }
+
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let access_token = json.get("access_token")?.as_str()?.to_string();
+    let expires_in = json.get("expires_in").and_then(|v| v.as_u64()).unwrap_or(86400);
+    let valid_duration = std::time::Duration::from_secs(expires_in.saturating_sub(60).max(60));
+
+    **token_guard = Some((access_token.clone(), Instant::now() + valid_duration));
+    Some(access_token)
+}
+
+async fn fetch_country_placement(
+    http: &reqwest::Client,
+    token: &str,
+    country: &str,
+    pp: i32,
+) -> Option<i32> {
+    let fetch_page = |page: i64| {
+        let url = format!(
+            "https://osu.ppy.sh/api/v2/rankings/osu/performance?country={}&page={}",
+            country, page
+        );
+        let http = http.clone();
+        let auth = format!("Bearer {}", token);
+        async move {
+            let resp = http
+                .get(&url)
+                .header("Authorization", auth)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            resp.json::<serde_json::Value>().await.ok()
+        }
+    };
+
+    let first = fetch_page(1).await?;
+    let ranking = first.get("ranking")?.as_array()?;
+    if ranking.is_empty() {
+        return None;
+    }
+    let size = ranking.len() as i64;
+    if size == 0 {
+        return None;
+    }
+    let total = first.get("total")?.as_i64()?;
+    let pp_f = pp as f64;
+
+    let mut low = 1;
+    let mut high = (total + size - 1) / size;
+    let mut candidate: Option<Vec<serde_json::Value>> = None;
+
+    for _ in 0..16 {
+        if low > high {
+            break;
+        }
+        let mid = (low + high) / 2;
+        let data = if mid == 1 {
+            Some(first.clone())
+        } else {
+            fetch_page(mid).await
+        };
+        let entries = match data.as_ref().and_then(|d| d.get("ranking")).and_then(|r| r.as_array()) {
+            Some(e) if !e.is_empty() => e,
+            _ => return None,
+        };
+
+        let last_pp = entries.last().and_then(|e| e.get("pp")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        if last_pp <= pp_f {
+            candidate = Some(entries.clone());
+            high = mid - 1;
+        } else {
+            low = mid + 1;
+        }
+    }
+
+    if let Some(entries) = candidate {
+        for entry in entries {
+            let entry_pp = entry.get("pp").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            if entry_pp <= pp_f {
+                return entry.get("country_rank").and_then(|v| v.as_i64()).map(|r| r as i32);
+            }
+        }
+    }
+
+    None
+}
+
+pub async fn get_country_rank(
+    http: &reqwest::Client,
+    country: &str,
+    pp: i32,
+    creds: Option<(u64, &str)>,
+) -> Option<i32> {
+    if country.is_empty() || pp <= 0 {
+        return None;
+    }
+
+    let (client_id, client_secret) = if let Some((id, sec)) = creds {
+        (id, sec.to_string())
+    } else {
+        let client_id_str = std::env::var("OSU_CLIENT_ID").ok()?;
+        let client_id: u64 = client_id_str.trim().parse().ok()?;
+        let client_secret = std::env::var("OSU_CLIENT_SECRET").ok()?;
+        (client_id, client_secret)
+    };
+    if client_secret.trim().is_empty() {
+        return None;
+    }
+
+    let country_upper = country.to_uppercase();
+    let cache_key = (country_upper.clone(), pp);
+
+    {
+        let mut guard = COUNTRY_RANK_CACHE.lock().await;
+        let cache = guard.get_or_insert_with(HashMap::new);
+        if let Some((cached_time, rank)) = cache.get(&cache_key) {
+            if cached_time.elapsed().as_secs() < 900 {
+                return *rank;
+            }
+        }
+    }
+
+    // Get or refresh OAuth token
+    let token = {
+        let mut token_guard = OAUTH_TOKEN.lock().await;
+        let now = Instant::now();
+        if let Some((tok, expires_at)) = &*token_guard {
+            if *expires_at > now {
+                tok.clone()
+            } else {
+                fetch_oauth_token(http, client_id, &client_secret, &mut token_guard).await?
+            }
+        } else {
+            fetch_oauth_token(http, client_id, &client_secret, &mut token_guard).await?
+        }
+    };
+
+    // Binary search country ranking
+    let rank = fetch_country_placement(http, &token, &country_upper, pp).await;
+
+    {
+        let mut guard = COUNTRY_RANK_CACHE.lock().await;
+        let cache = guard.get_or_insert_with(HashMap::new);
+        cache.insert(cache_key, (Instant::now(), rank));
+    }
+
+    rank
+}
+
 fn score_grade(s: &db::ScoreWithBeatmap) -> &'static str {
     let g = crate::utils::get_grade(
         s.mode as u8,
@@ -705,6 +886,13 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let is_active = state_guard.player.as_ref().map_or(false, |p| p.name == name);
     let http_client = state_guard.http.clone();
     let daily_key = state_guard.config.osu_daily_api_key.clone();
+    let oauth_creds = match (
+        &state_guard.config.osu_client_id,
+        &state_guard.config.osu_client_secret,
+    ) {
+        (Some(cid), Some(sec)) => cid.trim().parse::<u64>().ok().map(|id| (id, sec.clone())),
+        _ => None,
+    };
 
     drop(conn);
     drop(state_guard);
@@ -861,6 +1049,17 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     };
 
     let global_rank = get_daily_rank(&http_client, daily_key.as_deref(), calculated_pp).await;
+    let country_rank = if mode_str == "vn" && !details.country.is_empty() && calculated_pp > 0 {
+        get_country_rank(
+            &http_client,
+            &details.country,
+            calculated_pp,
+            oauth_creds.as_ref().map(|(id, sec)| (*id, sec.as_str())),
+        )
+        .await
+    } else {
+        None
+    };
 
     // Save rank snapshot if valid rank obtained
     let state_guard = state.read().await;
@@ -885,7 +1084,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         grades: grade_counts,
         active: is_active,
         details,
-        country_rank: None,
+        country_rank,
         global_rank,
         rank_history,
         top: top_public,
@@ -2326,5 +2525,13 @@ mod tests {
         let empty_query_body = serde_json::json!({ "query": "   " }).to_string();
         let resp_bad_query = handle_import_official(shared_state.clone(), &login_headers, empty_query_body.as_bytes()).await;
         assert_eq!(resp_bad_query.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_get_country_rank_empty_and_fallback() {
+        let http = reqwest::Client::new();
+        assert_eq!(get_country_rank(&http, "", 1000, None).await, None);
+        assert_eq!(get_country_rank(&http, "DE", 0, None).await, None);
+        assert_eq!(get_country_rank(&http, "DE", -50, None).await, None);
     }
 }

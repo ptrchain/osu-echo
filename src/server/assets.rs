@@ -58,13 +58,15 @@ pub fn serve_asset(path: &str) -> Response {
             .with_header("Content-Type", if is_html { "text/html; charset=utf-8" } else { &mime })
             .with_header("X-Content-Type-Options", "nosniff");
 
-        if is_html {
+        if is_html || clean == "profile.js" || clean == "profile.css" {
             resp = resp
-                .with_header("Cache-Control", "no-cache")
-                .with_header(
+                .with_header("Cache-Control", "no-cache");
+            if is_html {
+                resp = resp.with_header(
                     "Content-Security-Policy",
                     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self' https://osu.ppy.sh; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
                 );
+            }
         } else {
             resp = resp.with_header("Cache-Control", "public, max-age=86400");
         }

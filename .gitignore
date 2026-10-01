@@ -7,6 +7,8 @@
 # Local database and data directory
 /.data/
 *.md
+!README.md
+!website/README.md
 *.db
 *.db-journal
 *.db-wal
