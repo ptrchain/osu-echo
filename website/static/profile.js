@@ -106,8 +106,22 @@ function scoreLevel(total) {
   return {level,progress:Math.max(0,Math.min(100,Math.floor((total-lower)/(upper-lower)*100)))};
 }
 const countryNames=new Intl.DisplayNames(['en'],{type:'region'});
-const countryName=code=>code?countryNames.of(code):'';
-const countryFlag=code=>code?String.fromCodePoint(...[...code].map(c=>127397+c.charCodeAt(0))):'';
+const countryName=code=>{
+  if(!code||typeof code!=='string')return '';
+  const clean=code.trim().toUpperCase();
+  try{return countryNames.of(clean)||clean;}catch(_){return clean;}
+};
+function countryFlagHex(code){
+  if(!code||typeof code!=='string')return '';
+  const clean=code.trim().toUpperCase();
+  if(clean.length!==2)return '';
+  return [...clean].map(c=>(127397+c.charCodeAt(0)).toString(16)).join('-');
+}
+function countryFlagBackground(code){
+  const hex=countryFlagHex(code);
+  if(!hex)return 'none';
+  return `url('https://osu.ppy.sh/assets/images/flags/${hex}.svg'),url('https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/${hex}.svg')`;
+}
 function parseBBCode(raw) {
   if (!raw) return '';
   let s = esc(raw);
@@ -146,7 +160,22 @@ function renderProfile() {
     const section=$(id),link=document.querySelector(`.section-tabs a[href="#${id}"]`);
     if(section&&link){document.querySelector('.user-profile-pages').append(section);document.querySelector('.section-tabs').append(link);}
   }
-  $('profile-country').textContent=details.country?`${countryFlag(details.country)} ${countryName(details.country)}`:'';
+  const countryCode=(details.country||'').trim().toUpperCase();
+  const countryEl=$('profile-country');
+  if(countryCode&&countryCode.length===2){
+    const cName=countryName(countryCode)||countryCode;
+    countryEl.href=`https://osu.ppy.sh/rankings/osu/performance?country=${encodeURIComponent(countryCode)}`;
+    countryEl.title=cName;
+    countryEl.setAttribute('aria-label',cName);
+    countryEl.innerHTML=`<span class="flag-country flag-country--medium" style="background-image:${countryFlagBackground(countryCode)}" aria-hidden="true"></span><span class="profile-info__flag-text">${esc(cName)}</span>`;
+    countryEl.removeAttribute('hidden');
+    countryEl.style.display='';
+  }else{
+    countryEl.removeAttribute('href');
+    countryEl.removeAttribute('title');
+    countryEl.replaceChildren();
+    countryEl.style.display='none';
+  }
   $('country-rank').textContent=p.country_rank?`#${num(p.country_rank)}`:'—';
   $('personal-details').replaceChildren();
   for(const text of [details.location,details.devices?.length?`Plays with ${details.devices.join(', ')}`:'']){
@@ -282,6 +311,17 @@ $('profile-content').addEventListener('click',event=>{
   const button=event.target.closest('[data-score-detail]');if(!button)return;
   const detail=$('detail-'+button.dataset.scoreDetail);detail.hidden=!detail.hidden;button.setAttribute('aria-expanded',String(!detail.hidden));
 });
+function updateSettingsCountryFlag(){
+  const flagEl=$('settings-country-flag');
+  if(!flagEl)return;
+  const val=($('settings-country').value||'').trim().toUpperCase();
+  if(val&&val.length===2){
+    flagEl.style.backgroundImage=countryFlagBackground(val);
+    flagEl.style.display='block';
+  }else{
+    flagEl.style.display='none';
+  }
+}
 async function openSettings(){
   if(!state.session.user){openLogin();return;}
   $('login-dialog').close();
@@ -296,6 +336,7 @@ async function openSettings(){
     const profile=await api(`/site/profile?name=${encodeURIComponent(state.session.user)}&mode=${state.mode}`);
     const details=profile.details||{};
     $('settings-country').value=details.country||'';
+    updateSettingsCountryFlag();
     $('settings-location').value=details.location||'';
     $('settings-about').value=details.about||'';
     state.sectionOrder=[...(details.section_order||defaultSectionOrder)];renderSectionOrder();
@@ -317,7 +358,7 @@ $('import-official-btn').addEventListener('click',async()=>{
     const details=res.details||{};
     if(details.about!==undefined)$('settings-about').value=details.about;
     if(details.location!==undefined)$('settings-location').value=details.location;
-    if(details.country!==undefined)$('settings-country').value=details.country;
+    if(details.country!==undefined){$('settings-country').value=details.country;updateSettingsCountryFlag();}
     if(Array.isArray(details.devices)){
       document.querySelectorAll('input[name=device]').forEach(input=>{input.checked=details.devices.includes(input.value);});
     }
@@ -362,6 +403,7 @@ $('settings-form').addEventListener('submit',async event=>{
 });
 
 "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(' ').sort((a,b)=>countryName(a).localeCompare(countryName(b))).forEach(code=>{const option=document.createElement('option');option.value=code;option.textContent=countryName(code);$('settings-country').append(option);});
+$('settings-country').addEventListener('change',updateSettingsCountryFlag);
 
 $('edit-about').addEventListener('click',async()=>{await openSettings();if(!$('settings-submit').disabled)$('settings-about').focus();});
 
