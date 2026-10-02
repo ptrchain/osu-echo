@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>player info · Local osu!</title>
 <link rel="stylesheet" href="/site/static/vendor/osu-web.css">
-<link rel="stylesheet" href="/site/static/profile.css?v=los2">
-<script src="/site/static/profile.js?v=los2" defer></script>
+<link rel="stylesheet" href="/site/static/profile.css?v=los5">
+<script src="/site/static/profile.js?v=los4" defer></script>
 </head>
 <body class="t-user">
 <header class="local-header">
@@ -53,8 +53,12 @@
         <div class="profile-detail-bar__level"><div class="profile-detail-bar__level-bar"><div id="level-progress" class="bar bar--user-profile" role="progressbar" aria-label="Progress to next level" aria-valuemin="0" aria-valuemax="100"><div id="level-fill" class="bar__fill"></div><div id="level-percent" class="bar__text"></div></div></div><div id="level-badge" class="user-level"><div class="user-level__icon"></div><span id="level-number" class="user-level__level"></span></div></div>
       </div>
       <div class="profile-links">
-        <div class="profile-links__row profile-links__row--0"><span class="profile-links__item" title="Creation dates were not saved for existing profiles">Joined <span class="profile-links__value">—</span></span><span id="last-play" class="profile-links__item profile-links__value"></span><span id="active-profile" class="profile-links__item"></span></div>
-        <div id="personal-details" class="profile-links__row"></div><div class="profile-links__edit"><button id="edit-profile-details" class="local-details-edit" type="button" title="Edit profile" aria-label="Edit profile details" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i></button></div>
+        <div id="profile-links-row" class="profile-links__row profile-links__row--0"></div>
+        <div class="profile-links__edit">
+          <button id="edit-profile-details" class="btn-circle btn-circle--profile-links local-details-edit" type="button" title="Edit profile" aria-label="Edit profile details" hidden>
+            <span class="btn-circle__content"><i class="fas fa-pencil-alt" aria-hidden="true"></i></span>
+          </button>
+        </div>
       </div>
     </section>
     <nav class="section-tabs" aria-label="Profile sections"><a href="#me" class="selected">me!</a><a href="#top-ranks">Scores</a><a href="#historical">Historical</a><a href="#beatmaps">Beatmaps</a><a href="#medals">Medals</a><a href="#recent-activity">Recent</a></nav>

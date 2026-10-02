@@ -176,10 +176,70 @@ function renderProfile() {
     countryEl.replaceChildren();
     countryEl.style.display='none';
   }
-  $('country-rank').textContent=p.country_rank?`#${num(p.country_rank)}`:'—';
-  $('personal-details').replaceChildren();
-  for(const text of [details.location,details.devices?.length?`Plays with ${details.devices.join(', ')}`:'']){
-    if(text){const item=document.createElement('span');item.className='profile-links__item profile-links__value';item.textContent=text;$('personal-details').append(item);}
+  const linksRow = $('profile-links-row');
+  if (linksRow) {
+    linksRow.replaceChildren();
+
+    // 1. Join date
+    const joinDateVal = details.join_date || p.first_play;
+    let joinDateText = '';
+    if (joinDateVal) {
+      const d = typeof joinDateVal === 'number' ? new Date(joinDateVal * 1000) : new Date(joinDateVal);
+      if (!isNaN(d.getTime())) {
+        joinDateText = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      }
+    }
+    if (!joinDateText) {
+      joinDateText = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    }
+    const joinItem = document.createElement('span');
+    joinItem.className = 'profile-links__item';
+    joinItem.innerHTML = `Joined <span class="profile-links__value">${esc(joinDateText)}</span>`;
+    linksRow.appendChild(joinItem);
+
+    // 2. Online / Last seen status
+    const statusItem = document.createElement('span');
+    statusItem.className = 'profile-links__item';
+    if (p.active) {
+      statusItem.innerHTML = `<span class="profile-links__value">Currently online</span>`;
+    } else if (p.last_play) {
+      statusItem.innerHTML = `Last seen <span class="profile-links__value">${relative(p.last_play)}</span>`;
+    } else {
+      statusItem.innerHTML = `Last seen <span class="profile-links__value">recently</span>`;
+    }
+    linksRow.appendChild(statusItem);
+
+    // 3. Playstyle / devices
+    if (details.devices && details.devices.length) {
+      const devItem = document.createElement('span');
+      devItem.className = 'profile-links__item';
+      devItem.innerHTML = `Plays with <span class="profile-links__value">${esc(details.devices.join(', '))}</span>`;
+      linksRow.appendChild(devItem);
+    }
+
+    // 4. Location with map-marker icon
+    if (details.location && details.location.trim()) {
+      const locItem = document.createElement('span');
+      locItem.className = 'profile-links__item';
+      locItem.innerHTML = `<span class="profile-links__icon"><i class="fas fa-map-marker-alt" aria-hidden="true"></i></span><span class="profile-links__value">${esc(details.location.trim())}</span>`;
+      linksRow.appendChild(locItem);
+    }
+
+    // 5. Forum posts (if any)
+    if (details.post_count != null && details.post_count > 0) {
+      const postItem = document.createElement('span');
+      postItem.className = 'profile-links__item';
+      postItem.innerHTML = `Contributed <span class="profile-links__value">${num(details.post_count)} forum ${details.post_count === 1 ? 'post' : 'posts'}</span>`;
+      linksRow.appendChild(postItem);
+    }
+
+    // 6. Comments (if any)
+    if (details.comments_count != null && details.comments_count > 0) {
+      const commItem = document.createElement('span');
+      commItem.className = 'profile-links__item';
+      commItem.innerHTML = `Posted <span class="profile-links__value">${num(details.comments_count)} ${details.comments_count === 1 ? 'comment' : 'comments'}</span>`;
+      linksRow.appendChild(commItem);
+    }
   }
   if(details.about){
     $('about-content').innerHTML=parseBBCode(details.about);
@@ -199,16 +259,20 @@ function renderProfile() {
   $('level-percent').textContent=`${level.progress}%`;
   $('level-progress').setAttribute('aria-valuenow',level.progress);
   $('avatar').alt = `${p.name}'s avatar`;
-  $('presence').textContent = p.active ? 'Active local profile' : 'Local profile';
+  $('presence').textContent = p.active ? 'Active' : '';
   $('presence').classList.toggle('active', p.active);
   $('global-rank').textContent = p.global_rank ? `#${num(p.global_rank)}` : '—';
   $('global-rank').title = p.global_rank ? 'osu!daily rank estimate for this pp (osu!standard)' : 'osu!daily rank unavailable. Check the configured API key or try again later.';
   $('pp').textContent = num(p.pp);
   const stats = [['Ranked Score',num(p.ranked_score)],['Hit Accuracy',`${num(p.acc,2)}%`],['Play Count',num(p.playcount)],['Total Score',num(p.total_score)],['Total Hits',num(p.total_hits)],['Hits per Play',num(p.playcount ? Math.floor(p.total_hits/p.playcount) : 0)],['Maximum Combo',`${num(p.max_combo)}x`],['Replays Watched by Others','—']];
   $('statistics').innerHTML = stats.map(([key,value])=>`<dl class="profile-stats__entry"><dt class="profile-stats__key">${key}</dt><dd class="profile-stats__value">${value}</dd></dl>`).join('');
-  $('grade-counts').innerHTML = Object.entries(p.grades).map(([grade,count])=>`<div class="profile-rank-count__item"><div class="score-rank score-rank--${grade} score-rank--tiny" aria-label="${grade.replace('X','SS')}"></div><span>${num(count)}</span></div>`).join('');
-  $('last-play').textContent = p.last_play ? `Last played ${relative(p.last_play)}` : 'No plays recorded yet';
-  $('active-profile').textContent = state.session.active ? `Server profile: ${state.session.active}` : 'No active server profile';
+  const gradeOrder = ['XH', 'X', 'SH', 'S', 'A'];
+  const gradeLabels = { XH: 'SSH', X: 'SS', SH: 'SH', S: 'S', A: 'A' };
+  $('grade-counts').innerHTML = gradeOrder.map(grade => {
+    const label = gradeLabels[grade];
+    const count = (p.grades && p.grades[grade] != null) ? p.grades[grade] : ((p.grades && p.grades[label] != null) ? p.grades[label] : 0);
+    return `<div class="profile-rank-count__item"><div class="profile-rank-count__rank"><div class="score-rank score-rank--${grade} score-rank--rank-${label.toLowerCase()}" role="img" aria-label="${label}"></div></div><span>${num(count)}</span></div>`;
+  }).join('');
   $('activity').innerHTML = p.recent.length ? p.recent.slice(0,5).map(s=>`<div class="activity-row"><span class="score-rank score-rank--tiny score-rank--${esc(s.grade)}" aria-label="Grade ${esc(s.grade)}"></span><div><b>${esc(p.name)}</b> played <a ${Number(s.beatmap.beatmap_id)>0?`href="https://osu.ppy.sh/beatmaps/${Number(s.beatmap.beatmap_id)}" target="_blank" rel="noreferrer"`:''}>${esc(s.beatmap.title||'an unknown beatmap')} [${esc(s.beatmap.version||'?')}]</a> with <b>${num(s.pp)}pp</b></div><time>${relative(s.time)}</time></div>`).join('') : '<p class="empty-inline">No recent activity.</p>';
   renderPerformanceGraph();
   requestAnimationFrame(updateSection);
@@ -409,7 +473,7 @@ $('edit-about').addEventListener('click',async()=>{await openSettings();if(!$('s
 
 function renderPerformanceGraph(){
   const data=state.profile.rank_history||[];
-  if(!data.length){$('rank-history').textContent='Waiting for an osu!daily rank. History starts with the first successful lookup.';return;}
+  if(!data.length){$('rank-history').textContent='';return;}
   const min=Math.min(...data.map(x=>x[1])),max=Math.max(...data.map(x=>x[1]));
   const points=data.map((x,i)=>`${data.length===1?300:5+i*590/(data.length-1)},${max===min?35:10+(x[1]-min)/(max-min)*50}`);
   $('rank-history').innerHTML=`<svg viewBox="0 0 600 75" preserveAspectRatio="none" role="img" aria-label="Recorded osu!daily rank history"><polyline points="${points.join(' ')}" fill="none" stroke="#ffcc22" stroke-width="2" vector-effect="non-scaling-stroke"/>${data.map((x,i)=>`<circle cx="${points[i].split(',')[0]}" cy="${points[i].split(',')[1]}" r="3" fill="#ffcc22"><title>${esc(x[0])}: #${num(x[1])}</title></circle>`).join('')}</svg><span class="performance-caption">osu!daily rank history · ${data.length===1?'tracking started today':esc(data[0][0])+' – '+esc(data[data.length-1][0])}</span>`;

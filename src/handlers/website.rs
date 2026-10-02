@@ -165,6 +165,8 @@ pub struct ProfileResponse {
     pub top: Vec<PublicScore>,
     pub recent: Vec<PublicScore>,
     pub last_play: Option<i64>,
+    #[serde(default)]
+    pub first_play: Option<i64>,
     pub performance_history: Vec<(String, f64)>,
     pub play_history: Vec<(String, i32)>,
     pub most_played: Vec<MostPlayedEntry>,
@@ -992,6 +994,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         .collect();
 
     let last_play = mode_scores.first().map(|s| s.time);
+    let first_play = scores.iter().map(|s| s.time).filter(|&t| t > 0).min();
 
     // Most played maps
     let mut map_counts: HashMap<&str, (i32, &db::ScoreWithBeatmap)> = HashMap::new();
@@ -1090,6 +1093,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         top: top_public,
         recent: recent_public,
         last_play,
+        first_play,
         performance_history: perf_history,
         play_history,
         most_played,
