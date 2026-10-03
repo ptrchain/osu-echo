@@ -3,6 +3,7 @@ pub mod avatar;
 pub mod banchobot;
 pub mod chat_commands;
 pub mod cho;
+pub mod medals;
 pub mod score_decode;
 pub mod score_submit;
 pub mod tillerino;
