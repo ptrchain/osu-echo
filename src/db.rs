@@ -1,5 +1,6 @@
 use crate::types::beatmap::Beatmap;
 use crate::types::config::Config;
+use crate::types::medal::UserMedalRecord;
 pub use crate::types::profile::default_section_order;
 pub use crate::types::ProfileDetails;
 use crate::types::score::Score;
@@ -146,6 +147,16 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_rank_history_player ON rank_history(player_name, mode);
+
+        CREATE TABLE IF NOT EXISTS user_medals (
+            player_name TEXT NOT NULL,
+            medal_id INTEGER NOT NULL,
+            achieved_at INTEGER NOT NULL,
+            PRIMARY KEY (player_name, medal_id),
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_user_medals_player ON user_medals(player_name);
     ",
     )?;
 
@@ -190,6 +201,18 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
         [],
     );
     let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_rank_history_player ON rank_history(player_name, mode)", []);
+
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_medals (
+            player_name TEXT NOT NULL,
+            medal_id INTEGER NOT NULL,
+            achieved_at INTEGER NOT NULL,
+            PRIMARY KEY (player_name, medal_id),
+            FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
+        )",
+        [],
+    );
+    let _ = conn.execute("CREATE INDEX IF NOT EXISTS idx_user_medals_player ON user_medals(player_name)", []);
 
     let _ = conn.execute("DELETE FROM friends WHERE friend_id <= 2 OR friend_id = 2070907", []);
     let _ = conn.execute("DELETE FROM profiles WHERE name = 'Friend 2'", []);
@@ -486,6 +509,7 @@ pub fn rename_profile(conn: &Connection, old_name: &str, new_name: &str) -> SqlR
         conn.execute("UPDATE friends SET friend_name = ?1 WHERE friend_name = ?2", params![new_name, old_name])?;
         conn.execute("UPDATE profile_details SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
         conn.execute("UPDATE rank_history SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
+        conn.execute("UPDATE user_medals SET player_name = ?1 WHERE player_name = ?2", params![new_name, old_name])?;
         Ok(())
     })();
 
@@ -1252,6 +1276,80 @@ pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> 
     Ok(scores)
 }
 
+pub fn add_user_medal(conn: &Connection, player_name: &str, medal_id: i32, achieved_at: i64) -> SqlResult<bool> {
+    let rows = conn.execute(
+        "INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)",
+        params![player_name, medal_id, achieved_at],
+    )?;
+    Ok(rows > 0)
+}
+
+pub fn add_user_medals_batch(conn: &Connection, player_name: &str, medals: &[(i32, i64)]) -> SqlResult<usize> {
+    if medals.is_empty() {
+        return Ok(0);
+    }
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+    let res: SqlResult<usize> = (|| {
+        let mut stmt = conn.prepare_cached(
+            "INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)",
+        )?;
+        let mut added = 0;
+        for &(medal_id, achieved_at) in medals {
+            let rows = stmt.execute(params![player_name, medal_id, achieved_at])?;
+            if rows > 0 {
+                added += 1;
+            }
+        }
+        Ok(added)
+    })();
+
+    match res {
+        Ok(added) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(added)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
+}
+
+pub fn get_user_medals(conn: &Connection, player_name: &str) -> SqlResult<Vec<UserMedalRecord>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT medal_id, achieved_at FROM user_medals WHERE player_name = ?1 ORDER BY achieved_at DESC, medal_id ASC",
+    )?;
+    let rows = stmt.query_map(params![player_name], |row| {
+        Ok(UserMedalRecord {
+            medal_id: row.get(0)?,
+            achieved_at: row.get(1)?,
+        })
+    })?;
+    let mut medals = Vec::new();
+    for m in rows {
+        medals.push(m?);
+    }
+    Ok(medals)
+}
+
+pub fn get_user_medal_count(conn: &Connection, player_name: &str) -> SqlResult<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM user_medals WHERE player_name = ?1",
+        params![player_name],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
+pub fn has_user_medal(conn: &Connection, player_name: &str, medal_id: i32) -> SqlResult<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM user_medals WHERE player_name = ?1 AND medal_id = ?2)",
+        params![player_name, medal_id],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1780,6 +1878,51 @@ mod tests {
 
         // Same-name rename is no-op
         rename_profile(&conn, "AliceRenamed", "AliceRenamed").unwrap();
+    }
+
+    #[test]
+    fn test_user_medals_crud_batch_and_duplicates() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "Alice").unwrap();
+
+        assert_eq!(get_user_medal_count(&conn, "Alice").unwrap(), 0);
+        assert!(!has_user_medal(&conn, "Alice", 55).unwrap());
+
+        // Single add
+        let added = add_user_medal(&conn, "Alice", 55, 1000).unwrap();
+        assert!(added);
+        assert_eq!(get_user_medal_count(&conn, "Alice").unwrap(), 1);
+        assert!(has_user_medal(&conn, "Alice", 55).unwrap());
+
+        // Duplicate add ignored
+        let added_dup = add_user_medal(&conn, "Alice", 55, 2000).unwrap();
+        assert!(!added_dup);
+        assert_eq!(get_user_medal_count(&conn, "Alice").unwrap(), 1);
+
+        // Batch add with duplicates and new items
+        let batch = vec![
+            (55, 3000), // already present
+            (56, 1100),
+            (63, 1200),
+        ];
+        let count_added = add_user_medals_batch(&conn, "Alice", &batch).unwrap();
+        assert_eq!(count_added, 2);
+        assert_eq!(get_user_medal_count(&conn, "Alice").unwrap(), 3);
+
+        let medals = get_user_medals(&conn, "Alice").unwrap();
+        assert_eq!(medals.len(), 3);
+        // Ordered by achieved_at DESC, medal_id ASC
+        assert_eq!(medals[0].medal_id, 63); // 1200
+        assert_eq!(medals[1].medal_id, 56); // 1100
+        assert_eq!(medals[2].medal_id, 55); // 1000 (kept original timestamp)
+
+        // Test rename cascade on user medals
+        ensure_profile(&conn, "Bob").unwrap();
+        rename_profile(&conn, "Alice", "AliceRenamed").unwrap();
+        assert_eq!(get_user_medal_count(&conn, "Alice").unwrap(), 0);
+        assert_eq!(get_user_medal_count(&conn, "AliceRenamed").unwrap(), 3);
+        assert!(has_user_medal(&conn, "AliceRenamed", 55).unwrap());
     }
 
     #[test]

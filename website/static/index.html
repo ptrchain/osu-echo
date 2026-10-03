@@ -4,7 +4,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>player info · Local osu!</title>
 <link rel="stylesheet" href="/site/static/vendor/osu-web.css">
-<link rel="stylesheet" href="/site/static/profile.css?v=los5">
+<link rel="stylesheet" href="/site/static/profile.css?v=los8">
 <script src="/site/static/profile.js?v=los4" defer></script>
 </head>
 <body class="t-user">
@@ -22,11 +22,16 @@
   <div id="profile-content" hidden>
     <section id="profile" class="profile-overview">
       <div class="profile-info profile-info--cover">
-        <div class="profile-info__bg local-cover"></div>
+        <div class="profile-info__bg local-cover">
+          <div class="profile-page-cover-editor-button">
+            <button type="button" id="edit-profile" class="btn-circle local-details-edit" title="Edit profile" aria-label="Edit profile" hidden>
+              <i class="fas fa-pencil-alt" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
         <div class="profile-info__details">
           <div class="profile-info__avatar"><img id="avatar" alt="" class="profile-avatar"></div>
           <div class="profile-info__info"><h1 class="profile-info__name" id="username"></h1><div class="profile-info__flags"><a id="profile-country" class="profile-info__flag" target="_blank" rel="noreferrer" style="display:none"></a><span id="presence" class="presence"></span></div></div>
-          <button type="button" id="edit-profile" class="los-profile-edit" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i> Edit profile</button>
         </div>
       </div>
       <div class="profile-detail">
@@ -63,7 +68,7 @@
     </section>
     <nav class="section-tabs" aria-label="Profile sections"><a href="#me" class="selected">me!</a><a href="#top-ranks">Scores</a><a href="#historical">Historical</a><a href="#beatmaps">Beatmaps</a><a href="#medals">Medals</a><a href="#recent-activity">Recent</a></nav>
     <div class="user-profile-pages">
-      <section id="me" class="page-extra page-extra--userpage"><h2 class="title title--page-extra">me!</h2><div class="page-extra__actions"><button id="edit-about" class="local-details-edit" type="button" aria-label="Edit me! section" title="Edit me!" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i></button></div><div class="page-extra__content-overflow-wrapper-outer"><div class="page-extra__content-overflow-wrapper-inner"><div id="about-content" class="about-content bbcode"></div></div></div></section>
+      <section id="me" class="page-extra page-extra--userpage"><h2 class="title title--page-extra">me!</h2><div class="page-extra__actions"><button id="edit-about" class="btn-circle local-details-edit" type="button" aria-label="Edit me! section" title="Edit me!" hidden><i class="fas fa-pencil-alt" aria-hidden="true"></i></button></div><div class="page-extra__content-overflow-wrapper-outer"><div class="page-extra__content-overflow-wrapper-inner"><div id="about-content" class="about-content bbcode"></div></div></div></section>
       <section id="top-ranks" class="page-extra"><h2 class="title title--page-extra">Scores</h2><div class="section-content"><h3 class="title title--page-extra-small">Pinned Scores <span class="title__count">0</span></h3><h3 class="title title--page-extra-small">Best Performance <span id="top-count" class="title__count">0</span></h3><div id="top-scores" class="play-detail-list"></div><button id="more-top" class="show-more" type="button" hidden><i class="fas fa-angle-down" aria-hidden="true"></i> SHOW MORE <i class="fas fa-angle-down" aria-hidden="true"></i></button></div></section>
       <section id="historical" class="page-extra"><h2 class="title title--page-extra">Historical</h2><div class="section-content"><h3 class="title title--page-extra-small">Play History</h3><div id="play-history" class="history-chart"></div><h3 class="title title--page-extra-small">Most Played Beatmaps <span id="most-count" class="title__count"></span></h3><div id="most-played"></div><button id="more-most" class="show-more" type="button" hidden>⌄ SHOW MORE ⌄</button><h3 class="title title--page-extra-small">Recent Plays (24h) <span id="recent-count" class="title__count">0</span></h3><div id="recent-scores" class="play-detail-list"></div><button id="more-recent" class="show-more" type="button" hidden><i class="fas fa-angle-down" aria-hidden="true"></i> SHOW MORE <i class="fas fa-angle-down" aria-hidden="true"></i></button></div></section>
       <section id="beatmaps" class="page-extra"><h2 class="title title--page-extra">Beatmaps</h2><p class="section-empty">Beatmap ownership is not recorded by this local server.</p></section>
