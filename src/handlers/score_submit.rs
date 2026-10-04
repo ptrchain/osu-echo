@@ -227,6 +227,25 @@ pub fn build_charts(
     format!("{}\n{}\n{}", meta, beatmap_chart, overall_chart).into_bytes()
 }
 
+fn format_achievements_new(medal_ids: &[i32]) -> Option<String> {
+    let entries: Vec<String> = medal_ids
+        .iter()
+        .filter_map(|&id| {
+            get_medal_by_id(id).map(|m| {
+                let clean_name = m.name.replace('+', " ").replace('/', "-").replace('|', "-");
+                let clean_desc = m.description.replace('+', " ").replace('/', "-").replace('|', "-").replace('\n', " ");
+                format!("{}+{}+{}", m.icon_url, clean_name, clean_desc)
+            })
+        })
+        .collect();
+
+    if entries.is_empty() {
+        None
+    } else {
+        Some(entries.join("/"))
+    }
+}
+
 pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: DecodedSubmission) -> Result<Vec<u8>, String> {
     let s = state.read().await;
     let player = s.player.as_ref().ok_or_else(|| "No player logged in".to_string())?;
@@ -380,15 +399,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             prev_pp_str, prev_pp_str,
         );
 
-        let achievements_slugs: Vec<&str> = newly_unlocked_medals
-            .iter()
-            .filter_map(|&id| get_medal_by_id(id).map(|m| m.icon_url.as_str()))
-            .collect();
-        let achievements_str = if achievements_slugs.is_empty() {
-            None
-        } else {
-            Some(achievements_slugs.join("/"))
-        };
+        let achievements_str = format_achievements_new(&newly_unlocked_medals);
 
         let overall_chart = format!(
             "chartId:overall|chartUrl:http://127.0.0.1:5000/u/2|chartName:Overall Ranking|rankBefore:{}|rankAfter:{}|rankedScoreBefore:{}|rankedScoreAfter:{}|totalScoreBefore:{}|totalScoreAfter:{}|maxComboBefore:{}|maxComboAfter:{}|accuracyBefore:{:.2}|accuracyAfter:{:.2}|ppBefore:{:.0}|ppAfter:{:.0}|achievements-new:{}|onlineScoreId:0",
@@ -669,15 +680,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             max_combo: overall_max_before.max(score.max_combo),
         };
 
-        let achievements_slugs: Vec<&str> = newly_unlocked_medals
-            .iter()
-            .filter_map(|&id| get_medal_by_id(id).map(|m| m.icon_url.as_str()))
-            .collect();
-        let achievements_str = if achievements_slugs.is_empty() {
-            None
-        } else {
-            Some(achievements_slugs.join("/"))
-        };
+        let achievements_str = format_achievements_new(&newly_unlocked_medals);
 
         let charts = build_charts(
             &bmap,
@@ -865,9 +868,9 @@ mod tests {
         assert!(chart_str_new.contains("maxComboBefore:800|maxComboAfter:950"));
 
         // Test achievements-new string populated in overall chart
-        let charts_medals = build_charts(&bmap, &score, &before, &after, None, None, Some(1), None, 5, Some("osu-combo-500/osu-skill-pass-1"));
+        let charts_medals = build_charts(&bmap, &score, &before, &after, None, None, Some(1), None, 5, Some("osu-combo-500+500 Combo+300,000 combo/osu-skill-pass-1+Rising Star+1 star pass"));
         let str_medals = String::from_utf8(charts_medals).unwrap();
-        assert!(str_medals.contains("achievements-new:osu-combo-500/osu-skill-pass-1|onlineScoreId:-10"));
+        assert!(str_medals.contains("achievements-new:osu-combo-500+500 Combo+300,000 combo/osu-skill-pass-1+Rising Star+1 star pass|onlineScoreId:-10"));
     }
 
     #[tokio::test]
@@ -1360,11 +1363,10 @@ mod tests {
         assert!(charts_str.contains("achievements-new:"));
         // 500 combo is osu-combo-500
         assert!(charts_str.contains("osu-combo-500"));
-        // 1★, 2★, 3★ passes: osu-skill-pass-1, 2, 3
-        assert!(charts_str.contains("osu-skill-pass-1"));
+        // On a 3.2★ map, only 3★ pass/FC are awarded, not 1★ or 2★
+        assert!(!charts_str.contains("osu-skill-pass-1"));
         assert!(charts_str.contains("osu-skill-pass-3"));
-        // 1★, 2★, 3★ FCs: osu-skill-fc-1, 2, 3
-        assert!(charts_str.contains("osu-skill-fc-1"));
+        assert!(!charts_str.contains("osu-skill-fc-1"));
         assert!(charts_str.contains("osu-skill-fc-3"));
 
         // Verify database persistence
@@ -1373,11 +1375,11 @@ mod tests {
         let medals = db::get_user_medals(&db_conn, "Kyrie").unwrap();
         assert!(!medals.is_empty());
         let medal_ids: Vec<i32> = medals.iter().map(|m| m.medal_id).collect();
-        assert!(medal_ids.contains(&1)); // 500 combo
-        assert!(medal_ids.contains(&55)); // 1 star pass
-        assert!(medal_ids.contains(&57)); // 3 star pass
-        assert!(medal_ids.contains(&63)); // 1 star FC
-        assert!(medal_ids.contains(&65)); // 3 star FC
+        assert!(medal_ids.contains(&1));  // 500 combo
+        assert!(!medal_ids.contains(&55)); // 1 star pass NOT awarded for 3.2★
+        assert!(medal_ids.contains(&57));  // 3 star pass
+        assert!(!medal_ids.contains(&63)); // 1 star FC NOT awarded for 3.2★
+        assert!(medal_ids.contains(&65));  // 3 star FC
 
         // Verify in-game notifications and chat announcements queued
         let p = s.player.as_ref().unwrap();
@@ -1386,8 +1388,8 @@ mod tests {
         // 1 score submit notification (toast)
         assert_eq!(notif_count, 1);
         let msg_count = pkts.iter().filter(|pkt| pkt.id == packets::PacketId::ChoSendMessage as u16).count();
-        // Announcements in #osu for each unlocked medal
-        assert!(msg_count >= 5);
+        // Announcements in #osu for each unlocked medal (500 combo, 3★ pass, 3★ FC)
+        assert!(msg_count >= 3);
     }
 }
 
