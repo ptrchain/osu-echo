@@ -315,7 +315,8 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
                 .map(|m| m.medal_id)
                 .collect();
             let bmap_ref = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None).unwrap_or_else(Beatmap::blank);
-            let new_ids = medals::evaluate_score_submission(&sub.score, &bmap_ref, None, pc, &existing_medals, false);
+            let mode_hits = db::get_mode_total_hits(&db_conn, &player_name, sub.score.mode).unwrap_or(0);
+            let new_ids = medals::evaluate_score_submission(&sub.score, &bmap_ref, None, pc, mode_hits, &existing_medals, false);
             if !new_ids.is_empty() {
                 let now = chrono::Utc::now().timestamp();
                 let batch: Vec<(i32, i64)> = new_ids.iter().map(|&id| (id, now)).collect();
@@ -408,10 +409,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             p.playcount = playcount;
             for &id in &newly_unlocked_medals {
                 if let Some(m) = get_medal_by_id(id) {
-                    let toast = format!("🏅 Medal Unlocked: {}\n{}", m.name, m.description);
-                    p.queue.extend_from_slice(&packets::notification(&toast));
-
-                    let chat_announcement = format!("🎉 {} unlocked the medal: [{}] — {}", p.name, m.name, m.description);
+                    let chat_announcement = format!("{} unlocked the medal: [{}] — {}", p.name, m.name, m.description);
                     p.queue.extend_from_slice(&packets::local_message(&chat_announcement, "#osu"));
                 }
             }
@@ -590,7 +588,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
     };
 
     let bmap_status = leaderboard::status_to_db_key(bmap.approved);
-    let newly_unlocked_medals = {
+    let (mut newly_unlocked_medals, existing_medals) = {
         let db_conn = s.db.lock().await;
         let _ = db::increment_playcount(&db_conn, &player_name);
         match db::insert_score(&db_conn, &score, bmap_status) {
@@ -609,13 +607,14 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             .map(|m| m.medal_id)
             .collect();
         let pc = db::get_playcount(&db_conn, &player_name).unwrap_or(1);
-        let new_ids = medals::evaluate_score_submission(&score, &bmap, parsed_map.as_ref(), pc, &existing_medals, true);
+        let mode_hits = db::get_mode_total_hits(&db_conn, &player_name, score.mode).unwrap_or(0);
+        let new_ids = medals::evaluate_score_submission(&score, &bmap, parsed_map.as_ref(), pc, mode_hits, &existing_medals, true);
         if !new_ids.is_empty() {
             let now = chrono::Utc::now().timestamp();
             let batch: Vec<(i32, i64)> = new_ids.iter().map(|&id| (id, now)).collect();
             let _ = db::add_user_medals_batch(&db_conn, &player_name, &batch);
         }
-        new_ids
+        (new_ids, existing_medals)
     };
     drop(s);
 
@@ -628,6 +627,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let http = s.http.clone();
         let discord_webhook_url = s.config.discord_webhook_url.clone();
         let discord_webhook_min_pp = s.config.discord_webhook_min_pp;
+        let db_arc = s.db.clone();
         drop(db_conn);
         drop(s);
 
@@ -645,6 +645,19 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let player = s_write.player.as_mut().unwrap();
         if let Some(r) = rank {
             player.rank = r;
+            let rank_ids = medals::evaluate_rank_medals(r, &existing_medals);
+            for id in rank_ids {
+                if !newly_unlocked_medals.contains(&id) {
+                    newly_unlocked_medals.push(id);
+                }
+            }
+        }
+
+        if !newly_unlocked_medals.is_empty() {
+            let conn = db_arc.lock().await;
+            let now = chrono::Utc::now().timestamp();
+            let batch: Vec<(i32, i64)> = newly_unlocked_medals.iter().map(|&id| (id, now)).collect();
+            let _ = db::add_user_medals_batch(&conn, &player_name, &batch);
         }
 
         let after_stats = ProfileStats {
@@ -694,10 +707,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
         for &id in &newly_unlocked_medals {
             if let Some(m) = get_medal_by_id(id) {
-                let toast = format!("🏅 Medal Unlocked: {}\n{}", m.name, m.description);
-                player.queue.extend_from_slice(&packets::notification(&toast));
-
-                let chat_announcement = format!("🎉 {} unlocked the medal: [{}] — {}", player.name, m.name, m.description);
+                let chat_announcement = format!("{} unlocked the medal: [{}] — {}", player.name, m.name, m.description);
                 player.queue.extend_from_slice(&packets::local_message(&chat_announcement, "#osu"));
                 if enable_recent {
                     player.queue.extend_from_slice(&packets::local_message(&chat_announcement, "#recent"));
@@ -1369,12 +1379,15 @@ mod tests {
         assert!(medal_ids.contains(&63)); // 1 star FC
         assert!(medal_ids.contains(&65)); // 3 star FC
 
-        // Verify in-game notifications queued
+        // Verify in-game notifications and chat announcements queued
         let p = s.player.as_ref().unwrap();
         let pkts = packets::split_packets(&p.queue);
         let notif_count = pkts.iter().filter(|pkt| pkt.id == packets::PacketId::ChoNotification as u16).count();
-        // At least 1 score submit notification + notifications for each medal
-        assert!(notif_count >= 5);
+        // 1 score submit notification (toast)
+        assert_eq!(notif_count, 1);
+        let msg_count = pkts.iter().filter(|pkt| pkt.id == packets::PacketId::ChoSendMessage as u16).count();
+        // Announcements in #osu for each unlocked medal
+        assert!(msg_count >= 5);
     }
 }
 

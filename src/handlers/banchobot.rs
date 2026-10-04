@@ -1613,7 +1613,7 @@ pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, tar
     };
 
     let medal_msg = if !newly_earned.is_empty() {
-        format!(" 🎉 Earned {} new medal(s)!", newly_earned.len())
+        format!(" Earned {} new medal(s)!", newly_earned.len())
     } else {
         String::new()
     };
@@ -1647,7 +1647,7 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                     if let Some(ref mut player) = s.player {
                         for &id in &newly_earned {
                             if let Some(m) = crate::types::medal::get_medal_by_id(id) {
-                                let toast = format!("🏅 Medal Unlocked: {}\n{}", m.name, m.description);
+                                let toast = format!("Medal Unlocked: {}\n{}", m.name, m.description);
                                 player.queue.extend_from_slice(&packets::notification(&toast));
                             }
                         }
@@ -1655,29 +1655,44 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 }
 
                 let reply_msg = format!(
-                    "🎉 Medal sync complete! Unlocked {} new medal(s)! Total: {} / 352 medals.",
+                    "Medal sync complete! Unlocked {} new medal(s)! Total: {} / 352 medals.",
                     newly_earned.len(),
                     total_count
                 );
                 reply(state, target, &reply_msg).await;
             } else {
                 let reply_msg = format!(
-                    "🏅 Medals are up to date! Total: {} / 352 medals.",
+                    "Medals are up to date! Total: {} / 352 medals.",
                     total_count
                 );
                 reply(state, target, &reply_msg).await;
             }
         }
         _ => {
-            let total_unlocked = {
+            let (total_unlocked, skill_cnt, hush_cnt, mod_cnt, packs_cnt) = {
                 let s = state.read().await;
                 let conn = s.db.lock().await;
-                db::get_user_medal_count(&conn, player_name).unwrap_or(0)
+                let list = db::get_user_medals(&conn, player_name).unwrap_or_default();
+                let mut s_c = 0;
+                let mut h_c = 0;
+                let mut m_c = 0;
+                let mut p_c = 0;
+                for rec in &list {
+                    if let Some(def) = crate::types::medal::get_medal_by_id(rec.medal_id) {
+                        match def.category {
+                            crate::types::medal::MedalCategory::SkillDedication => s_c += 1,
+                            crate::types::medal::MedalCategory::HushHush => h_c += 1,
+                            crate::types::medal::MedalCategory::ModIntroduction => m_c += 1,
+                            crate::types::medal::MedalCategory::BeatmapPacks => p_c += 1,
+                        }
+                    }
+                }
+                (list.len(), s_c, h_c, m_c, p_c)
             };
             let pct = (total_unlocked as f64 / 352.0) * 100.0;
             let msg = format!(
-                "🏅 Medals for {}: {} / 352 unlocked ({:.1}%). Use '!medals sync' to retroactively scan all your scores.",
-                player_name, total_unlocked, pct
+                "Medals for {}: {} / 352 unlocked ({:.1}%)\nSkill: {}/96 | Hush-Hush: {}/134 | Mod Intro: {}/13 | Packs: {}/109\nTip: Use '!medals sync' to retroactively scan all your scores.",
+                player_name, total_unlocked, pct, skill_cnt, hush_cnt, mod_cnt, packs_cnt
             );
             reply(state, target, &msg).await;
         }

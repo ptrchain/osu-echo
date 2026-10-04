@@ -1350,6 +1350,15 @@ pub fn has_user_medal(conn: &Connection, player_name: &str, medal_id: i32) -> Sq
     Ok(exists)
 }
 
+pub fn get_mode_total_hits(conn: &Connection, player_name: &str, mode: i32) -> SqlResult<i64> {
+    let hits: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(n300 + n100 + n50 + ngeki + nkatu), 0) FROM scores WHERE player_name = ?1 AND mode = ?2",
+        params![player_name, mode],
+        |row| row.get(0),
+    )?;
+    Ok(hits)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

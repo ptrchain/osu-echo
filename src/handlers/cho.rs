@@ -598,6 +598,30 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         });
     }
 
+    // Auto-sync medals asynchronously on login so historical or newly added medals trigger toast notifications
+    {
+        let state_medals_clone = Arc::clone(&state);
+        let profile_medals_name = profile_name.clone();
+        tokio::spawn(async move {
+            let newly_earned = {
+                let s = state_medals_clone.read().await;
+                let conn = s.db.lock().await;
+                crate::handlers::medals::retroactive_eval_profile(&conn, &profile_medals_name).unwrap_or_default()
+            };
+            if !newly_earned.is_empty() {
+                let mut s = state_medals_clone.write().await;
+                if let Some(ref mut p) = s.player {
+                    for &id in &newly_earned {
+                        if let Some(m) = crate::types::medal::get_medal_by_id(id) {
+                            let toast = format!("Medal Unlocked: {}\n{}", m.name, m.description);
+                            p.queue.extend_from_slice(&packets::notification(&toast));
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     body.extend_from_slice(&packets::user_id(player.userid));
     body.extend_from_slice(&packets::notification("Welcome to local bancho! (^-^)/"));
     body.extend_from_slice(&packets::protocol_version(19));
