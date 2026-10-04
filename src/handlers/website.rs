@@ -171,6 +171,8 @@ pub struct ProfileResponse {
     pub play_history: Vec<(String, i32)>,
     pub most_played: Vec<MostPlayedEntry>,
     pub recent_24h: Vec<PublicScore>,
+    #[serde(default)]
+    pub medals: Vec<crate::types::medal::UserMedalDisplay>,
 }
 
 pub fn now_secs() -> u64 {
@@ -1071,6 +1073,20 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         let _ = db::record_rank_snapshot(&conn, name, mode_id, rank);
     }
     let rank_history = db::get_rank_history(&conn, name, mode_id, 90).unwrap_or_default();
+    let user_medals = db::get_user_medals(&conn, name).unwrap_or_default();
+    let medals_display: Vec<crate::types::medal::UserMedalDisplay> = user_medals
+        .into_iter()
+        .filter_map(|rec| {
+            crate::types::medal::get_medal_by_id(rec.medal_id).map(|def| crate::types::medal::UserMedalDisplay {
+                id: def.id,
+                name: def.name.clone(),
+                description: def.description.clone(),
+                category: def.category.as_str().to_string(),
+                icon_url: def.icon_url.clone(),
+                achieved_at: rec.achieved_at,
+            })
+        })
+        .collect();
     drop(conn);
     drop(state_guard);
 
@@ -1098,6 +1114,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         play_history,
         most_played,
         recent_24h: recent_24h_public,
+        medals: medals_display,
     })
 }
 
@@ -2107,6 +2124,7 @@ mod tests {
             submission_identity: None,
         };
         crate::db::insert_score(&conn, &s_rx, "ranked").unwrap();
+        crate::db::add_user_medal(&conn, "Alice", 1, 1700000000).unwrap();
 
         let app_state = AppState::new(conn, crate::types::config::Config::default());
         let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
@@ -2133,6 +2151,10 @@ mod tests {
         assert_eq!(data.ranked_score, 2050000);
         assert_eq!(data.total_score, 2050000);
         assert_eq!(data.most_played.len(), 2);
+        assert_eq!(data.medals.len(), 1);
+        assert_eq!(data.medals[0].id, 1);
+        assert_eq!(data.medals[0].name, "500 Combo");
+        assert_eq!(data.medals[0].category, "Skill & Dedication");
 
         // Test RX mode
         let mut params_rx = HashMap::new();

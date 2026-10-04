@@ -92,6 +92,49 @@ function renderScores() {
   $('more-top').hidden = p.top.length <= state.topLimit;
   $('more-recent').hidden = recent.length <= state.recentLimit;
 }
+
+function renderMedals() {
+  const medals = state.profile?.medals || [];
+  const container = $('medals-content');
+  if (!container) return;
+
+  if (!medals.length) {
+    container.innerHTML = '<p class="empty-inline">No medals unlocked yet. Play beatmaps to earn achievements!</p>';
+    return;
+  }
+
+  const categories = ['Skill & Dedication', 'Hush-Hush', 'Mod Introduction', 'Beatmap Packs'];
+  const grouped = {};
+  for (const cat of categories) {
+    grouped[cat] = [];
+  }
+  for (const m of medals) {
+    if (!grouped[m.category]) {
+      grouped[m.category] = [];
+    }
+    grouped[m.category].push(m);
+  }
+
+  let html = '';
+  for (const cat of categories) {
+    const list = grouped[cat] || [];
+    if (!list.length) continue;
+    html += `<div class="medals-category">`;
+    html += `<h3 class="title title--page-extra-small">${esc(cat)} <span class="title__count">${num(list.length)}</span></h3>`;
+    html += `<div class="medals-grid">`;
+    for (const m of list) {
+      const dateStr = m.achieved_at ? new Date(m.achieved_at * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+      const tooltip = `${esc(m.name)}\n${esc(m.description)}${dateStr ? '\nUnlocked: ' + esc(dateStr) : ''}`;
+      html += `<div class="medal-badge" title="${tooltip}">`;
+      html += `<div class="medal-badge__icon-wrapper"><img class="medal-badge__icon" src="https://assets.ppy.sh/medals/web/${esc(m.icon_url)}.png" alt="${esc(m.name)}" loading="lazy" onerror="this.onerror=null;this.src='https://assets.ppy.sh/medals/web/@2x/${esc(m.icon_url)}@2x.png';"></div>`;
+      html += `<div class="medal-badge__info"><span class="medal-badge__name">${esc(m.name)}</span><small class="medal-badge__date">${esc(dateStr)}</small></div>`;
+      html += `</div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  container.innerHTML = html || '<p class="empty-inline">No medals unlocked yet.</p>';
+}
 // Stable level thresholds: osu! rounds each score increment individually.
 // https://osu.ppy.sh/wiki/en/Gameplay/Score/Total_score
 function scoreLevel(total) {
@@ -274,6 +317,10 @@ function renderProfile() {
     return `<div class="profile-rank-count__item"><div class="profile-rank-count__rank"><div class="score-rank score-rank--${grade} score-rank--rank-${label.toLowerCase()}" role="img" aria-label="${label}"></div></div><span>${num(count)}</span></div>`;
   }).join('');
   $('activity').innerHTML = p.recent.length ? p.recent.slice(0,5).map(s=>`<div class="activity-row"><span class="score-rank score-rank--tiny score-rank--${esc(s.grade)}" aria-label="Grade ${esc(s.grade)}"></span><div><b>${esc(p.name)}</b> played <a ${Number(s.beatmap.beatmap_id)>0?`href="https://osu.ppy.sh/beatmaps/${Number(s.beatmap.beatmap_id)}" target="_blank" rel="noreferrer"`:''}>${esc(s.beatmap.title||'an unknown beatmap')} [${esc(s.beatmap.version||'?')}]</a> with <b>${num(s.pp)}pp</b></div><time>${relative(s.time)}</time></div>`).join('') : '<p class="empty-inline">No recent activity.</p>';
+  const medalsCount = (p.medals && p.medals.length) || 0;
+  if ($('medals-count')) $('medals-count').textContent = num(medalsCount);
+  if ($('medals-count-badge')) $('medals-count-badge').textContent = num(medalsCount);
+  renderMedals();
   renderPerformanceGraph();
   requestAnimationFrame(updateSection);
   renderScores(); renderHistory(); renderMostPlayed();

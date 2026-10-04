@@ -80,3 +80,24 @@ body{margin:0;background:hsl(var(--hsl-b6));color:#fff;font-family:Torus,Arial,s
 .import-status.success{color:#b4e67a}
 .import-status.error{color:#ffb0ba}
 .import-status.loading{color:hsl(var(--hsl-l1))}
+
+/* Medals section aesthetics matching official osu!web */
+.medals-category{margin-bottom:24px}
+.medals-category:last-child{margin-bottom:0}
+.medals-grid{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0 20px}
+.medal-badge{display:flex;flex-direction:column;align-items:center;width:86px;text-align:center;cursor:pointer;transition:transform .15s ease}
+.medal-badge:hover{transform:translateY(-3px) scale(1.04)}
+.medal-badge__icon-wrapper{width:70px;height:70px;display:flex;align-items:center;justify-content:center;position:relative}
+.medal-badge__icon{width:66px;height:66px;object-fit:contain;filter:drop-shadow(0 3px 6px rgba(0,0,0,0.45));transition:filter .15s ease}
+.medal-badge:hover .medal-badge__icon{filter:drop-shadow(0 5px 12px rgba(255,102,170,0.45))}
+.medal-badge__info{margin-top:6px;width:100%}
+.medal-badge__name{font-size:11px;font-weight:600;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:#fff}
+.medal-badge__date{font-size:10px;color:hsl(var(--hsl-f1));display:block;margin-top:2px}
+@media(max-width:599px){
+  .medals-grid{gap:10px}
+  .medal-badge{width:72px}
+  .medal-badge__icon-wrapper{width:58px;height:58px}
+  .medal-badge__icon{width:54px;height:54px}
+  .medal-badge__name{font-size:10px}
+}
+

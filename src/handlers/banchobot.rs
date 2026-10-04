@@ -39,6 +39,7 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "love" => handle_set_status(state, reply_target, args, 4, "Loved").await,
         "unrank" => handle_set_status(state, reply_target, args, 0, "Unranked").await,
         "friend" => handle_friend(state, player_name, reply_target, args).await,
+        "medals" | "medal" => handle_medals(state, player_name, reply_target, args).await,
         "recalc" | "recalculate" => handle_recalc(state, player_name, reply_target).await,
         "wipe" => handle_wipe(state, player_name, reply_target).await,
         "avatar" => handle_avatar(state, player_name, reply_target, args).await,
@@ -72,6 +73,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}recent / {p}r : Show your recent play\n\
         {p}tops / {p}t : Show top 5 plays\n\
         {p}stats / {p}profile : Show player stats\n\
+        {p}medals [sync] : Show medal progress or sync retroactively from saved scores\n\
         {p}mybest / {p}pb : Show your best score on the current map\n\
         {p}leaderboard / {p}lb : Show top scores on current map\n\
         {p}clearscores / {p}clearmap [set] : Clear your scores on the current beatmap (or set)\n\
@@ -115,9 +117,14 @@ pub async fn handle_stats(state: &Arc<RwLock<AppState>>, player_name: &str, targ
         _ => "",
     };
 
+    let medal_count = {
+        let conn = s.db.lock().await;
+        db::get_user_medal_count(&conn, player_name).unwrap_or(0)
+    };
+
     let msg = format!(
-        "Stats for {} ({}{}) | Rank: #{} | PP: {}pp | Acc: {:.2}% | Plays: {} | Ranked Score: {}",
-        player_name, mode_name, mod_suffix, player.rank, player.pp, player.acc, player.playcount, player.ranked_score
+        "Stats for {} ({}{}) | Rank: #{} | PP: {}pp | Acc: {:.2}% | Plays: {} | Medals: {}/352 | Ranked Score: {}",
+        player_name, mode_name, mod_suffix, player.rank, player.pp, player.acc, player.playcount, medal_count, player.ranked_score
     );
 
     drop(s);
@@ -1598,11 +1605,83 @@ pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &st
 
 pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
     let (count, new_pp, new_acc) = recalculate_profile(state, player_name).await;
+
+    let newly_earned = {
+        let s = state.read().await;
+        let conn = s.db.lock().await;
+        crate::handlers::medals::retroactive_eval_profile(&conn, player_name).unwrap_or_default()
+    };
+
+    let medal_msg = if !newly_earned.is_empty() {
+        format!(" 🎉 Earned {} new medal(s)!", newly_earned.len())
+    } else {
+        String::new()
+    };
+
     let msg = format!(
-        "Profile recalculation complete! Processed {} score(s). PP: {}pp | Acc: {:.2}%",
-        count, new_pp, new_acc
+        "Profile recalculation complete! Processed {} score(s). PP: {}pp | Acc: {:.2}%{}",
+        count, new_pp, new_acc, medal_msg
     );
     reply(state, target, &msg).await;
+}
+
+pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
+    let subcmd = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    match subcmd.as_str() {
+        "sync" | "recalc" | "scan" => {
+            let newly_earned = {
+                let s = state.read().await;
+                let conn = s.db.lock().await;
+                crate::handlers::medals::retroactive_eval_profile(&conn, player_name).unwrap_or_default()
+            };
+
+            let total_count = {
+                let s = state.read().await;
+                let conn = s.db.lock().await;
+                db::get_user_medal_count(&conn, player_name).unwrap_or(0)
+            };
+
+            if !newly_earned.is_empty() {
+                {
+                    let mut s = state.write().await;
+                    if let Some(ref mut player) = s.player {
+                        for &id in &newly_earned {
+                            if let Some(m) = crate::types::medal::get_medal_by_id(id) {
+                                let toast = format!("🏅 Medal Unlocked: {}\n{}", m.name, m.description);
+                                player.queue.extend_from_slice(&packets::notification(&toast));
+                            }
+                        }
+                    }
+                }
+
+                let reply_msg = format!(
+                    "🎉 Medal sync complete! Unlocked {} new medal(s)! Total: {} / 352 medals.",
+                    newly_earned.len(),
+                    total_count
+                );
+                reply(state, target, &reply_msg).await;
+            } else {
+                let reply_msg = format!(
+                    "🏅 Medals are up to date! Total: {} / 352 medals.",
+                    total_count
+                );
+                reply(state, target, &reply_msg).await;
+            }
+        }
+        _ => {
+            let total_unlocked = {
+                let s = state.read().await;
+                let conn = s.db.lock().await;
+                db::get_user_medal_count(&conn, player_name).unwrap_or(0)
+            };
+            let pct = (total_unlocked as f64 / 352.0) * 100.0;
+            let msg = format!(
+                "🏅 Medals for {}: {} / 352 unlocked ({:.1}%). Use '!medals sync' to retroactively scan all your scores.",
+                player_name, total_unlocked, pct
+            );
+            reply(state, target, &msg).await;
+        }
+    }
 }
 
 pub async fn handle_wipe(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
@@ -3097,5 +3176,55 @@ mod tests {
         });
         assert!(msg_found, "Must notify user that no map is selected");
     }
+
+    #[tokio::test]
+    async fn test_banchobot_medals_command() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "MedalBotTester").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("MedalBotTester".to_string());
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        // Test !medals info command
+        handle_command(&state, "MedalBotTester", "MedalBotTester", "medals", &[]).await;
+
+        let s = state.read().await;
+        let p = s.player.as_ref().unwrap();
+        let pkts = packets::split_packets(&p.queue);
+        let msg_found = pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Medals for MedalBotTester") && msg.contains("352")
+            } else {
+                false
+            }
+        });
+        assert!(msg_found, "Must return medal summary in response to !medals");
+        drop(s);
+
+        // Test !medals sync command
+        handle_command(&state, "MedalBotTester", "MedalBotTester", "medals", &["sync"]).await;
+        let s = state.read().await;
+        let p = s.player.as_ref().unwrap();
+        let pkts = packets::split_packets(&p.queue);
+        let sync_msg_found = pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Medals are up to date") || msg.contains("sync complete")
+            } else {
+                false
+            }
+        });
+        assert!(sync_msg_found, "Must return sync status in response to !medals sync");
+    }
 }
+
 

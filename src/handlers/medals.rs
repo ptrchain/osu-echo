@@ -70,53 +70,79 @@ pub fn evaluate_score_submission(
         }
     }
 
-    // 3. Star Rating Passes & FCs (Standard osu! mode 0)
-    if score.mode == 0 {
-        let stars = if let Some(parsed) = parsed_map {
-            rosu_pp::Difficulty::new().mods(score.mods).calculate(parsed).stars()
-        } else {
-            bmap.difficultyrating
-        };
+    let game_mode = match score.mode {
+        0 => rosu_pp::model::mode::GameMode::Osu,
+        1 => rosu_pp::model::mode::GameMode::Taiko,
+        2 => rosu_pp::model::mode::GameMode::Catch,
+        3 => rosu_pp::model::mode::GameMode::Mania,
+        _ => rosu_pp::model::mode::GameMode::Osu,
+    };
+    let stars = if let Some(parsed) = parsed_map {
+        rosu_pp::Performance::new(parsed)
+            .mode_or_ignore(game_mode)
+            .mods(score.mods)
+            .calculate()
+            .difficulty_attributes()
+            .stars()
+    } else {
+        bmap.difficultyrating
+    };
 
-        // 1★–10★ Passes: 55..=62, 242 (9★), 244 (10★)
-        let pass_medals = [
-            (1.0, 55),
-            (2.0, 56),
-            (3.0, 57),
-            (4.0, 58),
-            (5.0, 59),
-            (6.0, 60),
-            (7.0, 61),
-            (8.0, 62),
-            (9.0, 242),
-            (10.0, 244),
-        ];
-        for &(req_stars, medal_id) in &pass_medals {
+    // 3. Star Rating Passes & FCs (All 4 Game Modes: osu!standard, Taiko, Catch, Mania)
+    let pass_table: &[(f64, i32)] = match score.mode {
+        0 => &[
+            (1.0, 55), (2.0, 56), (3.0, 57), (4.0, 58), (5.0, 59),
+            (6.0, 60), (7.0, 61), (8.0, 62), (9.0, 242), (10.0, 244),
+        ],
+        1 => &[
+            (1.0, 71), (2.0, 72), (3.0, 73), (4.0, 74), (5.0, 75),
+            (6.0, 76), (7.0, 77), (8.0, 78),
+        ],
+        2 => &[
+            (1.0, 79), (2.0, 80), (3.0, 81), (4.0, 82), (5.0, 83),
+            (6.0, 84), (7.0, 85), (8.0, 86),
+        ],
+        3 => &[
+            (1.0, 87), (2.0, 88), (3.0, 89), (4.0, 90), (5.0, 91),
+            (6.0, 92), (7.0, 93), (8.0, 94),
+        ],
+        _ => &[],
+    };
+    for &(req_stars, medal_id) in pass_table {
+        if stars >= req_stars {
+            check_and_award(medal_id);
+        }
+    }
+
+    // FC detection
+    let is_fc = score.nmiss == 0 && match score.mode {
+        1 | 3 => true, // Taiko and Mania don't have sliderbreaks; 0 miss is FC
+        _ => score.perfect || bmap.max_combo == 0 || score.max_combo >= bmap.max_combo - 1,
+    };
+
+    if is_fc {
+        let fc_table: &[(f64, i32)] = match score.mode {
+            0 => &[
+                (1.0, 63), (2.0, 64), (3.0, 65), (4.0, 66), (5.0, 67),
+                (6.0, 68), (7.0, 69), (8.0, 70), (9.0, 243), (10.0, 245),
+            ],
+            1 => &[
+                (1.0, 95), (2.0, 96), (3.0, 97), (4.0, 98), (5.0, 99),
+                (6.0, 100), (7.0, 101), (8.0, 102),
+            ],
+            2 => &[
+                (1.0, 103), (2.0, 104), (3.0, 105), (4.0, 106), (5.0, 107),
+                (6.0, 108), (7.0, 109), (8.0, 110),
+            ],
+            3 => &[
+                (1.0, 111), (2.0, 112), (3.0, 113), (4.0, 114), (5.0, 115),
+                (6.0, 116), (7.0, 117), (8.0, 118),
+            ],
+            _ => &[],
+        };
+        for &(req_stars, medal_id) in fc_table {
             if stars >= req_stars {
                 check_and_award(medal_id);
-            }
-        }
-
-        // 1★–10★ FCs: 63..=70, 243 (9★), 245 (10★)
-        // FC requires no misses and no sliderbreaks (score.perfect or combo near map max)
-        let is_fc = score.nmiss == 0 && (score.perfect || bmap.max_combo == 0 || score.max_combo >= bmap.max_combo - 1);
-        if is_fc {
-            let fc_medals = [
-                (1.0, 63),
-                (2.0, 64),
-                (3.0, 65),
-                (4.0, 66),
-                (5.0, 67),
-                (6.0, 68),
-                (7.0, 69),
-                (8.0, 70),
-                (9.0, 243),
-                (10.0, 245),
-            ];
-            for &(req_stars, medal_id) in &fc_medals {
-                if stars >= req_stars {
-                    check_and_award(medal_id);
-                }
             }
         }
     }
@@ -166,6 +192,19 @@ pub fn evaluate_score_submission(
     // Nonstop: Beatmap drain / hit length >= 600s (10 min) and FC / no miss (ID 44)
     if bmap.hit_length >= 600 && score.nmiss == 0 {
         check_and_award(44);
+    }
+    // Stumbler: Passed with D rank (accuracy < 70%) (ID 40)
+    let acc = score.acc.unwrap_or(100.0);
+    if acc > 0.0 && acc < 70.0 {
+        check_and_award(40);
+    }
+    // Quick Draw: Passed a short beatmap (drain / hit length between 5s and 30s) (ID 42)
+    if bmap.hit_length >= 5 && bmap.hit_length <= 30 {
+        check_and_award(42);
+    }
+    // Afterimage: Passed a map with Hidden + HardRock (ID 136)
+    if score_mods.contains(Mods::HIDDEN | Mods::HARDROCK) {
+        check_and_award(136);
     }
 
     newly_earned
@@ -408,4 +447,35 @@ mod tests {
         let count = db::get_user_medal_count(&conn, "RetroTester").unwrap();
         assert_eq!(count, new_medals.len());
     }
+
+    #[test]
+    fn test_multimode_passes_and_secrets() {
+        let mut bmap = Beatmap::blank();
+        bmap.difficultyrating = 4.2;
+        bmap.hit_length = 25; // <= 30 -> Quick Draw (42)
+
+        let existing = HashSet::new();
+
+        // Taiko (mode 1) 4.2★ FC score
+        let mut s_taiko = make_test_score(200, 0, true, 0, 400000);
+        s_taiko.mode = 1;
+        let medals_taiko = evaluate_score_submission(&s_taiko, &bmap, None, 10, &existing, true);
+        assert!(medals_taiko.contains(&71)); // Taiko 1★ pass
+        assert!(medals_taiko.contains(&74)); // Taiko 4★ pass
+        assert!(!medals_taiko.contains(&75)); // Taiko 5★ pass
+        assert!(medals_taiko.contains(&95)); // Taiko 1★ FC
+        assert!(medals_taiko.contains(&98)); // Taiko 4★ FC
+        assert!(medals_taiko.contains(&42)); // Quick Draw
+
+        // Mania (mode 3) 4.2★ pass with D-rank (Stumbler)
+        let mut s_mania = make_test_score(150, 5, false, 0, 200000);
+        s_mania.mode = 3;
+        s_mania.acc = Some(65.0); // Stumbler (40)
+        let medals_mania = evaluate_score_submission(&s_mania, &bmap, None, 10, &existing, true);
+        assert!(medals_mania.contains(&87)); // Mania 1★ pass
+        assert!(medals_mania.contains(&90)); // Mania 4★ pass
+        assert!(!medals_mania.contains(&111)); // No FC
+        assert!(medals_mania.contains(&40)); // Stumbler
+    }
 }
+
