@@ -413,6 +413,198 @@ pub fn evaluate_score_submission(
         check_and_award(173);
     }
 
+    // Perseverance (ID 132): Pass beatmap with drain length >= 450s (7:30)
+    if bmap.hit_length >= 450 {
+        check_and_award(132);
+    }
+
+    // Feel The Burn (ID 133): FC beatmap with drain length >= 450s (7:30)
+    if bmap.hit_length >= 450 && is_fc {
+        check_and_award(133);
+    }
+
+    // Reckless Abandon (ID 140): FC on >= 3.0 stars with Sudden Death + Hard Rock
+    if is_fc && stars >= 3.0 && score_mods.contains(Mods::SUDDENDEATH | Mods::HARDROCK) {
+        check_and_award(140);
+    }
+
+    // Tunnel Vision (ID 141): Pass a map with Flashlight where max combo < 200 (map max combo >= 200)
+    if score_mods.contains(Mods::FLASHLIGHT) && score.max_combo < 200 && bmap.max_combo >= 200 {
+        check_and_award(141);
+    }
+
+    // Behold No Deception (ID 142): FC on >= 4.0 stars with Easy mod
+    if is_fc && stars >= 4.0 && score_mods.contains(Mods::EASY) {
+        check_and_award(142);
+    }
+
+    // High stat detection for Unstoppable (ID 145) and Is This Real Life? (ID 146)
+    let is_dthr = score_mods.contains(Mods::HARDROCK) && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE);
+    let bpm = bmap.bpm * if score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) { 1.5 } else { 1.0 };
+    let effective_ar = if is_dthr { bmap.diff_approach * 1.4 } else { bmap.diff_approach };
+    let effective_od = if is_dthr { bmap.diff_overall * 1.4 } else { bmap.diff_overall };
+    let effective_hp = if is_dthr { bmap.diff_drain * 1.4 } else { bmap.diff_drain };
+    let high_stats_cleared = (bmap.diff_approach >= 11.0 || effective_ar >= 10.5)
+        && (bmap.diff_overall >= 11.0 || effective_od >= 10.5)
+        && (bmap.diff_drain >= 11.0 || effective_hp >= 10.5)
+        && (bpm >= 260.0 || bmap.bpm >= 260.0);
+
+    // Unstoppable (ID 145): Pass with AR, OD, HP >= 11 (or HR+DT on AR10/OD10/HP10) and BPM >= 260
+    if high_stats_cleared {
+        check_and_award(145);
+    }
+
+    // Is This Real Life? (ID 146): FC with the same conditions as Unstoppable
+    if is_fc && high_stats_cleared {
+        check_and_award(146);
+    }
+
+    // The Sum Of All Fears (ID 148): 1 miss, but otherwise full combo
+    if score.nmiss == 1 && bmap.max_combo > 0 && score.max_combo >= bmap.max_combo - 2 {
+        check_and_award(148);
+    }
+
+    // Dekasight (ID 149): FC on >= 3.0 stars with EZ + HD + FL
+    if is_fc && stars >= 3.0 && score_mods.contains(Mods::EASY | Mods::HIDDEN | Mods::FLASHLIGHT) {
+        check_and_award(149);
+    }
+
+    // Slow And Steady (ID 151): SS on >= 3.0 stars with HalfTime + PF/SD
+    if is_fc && acc >= 99.99 && stars >= 3.0 && score_mods.contains(Mods::HALFTIME) && score_mods.intersects(Mods::PERFECT | Mods::SUDDENDEATH) {
+        check_and_award(151);
+    }
+
+    // No Time To Spare (ID 152): FC on a map <= 30 seconds drain length with DT/NC
+    if is_fc && bmap.hit_length > 0 && bmap.hit_length <= 30 && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) {
+        check_and_award(152);
+    }
+
+    // Meticulous (ID 157): SS on >= 3.0 stars with EZ + PF/SD
+    if is_fc && acc >= 99.99 && stars >= 3.0 && score_mods.contains(Mods::EASY) && score_mods.intersects(Mods::PERFECT | Mods::SUDDENDEATH) {
+        check_and_award(157);
+    }
+
+    // Infinitesimal (ID 158): FC on CS >= 7.8 with HardRock
+    let effective_cs = if score_mods.contains(Mods::HARDROCK) { bmap.diff_size * 1.3 } else { bmap.diff_size };
+    if is_fc && score_mods.contains(Mods::HARDROCK) && effective_cs >= 7.8 {
+        check_and_award(158);
+    }
+
+    // Equilibrium (ID 159): Pass with equal 300s, 100s, and 50s (at least 15 each)
+    if score.n300 >= 15 && score.n300 == score.n100 && score.n100 == score.n50 {
+        check_and_award(159);
+    }
+
+    // Impeccable (ID 160): Pass on >= 4.0 stars with DT/NC + PF/SD
+    if stars >= 4.0 && is_fc && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) && score_mods.intersects(Mods::PERFECT | Mods::SUDDENDEATH) {
+        check_and_award(160);
+    }
+
+    // Elite (ID 161): Reach combo of 1337 on a map with stars >= 3.5, AR >= 8.0, OD >= 8.0, and map max combo >= 1500
+    if score.max_combo == 1337 && stars >= 3.5 && bmap.diff_approach >= 8.0 && bmap.diff_overall >= 8.0 && bmap.max_combo >= 1500 {
+        check_and_award(161);
+    }
+
+    // 50/50 (ID 168): Pass with exactly 50 "50" judgements
+    if score.n50 == 50 {
+        check_and_award(168);
+    }
+
+    // Twin Perspectives (ID 54): Mania mode pass with combo >= 100
+    if score.mode == 3 && score.max_combo >= 100 {
+        check_and_award(54);
+    }
+
+    // Up To Eleven (ID 352): FC on a map with AR >= 10.0, OD >= 10.0, HP >= 10.0
+    if is_fc && bmap.diff_approach >= 10.0 && bmap.diff_overall >= 10.0 && bmap.diff_drain >= 10.0 {
+        check_and_award(352);
+    }
+
+    // Ten To One (ID 268): Pass map with drain length >= 600s (10 min) or <= 60s (1 min)
+    if bmap.hit_length >= 600 || (bmap.hit_length > 0 && bmap.hit_length <= 60) {
+        check_and_award(268);
+    }
+
+    // Non-stop Dancer (ID 17): Pass "paraparaMAX I" without NoFail
+    if map_title_lower.contains("paraparamax i") && !score_mods.contains(Mods::NOFAIL) {
+        check_and_award(17);
+    }
+
+    // The Girl in the Forest (ID 171): Clear "Pika Girl" by S3RL with acc >= 95.0% and max combo == 151
+    if map_title_lower.contains("pika girl") && map_artist_lower.contains("s3rl") && acc >= 95.0 && score.max_combo == 151 {
+        check_and_award(171);
+    }
+
+    // The Firmament Moves (ID 174): Pass "Moonlight Sonata" by cYsmix with HD + HR + DT/NC
+    if map_title_lower.contains("moonlight sonata") && map_artist_lower.contains("cysmix") && score_mods.contains(Mods::HIDDEN | Mods::HARDROCK) && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) {
+        check_and_award(174);
+    }
+
+    // Skylord (ID 192): SS on "Sky" by James Portland
+    if map_title_lower == "sky" && map_artist_lower.contains("james portland") && is_fc && acc >= 99.99 {
+        check_and_award(192);
+    }
+
+    // B-Rave (ID 193): Pass "T&J" by Cranky with acc >= 80.0% without NF or EZ
+    if (map_title_lower.contains("t&j") || map_title_lower.contains("t & j")) && map_artist_lower.contains("cranky") && acc >= 80.0 && !score_mods.intersects(Mods::NOFAIL | Mods::EASY) {
+        check_and_award(193);
+    }
+
+    // Mirage (ID 195): FC "Relucent" by Culprate
+    if map_title_lower.contains("relucent") && map_artist_lower.contains("culprate") && is_fc {
+        check_and_award(195);
+    }
+
+    // Under The Stars (ID 196): Pass "Phonetic" or "Journey" by Left with HD + FL
+    if (map_title_lower.contains("phonetic") || map_title_lower.contains("journey")) && map_artist_lower.contains("left") && score_mods.contains(Mods::HIDDEN | Mods::FLASHLIGHT) {
+        check_and_award(196);
+    }
+
+    // Upon The Wind (ID 200): Pass "Hanaarashi" by Cranky with HD
+    if map_title_lower.contains("hanaarashi") && map_artist_lower.contains("cranky") && score_mods.contains(Mods::HIDDEN) {
+        check_and_award(200);
+    }
+
+    // Vantage (ID 201): Pass "Impulse" by Culprate or Au5
+    if map_title_lower.contains("impulse") && (map_artist_lower.contains("culprate") || map_artist_lower.contains("au5")) {
+        check_and_award(201);
+    }
+
+    // Efflorescence (ID 204): Pass "cherry blossoms explode across the dying horizon" by sakuraburst
+    if map_title_lower.contains("cherry blossoms explode") || (map_artist_lower.contains("sakuraburst") && map_title_lower.contains("dying horizon")) {
+        check_and_award(204);
+    }
+
+    // Inundate (ID 216): Pass "Waterflow" by tieff with DT/NC and acc >= 80.0%
+    if map_title_lower.contains("waterflow") && map_artist_lower.contains("tieff") && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) && acc >= 80.0 {
+        check_and_award(216);
+    }
+
+    // Kaleidoscope (ID 223): Pass "DIDJ PVC" by The Flashbulb with EZ + HT
+    if map_title_lower.contains("didj pvc") && map_artist_lower.contains("the flashbulb") && score_mods.contains(Mods::EASY | Mods::HALFTIME) {
+        check_and_award(223);
+    }
+
+    // AHAHAHAHA (ID 224): Pass any beatmap by artist "SOOO"
+    if map_artist_lower == "sooo" || map_artist_lower.contains("sooo") {
+        check_and_award(224);
+    }
+
+    // Mortal Coils (ID 297): Pass "The Deceit" or "The Violation" by Fleshgod Apocalypse
+    if (map_title_lower.contains("the deceit") || map_title_lower.contains("the violation")) && map_artist_lower.contains("fleshgod apocalypse") {
+        check_and_award(297);
+    }
+
+    // Dark Familiarity (ID 298): FC "Ghost Assassin" by Veela with HD + SD/PF
+    if is_fc && map_title_lower.contains("ghost assassin") && map_artist_lower.contains("veela") && score_mods.contains(Mods::HIDDEN) && score_mods.intersects(Mods::SUDDENDEATH | Mods::PERFECT) {
+        check_and_award(298);
+    }
+
+    // The Strongest Ice Fairy (ID 347): Pass "Extreme Sign \"Perfect Metal\"" or "Perfect Metal"
+    if map_title_lower.contains("perfect metal") {
+        check_and_award(347);
+    }
+
     newly_earned
 }
 
@@ -839,5 +1031,80 @@ mod tests {
         let medals_hdht = evaluate_score_submission(&s_hdht, &bmap, None, 10, 0, &existing, true);
         assert!(medals_hdht.contains(&136)); // Afterimage
     }
+
+    #[test]
+    fn test_new_important_medals() {
+        let existing = HashSet::new();
+
+        // 1. Perseverance (132) & Feel The Burn (133): hit_length >= 450s
+        let mut bmap_long = make_test_bmap(3.0);
+        bmap_long.hit_length = 460;
+        let s_long_pass = make_test_score(300, 1, false, 0, 500000);
+        let m_long_pass = evaluate_score_submission(&s_long_pass, &bmap_long, None, 10, 0, &existing, true);
+        assert!(m_long_pass.contains(&132)); // Perseverance
+        assert!(!m_long_pass.contains(&133)); // Not FC
+
+        let s_long_fc = make_test_score(500, 0, true, 0, 800000);
+        let m_long_fc = evaluate_score_submission(&s_long_fc, &bmap_long, None, 10, 0, &existing, true);
+        assert!(m_long_fc.contains(&132));
+        assert!(m_long_fc.contains(&133)); // Feel The Burn
+
+        // 2. Reckless Abandon (140): SD + HR on >= 3.0 stars FC
+        let sd_hr = (Mods::SUDDENDEATH | Mods::HARDROCK).bits();
+        let s_sdhr = make_test_score(500, 0, true, sd_hr, 800000);
+        let m_sdhr = evaluate_score_submission(&s_sdhr, &bmap_long, None, 10, 0, &existing, true);
+        assert!(m_sdhr.contains(&140));
+
+        // 3. Behold No Deception (142): EZ FC on >= 4.0 stars
+        let bmap_4star = make_test_bmap(4.2);
+        let s_ez = make_test_score(500, 0, true, Mods::EASY.bits(), 500000);
+        let m_ez = evaluate_score_submission(&s_ez, &bmap_4star, None, 10, 0, &existing, true);
+        assert!(m_ez.contains(&142));
+
+        // 4. Equilibrium (159): n300 == n100 == n50 >= 15
+        let mut s_eq = make_test_score(100, 0, false, 0, 100000);
+        s_eq.n300 = 25;
+        s_eq.n100 = 25;
+        s_eq.n50 = 25;
+        let m_eq = evaluate_score_submission(&s_eq, &bmap_4star, None, 10, 0, &existing, true);
+        assert!(m_eq.contains(&159));
+
+        // 5. 50/50 (168): n50 == 50
+        let mut s_50 = make_test_score(100, 0, false, 0, 100000);
+        s_50.n50 = 50;
+        let m_50 = evaluate_score_submission(&s_50, &bmap_4star, None, 10, 0, &existing, true);
+        assert!(m_50.contains(&168));
+
+        // 6. Twin Perspectives (54): Mania mode pass with combo >= 100
+        let mut s_mania_100 = make_test_score(120, 0, false, 0, 200000);
+        s_mania_100.mode = 3;
+        let m_mania = evaluate_score_submission(&s_mania_100, &bmap_4star, None, 10, 0, &existing, true);
+        assert!(m_mania.contains(&54));
+
+        // 7. Song secrets: Pika Girl (171), Mortal Coils (297), Moonlight Sonata (174)
+        let mut bmap_pika = make_test_bmap(3.0);
+        bmap_pika.title = "Pika Girl".to_string();
+        bmap_pika.artist = "S3RL".to_string();
+        let mut s_pika = make_test_score(151, 0, false, 0, 300000);
+        s_pika.acc = Some(96.5);
+        let m_pika = evaluate_score_submission(&s_pika, &bmap_pika, None, 10, 0, &existing, true);
+        assert!(m_pika.contains(&171));
+
+        let mut bmap_coils = make_test_bmap(7.0);
+        bmap_coils.title = "The Violation".to_string();
+        bmap_coils.artist = "Fleshgod Apocalypse".to_string();
+        let s_coils = make_test_score(200, 10, false, 0, 500000);
+        let m_coils = evaluate_score_submission(&s_coils, &bmap_coils, None, 10, 0, &existing, true);
+        assert!(m_coils.contains(&297));
+
+        let mut bmap_sonata = make_test_bmap(2.5);
+        bmap_sonata.title = "Moonlight Sonata".to_string();
+        bmap_sonata.artist = "cYsmix".to_string();
+        let hd_hr_dt = (Mods::HIDDEN | Mods::HARDROCK | Mods::DOUBLETIME).bits();
+        let s_sonata = make_test_score(200, 0, true, hd_hr_dt, 500000);
+        let m_sonata = evaluate_score_submission(&s_sonata, &bmap_sonata, None, 10, 0, &existing, true);
+        assert!(m_sonata.contains(&174));
+    }
 }
+
 

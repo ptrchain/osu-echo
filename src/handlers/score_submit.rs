@@ -664,6 +664,18 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             }
         }
 
+        // S-Ranker (ID 15): At least 5 S or SS scores on distinct ranked maps
+        if !existing_medals.contains(&15) && !newly_unlocked_medals.contains(&15) {
+            let s_rank_maps: HashSet<&str> = scores
+                .iter()
+                .filter(|s| s.nmiss == 0 && s.acc.unwrap_or(0.0) >= 95.0)
+                .map(|s| s.md5.as_str())
+                .collect();
+            if s_rank_maps.len() >= 5 {
+                newly_unlocked_medals.push(15);
+            }
+        }
+
         if !newly_unlocked_medals.is_empty() {
             let conn = db_arc.lock().await;
             let now = chrono::Utc::now().timestamp();
