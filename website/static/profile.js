@@ -77,8 +77,15 @@ function renderMostPlayed() {
   $('most-count').textContent=num(maps.length);
   $('most-played').innerHTML=maps.slice(0,state.mostLimit||5).map(({count,beatmap:m})=>{
     const countMarkup=`<span class="beatmap-playcount__count"><i class="fas fa-play beatmap-playcount__count-icon" aria-hidden="true"></i>${num(count)}</span>`;
-    const link=Number(m.beatmap_id)>0?`href="https://osu.ppy.sh/beatmaps/${Number(m.beatmap_id)}" target="_blank" rel="noreferrer"`:'';
-    return `<div class="beatmap-playcount"><div class="beatmap-playcount__cover"><div class="beatmap-playcount__cover-count">${countMarkup}</div></div><div class="beatmap-playcount__detail"><div class="beatmap-playcount__info"><div class="u-ellipsis-overflow"><a class="beatmap-playcount__title" ${link}>${esc(m.title||'Unknown beatmap')} <span class="beatmap-playcount__title-artist">by ${esc(m.artist||'unknown artist')}</span></a></div><div class="beatmap-playcount__info-row u-ellipsis-overflow"><span class="beatmap-playcount__artist">${esc(m.artist||'unknown artist')}</span><span>${esc(m.version||'?')}</span>${m.creator?` <span class="beatmap-playcount__mapper">mapped by <b>${esc(m.creator)}</b></span>`:''}</div></div><div class="beatmap-playcount__detail-count">${countMarkup}</div></div></div>`;
+    const mapId=Number(m.beatmap_id||0);
+    const setId=Number(m.beatmapset_id||0);
+    const link=mapId>0?`href="https://osu.ppy.sh/beatmaps/${mapId}" target="_blank" rel="noreferrer"`:'';
+    const coverTag=link?'a':'div';
+    const coverUrl=setId>0?`https://assets.ppy.sh/beatmaps/${setId}/covers/list.jpg`:'';
+    const coverUrl2x=setId>0?`https://assets.ppy.sh/beatmaps/${setId}/covers/list@2x.jpg`:'';
+    const coverStyle=setId>0?`style="background-image: url('${coverUrl2x}'), url('${coverUrl}');"`:'';
+    const coverInner=setId>0?`<span class="beatmapset-cover beatmapset-cover--full" style="--bg: url('${coverUrl}'); --bg-2x: url('${coverUrl2x}'); background-image: url('${coverUrl2x}');"></span>`:'';
+    return `<div class="beatmap-playcount"><${coverTag} class="beatmap-playcount__cover" ${link} ${coverStyle}>${coverInner}<div class="beatmap-playcount__cover-count">${countMarkup}</div></${coverTag}><div class="beatmap-playcount__detail"><div class="beatmap-playcount__info"><div class="u-ellipsis-overflow"><a class="beatmap-playcount__title" ${link}>${esc(m.title||'Unknown beatmap')} <span class="beatmap-playcount__title-artist">by ${esc(m.artist||'unknown artist')}</span></a></div><div class="beatmap-playcount__info-row u-ellipsis-overflow"><span class="beatmap-playcount__artist">${esc(m.artist||'unknown artist')}</span><span>${esc(m.version||'?')}</span>${m.creator?` <span class="beatmap-playcount__mapper">mapped by <b>${esc(m.creator)}</b></span>`:''}</div></div><div class="beatmap-playcount__detail-count">${countMarkup}</div></div></div>`;
   }).join('')||'<p class="empty-inline">No plays recorded yet.</p>';
   $('more-most').hidden=maps.length<=(state.mostLimit||5);
 }
@@ -93,47 +100,251 @@ function renderScores() {
   $('more-recent').hidden = recent.length <= state.recentLimit;
 }
 
-function renderMedals() {
-  const medals = state.profile?.medals || [];
+async function loadMedalsCatalog() {
+  if (state.medalsCatalog) return state.medalsCatalog;
+  try {
+    const res = await fetch('/site/medals');
+    if (res.ok) {
+      state.medalsCatalog = await res.json();
+      return state.medalsCatalog;
+    }
+  } catch (e) {
+    console.error('Failed to load medals catalog', e);
+  }
+  return [];
+}
+
+let medalTooltipEl = null;
+function setupMedalTooltips() {
+  if (!medalTooltipEl) {
+    medalTooltipEl = document.createElement('div');
+    medalTooltipEl.id = 'medal-tooltip';
+    medalTooltipEl.className = 'medal-tooltip';
+    medalTooltipEl.setAttribute('role', 'tooltip');
+    medalTooltipEl.innerHTML = `
+      <div id="medal-tooltip-category" class="medal-tooltip__header"></div>
+      <div class="medal-tooltip__body">
+        <div class="medal-tooltip__icon-wrapper">
+          <img id="medal-tooltip-img" class="medal-tooltip__img" src="" alt="" />
+        </div>
+        <div id="medal-tooltip-name" class="medal-tooltip__name"></div>
+        <div id="medal-tooltip-desc" class="medal-tooltip__desc"></div>
+        <div class="medal-tooltip__footer">
+          <div id="medal-tooltip-status" class="medal-tooltip__status"></div>
+          <div id="medal-tooltip-date" class="medal-tooltip__date"></div>
+        </div>
+      </div>
+      <div class="medal-tooltip__arrow"></div>
+    `;
+    document.body.appendChild(medalTooltipEl);
+  }
+
+  const container = $('medals-content');
+  if (!container || container._tooltipsInitialized) return;
+  container._tooltipsInitialized = true;
+
+  const showTip = (badge) => {
+    if (!badge || !badge.classList.contains('badge-achievement')) return;
+    const name = badge.dataset.name;
+    const desc = badge.dataset.desc;
+    const icon = badge.dataset.icon;
+    const category = badge.dataset.category || 'Medals';
+    const isUnlocked = badge.dataset.unlocked === 'true';
+    const achieved = badge.dataset.achieved;
+
+    $('medal-tooltip-category').textContent = category;
+
+    const imgEl = $('medal-tooltip-img');
+    imgEl.src = `https://assets.ppy.sh/medals/client/${icon}@2x.png`;
+    imgEl.onerror = () => {
+      imgEl.src = `https://assets.ppy.sh/medals/web/${icon}.png`;
+    };
+    imgEl.className = 'medal-tooltip__img ' + (isUnlocked ? 'medal-tooltip__img--unlocked' : 'medal-tooltip__img--locked');
+
+    $('medal-tooltip-name').textContent = name;
+    $('medal-tooltip-desc').textContent = desc;
+
+    const statusEl = $('medal-tooltip-status');
+    const dateEl = $('medal-tooltip-date');
+    if (isUnlocked) {
+      statusEl.textContent = 'Unlocked';
+      statusEl.className = 'medal-tooltip__status medal-tooltip__status--unlocked';
+      if (achieved) {
+        dateEl.textContent = `Achieved ${achieved}`;
+        dateEl.style.display = 'block';
+      } else {
+        dateEl.textContent = '';
+        dateEl.style.display = 'none';
+      }
+    } else {
+      statusEl.textContent = 'Locked';
+      statusEl.className = 'medal-tooltip__status medal-tooltip__status--locked';
+      dateEl.textContent = '';
+      dateEl.style.display = 'none';
+    }
+
+    medalTooltipEl.classList.add('visible');
+
+    const rect = badge.getBoundingClientRect();
+    const tipW = medalTooltipEl.offsetWidth || 240;
+    const tipH = medalTooltipEl.offsetHeight || 290;
+    let left = rect.left + rect.width / 2 - tipW / 2;
+    left = Math.max(12, Math.min(window.innerWidth - tipW - 12, left));
+
+    let isAbove = true;
+    let top = rect.top - tipH - 12;
+    if (top < 12) {
+      top = rect.bottom + 12;
+      isAbove = false;
+    }
+    medalTooltipEl.classList.toggle('arrow-down', isAbove);
+    medalTooltipEl.classList.toggle('arrow-up', !isAbove);
+
+    const arrowEl = medalTooltipEl.querySelector('.medal-tooltip__arrow');
+    if (arrowEl) {
+      const badgeCenterX = rect.left + rect.width / 2;
+      const arrowX = Math.max(18, Math.min(tipW - 18, badgeCenterX - left));
+      arrowEl.style.left = `${arrowX}px`;
+    }
+
+    medalTooltipEl.style.left = `${left + window.scrollX}px`;
+    medalTooltipEl.style.top = `${top + window.scrollY}px`;
+  };
+
+  const hideTip = () => {
+    if (medalTooltipEl) medalTooltipEl.classList.remove('visible');
+  };
+
+  container.addEventListener('mouseover', (e) => {
+    const badge = e.target.closest('.badge-achievement');
+    if (badge) showTip(badge);
+  });
+  container.addEventListener('mouseout', (e) => {
+    const badge = e.target.closest('.badge-achievement');
+    if (badge) hideTip();
+  });
+  container.addEventListener('focusin', (e) => {
+    const badge = e.target.closest('.badge-achievement');
+    if (badge) showTip(badge);
+  });
+  container.addEventListener('focusout', (e) => {
+    const badge = e.target.closest('.badge-achievement');
+    if (badge) hideTip();
+  });
+}
+
+async function renderMedals() {
   const container = $('medals-content');
   if (!container) return;
 
-  if (!medals.length) {
-    container.innerHTML = '<p class="empty-inline">No medals unlocked yet. Play beatmaps to earn achievements!</p>';
+  const catalog = await loadMedalsCatalog();
+  if (!catalog || !catalog.length) {
+    container.innerHTML = '<p class="empty-inline">Unable to load medals catalog.</p>';
     return;
   }
 
-  const categories = ['Skill & Dedication', 'Hush-Hush', 'Mod Introduction', 'Beatmap Packs'];
-  const grouped = {};
-  for (const cat of categories) {
-    grouped[cat] = [];
+  const userMedals = state.profile?.medals || [];
+  const userMedalsMap = new Map();
+  for (const m of userMedals) {
+    userMedalsMap.set(m.id, m);
   }
-  for (const m of medals) {
-    if (!grouped[m.category]) {
-      grouped[m.category] = [];
-    }
-    grouped[m.category].push(m);
+
+  if ($('medals-count-badge')) {
+    $('medals-count-badge').textContent = `${num(userMedals.length)} / ${num(catalog.length)}`;
+  }
+
+  // Find up to 8 most recently achieved medals
+  const recentUserAchievements = [];
+  const sortedUserMedals = [...userMedals].sort((a, b) => (b.achieved_at || 0) - (a.achieved_at || 0));
+  for (const um of sortedUserMedals) {
+    const fullMedal = catalog.find(c => c.id === um.id) || um;
+    recentUserAchievements.push({
+      ...fullMedal,
+      achieved_at: um.achieved_at,
+    });
+    if (recentUserAchievements.length >= 8) break;
   }
 
   let html = '';
-  for (const cat of categories) {
-    const list = grouped[cat] || [];
-    if (!list.length) continue;
-    html += `<div class="medals-category">`;
-    html += `<h3 class="title title--page-extra-small">${esc(cat)} <span class="title__count">${num(list.length)}</span></h3>`;
-    html += `<div class="medals-grid">`;
-    for (const m of list) {
-      const dateStr = m.achieved_at ? new Date(m.achieved_at * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
-      const tooltip = `${esc(m.name)}\n${esc(m.description)}${dateStr ? '\nUnlocked: ' + esc(dateStr) : ''}`;
-      html += `<div class="medal-badge" title="${tooltip}">`;
-      html += `<div class="medal-badge__icon-wrapper"><img class="medal-badge__icon" src="https://assets.ppy.sh/medals/web/${esc(m.icon_url)}.png" alt="${esc(m.name)}" loading="lazy" onerror="this.onerror=null;this.src='https://assets.ppy.sh/medals/web/@2x/${esc(m.icon_url)}@2x.png';"></div>`;
-      html += `<div class="medal-badge__info"><span class="medal-badge__name">${esc(m.name)}</span><small class="medal-badge__date">${esc(dateStr)}</small></div>`;
+
+  // 1. Render Latest medals box if user has earned medals
+  if (recentUserAchievements.length > 0) {
+    html += `<div class="page-extra__recent-medals-box">`;
+    html += `  <h3 class="title title--page-extra-small">Latest</h3>`;
+    html += `  <div class="page-extra__recent-medals">`;
+    for (const m of recentUserAchievements) {
+      const dateStr = m.achieved_at 
+        ? new Date(m.achieved_at * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) 
+        : '';
+      html += `<div class="badge-achievement badge-achievement--dynamic-height badge-achievement--unlocked" tabindex="0" role="button"`;
+      html += ` data-id="${m.id}"`;
+      html += ` data-name="${esc(m.name)}"`;
+      html += ` data-desc="${esc(m.description)}"`;
+      html += ` data-category="${esc(m.category)}"`;
+      html += ` data-icon="${esc(m.icon_url)}"`;
+      html += ` data-unlocked="true"`;
+      html += ` data-achieved="${esc(dateStr)}"`;
+      html += ` aria-label="${esc(m.name)}">`;
+      html += `  <img class="badge-achievement__image"`;
+      html += `       src="https://assets.ppy.sh/medals/client/${esc(m.icon_url)}@2x.png"`;
+      html += `       alt="${esc(m.name)}" loading="lazy"`;
+      html += `       onerror="this.onerror=null;this.src='https://assets.ppy.sh/medals/web/${esc(m.icon_url)}.png';">`;
       html += `</div>`;
     }
-    html += `</div></div>`;
+    html += `  </div>`;
+    html += `</div>`;
   }
 
-  container.innerHTML = html || '<p class="empty-inline">No medals unlocked yet.</p>';
+  // 2. Official osu!web section order
+  const sections = [
+    { id: 'beatmap-challenge-packs', title: 'Beatmap Challenge Packs', isHush: false, filter: m => m.category === 'Beatmap Packs' && m.ordering === 5 },
+    { id: 'beatmap-packs', title: 'Beatmap Packs', isHush: false, filter: m => m.category === 'Beatmap Packs' && (m.ordering === 6 || m.ordering === 8) },
+    { id: 'beatmap-spotlights', title: 'Beatmap Spotlights', isHush: false, filter: m => m.category === 'Beatmap Packs' && m.ordering === 7 },
+    { id: 'hush-hush', title: 'Hush-Hush', isHush: true, filter: m => m.category === 'Hush-Hush' && m.ordering === 2 },
+    { id: 'hush-hush-expert', title: 'Hush-Hush (Expert)', isHush: true, filter: m => m.category === 'Hush-Hush' && m.ordering === 3 },
+    { id: 'skill-dedication', title: 'Skill & Dedication', isHush: false, filter: m => m.category === 'Skill & Dedication' },
+    { id: 'mod-introduction', title: 'Mod Introduction', isHush: false, filter: m => m.category === 'Mod Introduction' },
+  ];
+
+  for (const sec of sections) {
+    const items = catalog.filter(sec.filter);
+    if (!items.length) continue;
+
+    html += `<div class="medals-group__group" id="medals-sec-${sec.id}">`;
+    html += `  <h3 class="medals-group__title">${esc(sec.title)}</h3>`;
+    html += `  <div class="medals-grid">`;
+    for (const m of items) {
+      const userMedal = userMedalsMap.get(m.id);
+      const isUnlocked = !!userMedal;
+      const dateStr = userMedal && userMedal.achieved_at 
+        ? new Date(userMedal.achieved_at * 1000).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) 
+        : '';
+
+      const displayName = (!isUnlocked && sec.isHush) ? '???' : m.name;
+      const displayDesc = (!isUnlocked && sec.isHush) ? '???' : m.description;
+      const stateCls = isUnlocked ? 'badge-achievement--unlocked' : 'badge-achievement--locked';
+
+      html += `<div class="badge-achievement ${stateCls}" tabindex="0" role="button"`;
+      html += ` data-id="${m.id}"`;
+      html += ` data-name="${esc(displayName)}"`;
+      html += ` data-desc="${esc(displayDesc)}"`;
+      html += ` data-category="${esc(m.category)}"`;
+      html += ` data-icon="${esc(m.icon_url)}"`;
+      html += ` data-unlocked="${isUnlocked}"`;
+      html += ` data-achieved="${esc(dateStr)}"`;
+      html += ` aria-label="${esc(displayName)}">`;
+      html += `  <img class="badge-achievement__image"`;
+      html += `       src="https://assets.ppy.sh/medals/client/${esc(m.icon_url)}@2x.png"`;
+      html += `       alt="${esc(displayName)}" loading="lazy"`;
+      html += `       onerror="this.onerror=null;this.src='https://assets.ppy.sh/medals/web/${esc(m.icon_url)}.png';">`;
+      html += `</div>`;
+    }
+    html += `  </div>`;
+    html += `</div>`;
+  }
+
+  container.innerHTML = html;
+  setupMedalTooltips();
 }
 // Stable level thresholds: osu! rounds each score increment individually.
 // https://osu.ppy.sh/wiki/en/Gameplay/Score/Total_score

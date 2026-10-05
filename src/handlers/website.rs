@@ -544,7 +544,7 @@ pub fn validate_username(name: &str) -> Result<String, &'static str> {
     Ok(trimmed.to_string())
 }
 
-fn json_ok<T: Serialize>(data: &T) -> Response {
+fn json_ok<T: Serialize + ?Sized>(data: &T) -> Response {
     let val = serde_json::to_value(data).unwrap_or(serde_json::Value::Null);
     Response::json(&val).with_header("Cache-Control", "no-store")
 }
@@ -854,6 +854,7 @@ pub async fn handle(
         (&Method::GET, "session") => handle_session(state, headers).await,
         (&Method::GET, "profile") => handle_profile(state, params).await,
         (&Method::GET, "avatar") => handle_avatar(state, params).await,
+        (&Method::GET, "medals") => handle_medals_catalog().await,
         (&Method::POST, "login") => handle_login(state, headers, body).await,
         (&Method::POST, "logout") => handle_logout(state, headers).await,
         (&Method::POST, "settings") => handle_settings(state, headers, body).await,
@@ -861,6 +862,11 @@ pub async fn handle(
         (&Method::POST, "import_official") => handle_import_official(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
+}
+
+async fn handle_medals_catalog() -> Response {
+    json_ok(crate::types::medal::get_all_medals())
+        .with_header("Cache-Control", "public, max-age=86400")
 }
 
 async fn handle_profile(state: SharedState, params: &HashMap<String, String>) -> Response {
@@ -2560,4 +2566,13 @@ mod tests {
         assert_eq!(get_country_rank(&http, "DE", 0, None).await, None);
         assert_eq!(get_country_rank(&http, "DE", -50, None).await, None);
     }
+
+    #[tokio::test]
+    async fn test_handle_medals_catalog() {
+        let resp = handle_medals_catalog().await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let medals: Vec<crate::types::medal::MedalDefinition> = serde_json::from_slice(&resp.body).expect("valid json catalog");
+        assert_eq!(medals.len(), 352);
+    }
 }
+
