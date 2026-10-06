@@ -173,6 +173,8 @@ pub struct ProfileResponse {
     pub recent_24h: Vec<PublicScore>,
     #[serde(default)]
     pub medals: Vec<crate::types::medal::UserMedalDisplay>,
+    #[serde(default)]
+    pub rank_highest: Option<crate::db::RankHighest>,
 }
 
 pub fn now_secs() -> u64 {
@@ -1097,6 +1099,21 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         let _ = db::record_rank_snapshot(&conn, name, mode_id, rank);
     }
     let rank_history = db::get_rank_history(&conn, name, mode_id, 90).unwrap_or_default();
+    let mut rank_highest = db::get_highest_rank(&conn, name, mode_id).unwrap_or(None);
+    if let Some(current_rank) = global_rank {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        if let Some(highest) = &mut rank_highest {
+            if current_rank < highest.rank {
+                highest.rank = current_rank;
+                highest.updated_at = today;
+            }
+        } else {
+            rank_highest = Some(crate::db::RankHighest {
+                rank: current_rank,
+                updated_at: today,
+            });
+        }
+    }
     let user_medals = db::get_user_medals(&conn, name).unwrap_or_default();
     let medals_display: Vec<crate::types::medal::UserMedalDisplay> = user_medals
         .into_iter()
@@ -1139,6 +1156,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         most_played,
         recent_24h: recent_24h_public,
         medals: medals_display,
+        rank_highest,
     })
 }
 

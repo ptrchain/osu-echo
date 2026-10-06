@@ -491,6 +491,32 @@ pub fn get_rank_history(conn: &Connection, player_name: &str, mode: i32, limit: 
     Ok(history)
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct RankHighest {
+    pub rank: i32,
+    pub updated_at: String,
+}
+
+pub fn get_highest_rank(conn: &Connection, player_name: &str, mode: i32) -> SqlResult<Option<RankHighest>> {
+    let mut stmt = conn.prepare(
+        "SELECT date, rank FROM rank_history
+         WHERE player_name = ?1 AND mode = ?2
+         ORDER BY rank ASC, date ASC
+         LIMIT 1",
+    )?;
+    let mut rows = stmt.query_map(params![player_name, mode], |row| {
+        let date: String = row.get(0)?;
+        let rank: i32 = row.get(1)?;
+        Ok(RankHighest { rank, updated_at: date })
+    })?;
+
+    if let Some(first) = rows.next() {
+        Ok(Some(first?))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn rename_profile(conn: &Connection, old_name: &str, new_name: &str) -> SqlResult<()> {
     if old_name == new_name {
         return Ok(());

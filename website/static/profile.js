@@ -515,8 +515,15 @@ function renderProfile() {
   $('avatar').alt = `${p.name}'s avatar`;
   $('presence').textContent = p.active ? 'Active' : '';
   $('presence').classList.toggle('active', p.active);
-  $('global-rank').textContent = p.global_rank ? `#${num(p.global_rank)}` : '—';
-  $('global-rank').title = p.global_rank ? 'osu!daily rank estimate for this pp (osu!standard)' : 'osu!daily rank unavailable. Check the configured API key or try again later.';
+  if(p.global_rank){
+    const highest=getHighestRank(p);
+    const highestHtml=highest?`<div class="rank-highest-popup">Highest rank: #${num(highest.rank)} on ${formatHighestDate(highest.updated_at)}</div>`:'';
+    $('global-rank').innerHTML=`#${num(p.global_rank)}${highestHtml}`;
+    $('global-rank').removeAttribute('title');
+  }else{
+    $('global-rank').textContent='—';
+    $('global-rank').title='osu!daily rank unavailable. Check the configured API key or try again later.';
+  }
   $('pp').textContent = num(p.pp);
   const stats = [['Ranked Score',num(p.ranked_score)],['Hit Accuracy',`${num(p.acc,2)}%`],['Play Count',num(p.playcount)],['Total Score',num(p.total_score)],['Total Hits',num(p.total_hits)],['Hits per Play',num(p.playcount ? Math.floor(p.total_hits/p.playcount) : 0)],['Maximum Combo',`${num(p.max_combo)}x`],['Replays Watched by Others','—']];
   $('statistics').innerHTML = stats.map(([key,value])=>`<dl class="profile-stats__entry"><dt class="profile-stats__key">${key}</dt><dd class="profile-stats__value">${value}</dd></dl>`).join('');
@@ -795,12 +802,126 @@ $('settings-country').addEventListener('change',updateSettingsCountryFlag);
 
 $('edit-about').addEventListener('click',async()=>{await openSettings();if(!$('settings-submit').disabled)$('settings-about').focus();});
 
+function formatHighestDate(dateStr){
+  if(!dateStr)return'';
+  const parts=String(dateStr).split('T')[0].split('-');
+  if(parts.length===3){
+    const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const month=months[Number(parts[1])-1]||parts[1];
+    return`${Number(parts[2])} ${month} ${parts[0]}`;
+  }
+  return dateStr;
+}
+
+function getHighestRank(p){
+  if(p.rank_highest)return p.rank_highest;
+  let best=null;
+  if(p.rank_history&&p.rank_history.length){
+    for(const [date,r] of p.rank_history){
+      if(r>0&&(!best||r<best.rank)){
+        best={rank:r,updated_at:date};
+      }
+    }
+  }
+  if(p.global_rank&&(!best||p.global_rank<best.rank)){
+    best={rank:p.global_rank,updated_at:new Date().toISOString().slice(0,10)};
+  }
+  return best;
+}
+
+function getMonotonePath(pts){
+  const n=pts.length;
+  if(!n)return'';
+  if(n===1)return`M 0,${pts[0].y.toFixed(2)} L 600,${pts[0].y.toFixed(2)}`;
+  if(n===2)return`M ${pts[0].x.toFixed(2)},${pts[0].y.toFixed(2)} L ${pts[1].x.toFixed(2)},${pts[1].y.toFixed(2)}`;
+  const dx=[],dy=[],s=[];
+  for(let i=0;i<n-1;i++){
+    const h=pts[i+1].x-pts[i].x,v=pts[i+1].y-pts[i].y;
+    dx.push(h);dy.push(v);s.push(h!==0?v/h:0);
+  }
+  const t=new Array(n).fill(0);
+  for(let i=1;i<n-1;i++){
+    const s0=s[i-1],s1=s[i],h0=dx[i-1],h1=dx[i];
+    if(s0*s1<=0){t[i]=0;}
+    else{
+      const p=(s0*h1+s1*h0)/(h0+h1);
+      const sign=s0<0?-1:1;
+      t[i]=2*sign*Math.min(Math.abs(s0),Math.abs(s1),0.5*Math.abs(p));
+    }
+  }
+  t[0]=(3*s[0]-t[1])/2;
+  t[n-1]=(3*s[n-2]-t[n-2])/2;
+  let d=`M ${pts[0].x.toFixed(2)},${pts[0].y.toFixed(2)}`;
+  for(let i=0;i<n-1;i++){
+    const x0=pts[i].x,y0=pts[i].y,x1=pts[i+1].x,y1=pts[i+1].y;
+    const h=(x1-x0)/3;
+    const cp1x=x0+h,cp1y=y0+h*t[i],cp2x=x1-h,cp2y=y1-h*t[i+1];
+    d+=` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${x1.toFixed(2)},${y1.toFixed(2)}`;
+  }
+  return d;
+}
+
 function renderPerformanceGraph(){
   const data=state.profile.rank_history||[];
   if(!data.length){$('rank-history').textContent='';return;}
   const min=Math.min(...data.map(x=>x[1])),max=Math.max(...data.map(x=>x[1]));
-  const points=data.map((x,i)=>`${data.length===1?300:5+i*590/(data.length-1)},${max===min?35:10+(x[1]-min)/(max-min)*50}`);
-  $('rank-history').innerHTML=`<svg viewBox="0 0 600 75" preserveAspectRatio="none" role="img" aria-label="Recorded osu!daily rank history"><polyline points="${points.join(' ')}" fill="none" stroke="#ffcc22" stroke-width="2" vector-effect="non-scaling-stroke"/>${data.map((x,i)=>`<circle cx="${points[i].split(',')[0]}" cy="${points[i].split(',')[1]}" r="3" fill="#ffcc22"><title>${esc(x[0])}: #${num(x[1])}</title></circle>`).join('')}</svg><span class="performance-caption">osu!daily rank history · ${data.length===1?'tracking started today':esc(data[0][0])+' – '+esc(data[data.length-1][0])}</span>`;
+  const pts=data.map((x,i)=>({
+    x:data.length===1?300:(i*600)/(data.length-1),
+    y:max===min?35:10+((x[1]-min)/(max-min))*52
+  }));
+  const pathD=getMonotonePath(pts);
+  $('rank-history').innerHTML=`<div class="rank-chart-wrap"><svg class="rank-chart-svg" viewBox="0 0 600 75" preserveAspectRatio="none" role="img" aria-label="Recorded osu!daily rank history"><path d="${pathD}" fill="none" stroke="#ffcc22" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linecap="round" stroke-linejoin="round"/></svg><div class="rank-chart-hover" hidden><div class="rank-chart-hover__line"></div><div class="rank-chart-hover__circle"></div><div class="rank-chart-hover__tooltip"></div></div></div><span class="performance-caption">osu!daily rank history · ${data.length===1?'tracking started today':esc(data[0][0])+' – '+esc(data[data.length-1][0])}</span>`;
+
+  const wrap=$('rank-history').querySelector('.rank-chart-wrap');
+  const hover=wrap.querySelector('.rank-chart-hover');
+  const hoverLine=wrap.querySelector('.rank-chart-hover__line');
+  const hoverCircle=wrap.querySelector('.rank-chart-hover__circle');
+  const tooltip=wrap.querySelector('.rank-chart-hover__tooltip');
+
+  function formatRankTime(dateStr,idx,total){
+    if(!dateStr)return'now';
+    const parts=String(dateStr).split('-');
+    if(parts.length===3){
+      const d=new Date(Number(parts[0]),Number(parts[1])-1,Number(parts[2]));
+      const now=new Date();
+      const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+      const diffDays=Math.round((today-d)/86400000);
+      if(diffDays<=0)return'now';
+      if(diffDays===1)return'1 day ago';
+      return`${diffDays} days ago`;
+    }
+    const daysAgo=total-1-idx;
+    if(daysAgo<=0)return'now';
+    if(daysAgo===1)return'1 day ago';
+    return`${daysAgo} days ago`;
+  }
+
+  function updateHover(clientX){
+    const rect=wrap.getBoundingClientRect();
+    if(!rect.width)return;
+    const relX=Math.max(0,Math.min(rect.width,clientX-rect.left));
+    const ratio=relX/rect.width;
+    const idx=Math.max(0,Math.min(data.length-1,Math.round(ratio*(data.length-1))));
+    const pt=pts[idx];
+    const item=data[idx];
+    const pctX=(pt.x/600)*100;
+    const pctY=(pt.y/75)*100;
+
+    hover.hidden=false;
+    hoverLine.style.left=`${pctX}%`;
+    hoverCircle.style.left=`${pctX}%`;
+    hoverCircle.style.top=`${pctY}%`;
+    tooltip.innerHTML=`<div class="rank-chart-hover__title"><strong>Global Ranking</strong> #${num(item[1])}</div><div class="rank-chart-hover__time">${formatRankTime(item[0],idx,data.length)}</div>`;
+    tooltip.style.left=`${pctX}%`;
+    tooltip.style.top=`${pctY}%`;
+    tooltip.style.marginTop='-12px';
+    tooltip.style.transform=pctX<18?'translate(0, -100%)':pctX>82?'translate(-100%, -100%)':'translate(-50%, -100%)';
+  }
+
+  wrap.addEventListener('mousemove',e=>updateHover(e.clientX));
+  wrap.addEventListener('mouseleave',()=>{hover.hidden=true;});
+  wrap.addEventListener('touchmove',e=>{if(e.touches&&e.touches[0])updateHover(e.touches[0].clientX);},{passive:true});
+  wrap.addEventListener('touchend',()=>{hover.hidden=true;});
 }
 function renderSectionOrder(){
   $('section-order-list').innerHTML=state.sectionOrder.map((id,i)=>`<div class="section-order-row"><span>${esc(document.querySelector('.section-tabs a[href="#'+id+'"]').textContent)}</span><button type="button" data-order="${i}" data-direction="-1" aria-label="Move ${esc(id)} up" ${i===0?'disabled':''}>↑</button><button type="button" data-order="${i}" data-direction="1" aria-label="Move ${esc(id)} down" ${i===state.sectionOrder.length-1?'disabled':''}>↓</button></div>`).join('');
