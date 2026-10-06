@@ -15,6 +15,10 @@ pub fn default_section_order() -> Vec<String> {
     DEFAULT_SECTIONS.iter().map(|s| s.to_string()).collect()
 }
 
+pub fn default_playmode() -> String {
+    "osu".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileDetails {
     #[serde(default)]
@@ -27,6 +31,8 @@ pub struct ProfileDetails {
     pub section_order: Vec<String>,
     #[serde(default)]
     pub country: String,
+    #[serde(default = "default_playmode")]
+    pub playmode: String,
 }
 
 impl Default for ProfileDetails {
@@ -37,6 +43,7 @@ impl Default for ProfileDetails {
             devices: Vec::new(),
             section_order: default_section_order(),
             country: String::new(),
+            playmode: default_playmode(),
         }
     }
 }
@@ -64,6 +71,9 @@ impl ProfileDetails {
         }
         if !self.country.is_empty() && crate::utils::country_code_to_byte(&self.country) == 0 {
             return Err("Invalid country code");
+        }
+        if !self.playmode.is_empty() && !["osu", "taiko", "fruits", "mania"].contains(&self.playmode.as_str()) {
+            return Err("Invalid default game mode");
         }
         Ok(())
     }

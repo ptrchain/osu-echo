@@ -875,11 +875,6 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         _ => return json_error(StatusCode::BAD_REQUEST, "Profile username is required."),
     };
 
-    let mode_str = params.get("mode").map(|s| s.as_str()).unwrap_or("vn");
-    if !["vn", "rx", "ap"].contains(&mode_str) {
-        return json_error(StatusCode::BAD_REQUEST, "Unknown mode.");
-    }
-
     let state_guard = state.read().await;
     let conn = state_guard.db.lock().await;
 
@@ -892,6 +887,11 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
 
     let details = db::get_profile_details(&conn, name).unwrap_or_default();
     let scores = db::get_player_scores_with_beatmaps(&conn, name).unwrap_or_default();
+
+    let mode_str = params.get("mode").map(|s| s.as_str()).unwrap_or("osu");
+    if !["osu", "taiko", "fruits", "mania", "vn", "rx", "ap"].contains(&mode_str) {
+        return json_error(StatusCode::BAD_REQUEST, "Unknown mode.");
+    }
 
     let is_active = state_guard.player.as_ref().map_or(false, |p| p.name == name);
     let http_client = state_guard.http.clone();
@@ -913,12 +913,27 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         Mods::AUTOPILOT.bits() as u32,
     );
 
+    let target_ruleset: Option<i32> = match mode_str {
+        "taiko" | "1" => Some(1),
+        "fruits" | "catch" | "2" => Some(2),
+        "mania" | "3" => Some(3),
+        "osu" | "0" | "vn" | "rx" | "ap" => Some(0),
+        _ => None,
+    };
+
     let mode_scores: Vec<&db::ScoreWithBeatmap> = scores
         .iter()
-        .filter(|s| match mode_str {
-            "rx" => (s.mods & rx_bit) != 0,
-            "ap" => (s.mods & ap_bit) != 0,
-            _ => (s.mods & (rx_bit | ap_bit)) == 0,
+        .filter(|s| {
+            if let Some(ruleset) = target_ruleset {
+                if s.mode != ruleset {
+                    return false;
+                }
+            }
+            match mode_str {
+                "rx" => (s.mods & rx_bit) != 0,
+                "ap" => (s.mods & ap_bit) != 0,
+                _ => (s.mods & (rx_bit | ap_bit)) == 0,
+            }
         })
         .collect();
 
@@ -1056,11 +1071,14 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let mode_id = match mode_str {
         "rx" => 100,
         "ap" => 200,
+        "taiko" => 1,
+        "fruits" => 2,
+        "mania" => 3,
         _ => 0,
     };
 
     let global_rank = get_daily_rank(&http_client, daily_key.as_deref(), calculated_pp).await;
-    let country_rank = if mode_str == "vn" && !details.country.is_empty() && calculated_pp > 0 {
+    let country_rank = if (mode_str == "vn" || mode_str == "osu") && !details.country.is_empty() && calculated_pp > 0 {
         get_country_rank(
             &http_client,
             &details.country,
@@ -2173,6 +2191,27 @@ mod tests {
         assert_eq!(data_rx.playcount, 1);
         assert_eq!(data_rx.top.len(), 1);
         assert_eq!(data_rx.top[0].mods, "RX");
+
+        // Test osu mode (alias for standard mode 0)
+        let mut params_osu = HashMap::new();
+        params_osu.insert("name".to_string(), "Alice".to_string());
+        params_osu.insert("mode".to_string(), "osu".to_string());
+        let resp_osu = handle_profile(shared_state.clone(), &params_osu).await;
+        assert_eq!(resp_osu.status, StatusCode::OK);
+        let data_osu: ProfileResponse = serde_json::from_slice(&resp_osu.body).unwrap();
+        assert_eq!(data_osu.mode, "osu");
+        assert_eq!(data_osu.playcount, 2);
+
+        // Test taiko mode (0 scores recorded for Alice in taiko)
+        let mut params_taiko = HashMap::new();
+        params_taiko.insert("name".to_string(), "Alice".to_string());
+        params_taiko.insert("mode".to_string(), "taiko".to_string());
+        let resp_taiko = handle_profile(shared_state.clone(), &params_taiko).await;
+        assert_eq!(resp_taiko.status, StatusCode::OK);
+        let data_taiko: ProfileResponse = serde_json::from_slice(&resp_taiko.body).unwrap();
+        assert_eq!(data_taiko.mode, "taiko");
+        assert_eq!(data_taiko.playcount, 0);
+        assert_eq!(data_taiko.top.len(), 0);
     }
 
     #[test]

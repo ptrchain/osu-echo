@@ -1,7 +1,7 @@
 /* Local osu! profile interface. AGPL-3.0-or-later. */
 'use strict';
 const $ = (id) => document.getElementById(id);
-const state = {session: null, profile: null, name: null, mode: 'vn', topLimit: 5, recentLimit: 5, request: 0};
+const state = {session: null, profile: null, name: null, mode: 'osu', topLimit: 5, recentLimit: 5, request: 0};
 const num = (n, digits = 0) => Number(n || 0).toLocaleString('en-US', {minimumFractionDigits: digits, maximumFractionDigits: digits});
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function relative(timestamp) {
@@ -27,7 +27,7 @@ function renderSession() {
   if($('account-avatar').getAttribute('src')!==accountImage)$('account-avatar').src=accountImage;
   $('account-panel-name').textContent=state.session.user||'Guest';
   $('account-panel-status').textContent=state.session.active===state.session.user?'Active on the local server':'Local osu!';
-  $('account-profile').href=state.session.user?`/users/${encodeURIComponent(state.session.user)}?mode=${state.mode}`:'#profile';
+  $('account-profile').href=state.session.user?`/users/${encodeURIComponent(state.session.user)}${state.mode ? `?mode=${state.mode}` : ''}`:'#profile';
   $('account-settings').hidden=!state.session.user;
   $('account-logout').hidden=!state.session.user;
   $('account-profile').hidden=!state.session.user;
@@ -535,6 +535,7 @@ function renderProfile() {
   renderPerformanceGraph();
   requestAnimationFrame(updateSection);
   renderScores(); renderHistory(); renderMostPlayed();
+  updateModeSelector();
   $('welcome').hidden = true;
   $('profile-content').hidden = false;
 }
@@ -558,8 +559,9 @@ async function boot() {
     state.session = await api('/site/session');
     renderSession();
     const query = new URLSearchParams(location.search);
-    state.mode = ['vn','rx','ap'].includes(query.get('mode')) ? query.get('mode') : 'vn';
-    $('local-mode').value=state.mode;
+    state.mode = ['osu','taiko','fruits','mania','vn','rx','ap'].includes(query.get('mode')) ? query.get('mode') : 'osu';
+    if (state.mode === 'vn') state.mode = 'osu';
+    updateModeSelector();
     let name = /\/(?:users|u)\/([^/]+)/.exec(location.pathname)?.[1];
     if (name) name = decodeURIComponent(name);
     // The game's fixed user ID 2 links to its current local profile.
@@ -598,9 +600,73 @@ $('logout').addEventListener('click',async()=>{
   try{await api('/site/logout',{});state.session=await api('/site/session');renderSession();renderProfile();$('login-dialog').close();}
   catch(error){$('login-error').textContent=error.message;$('login-error').hidden=false;}
 });
-$('local-mode').addEventListener('change',async()=>{
-  state.mode=$('local-mode').value;state.topLimit=5;state.recentLimit=5;state.mostLimit=5;
-  await loadProfile(state.name,true);
+function updateModeSelector(){
+  const currentRuleset = ['osu', 'vn', 'rx', 'ap'].includes(state.mode) ? 'osu' : (state.mode || 'osu');
+
+  document.querySelectorAll('#game-mode-nav .game-mode-link').forEach(btn => {
+    const btnMode = btn.dataset.mode;
+    const isActive = btnMode === currentRuleset;
+    btn.classList.toggle('game-mode-link--active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
+
+    // Handle badges on osu button for relax and autopilot
+    if (btnMode === 'osu') {
+      let badge = btn.querySelector('.game-mode-link__badge');
+      if (state.mode === 'rx') {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'game-mode-link__badge';
+          btn.appendChild(badge);
+        }
+        badge.textContent = 'rx';
+        btn.title = 'osu! (Relax)';
+        btn.setAttribute('aria-label', 'osu! (Relax)');
+      } else if (state.mode === 'ap') {
+        if (!badge) {
+          badge = document.createElement('span');
+          badge.className = 'game-mode-link__badge';
+          btn.appendChild(badge);
+        }
+        badge.textContent = 'ap';
+        btn.title = 'osu! (Autopilot)';
+        btn.setAttribute('aria-label', 'osu! (Autopilot)');
+      } else {
+        if (badge) badge.remove();
+        btn.title = 'osu!';
+        btn.setAttribute('aria-label', 'osu!');
+      }
+    }
+  });
+}
+document.querySelectorAll('#game-mode-nav .game-mode-link').forEach(btn => {
+  btn.addEventListener('click', async () => {
+    const clickedMode = btn.dataset.mode;
+    const currentRuleset = ['osu', 'vn', 'rx', 'ap'].includes(state.mode) ? 'osu' : state.mode;
+
+    let targetMode = clickedMode;
+    if (clickedMode === 'osu') {
+      if (currentRuleset === 'osu') {
+        // VN button is already selected! Cycle osu -> rx -> ap -> osu
+        if (state.mode === 'osu' || state.mode === 'vn') {
+          targetMode = 'rx';
+        } else if (state.mode === 'rx') {
+          targetMode = 'ap';
+        } else {
+          targetMode = 'osu';
+        }
+      } else {
+        targetMode = 'osu';
+      }
+    } else {
+      if (state.mode === clickedMode) return;
+      targetMode = clickedMode;
+    }
+
+    state.mode = targetMode;
+    updateModeSelector();
+    state.topLimit = 5; state.recentLimit = 5; state.mostLimit = 5;
+    await loadProfile(state.name, true);
+  });
 });
 $('more-top').addEventListener('click',()=>{state.topLimit+=10;renderScores();});
 $('more-recent').addEventListener('click',()=>{state.recentLimit+=10;renderScores();});

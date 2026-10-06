@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>player info · Local osu!</title>
 <link rel="stylesheet" href="/site/static/vendor/osu-web.css">
-<link rel="stylesheet" href="/site/static/profile.css?v=los13">
-<script src="/site/static/profile.js?v=los9" defer></script>
+<link rel="stylesheet" href="/site/static/profile.css?v=los17">
+<script src="/site/static/profile.js?v=los13" defer></script>
 </head>
 <body class="t-user">
 <header class="local-header">
@@ -17,7 +17,7 @@
 <header class="mobile-header"><a href="/" aria-label="Local osu! home"><img src="/site/static/vendor/osu-logo-white.59d385da.svg" alt="osu!"></a><span>player info</span><button id="mobile-menu-toggle" aria-label="Toggle navigation" aria-expanded="false" type="button"><i class="fas fa-chevron-down"></i></button></header>
 <nav id="mobile-menu" class="mobile-menu" hidden aria-label="Mobile navigation"><a href="/">home</a><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">beatmaps</a><a href="https://osu.ppy.sh/rankings/osu/global" target="_blank" rel="noreferrer">rankings</a><button id="mobile-account" type="button">Sign in / switch profile</button></nav>
 <main class="profile-shell">
-  <div class="profile-navigation"><a class="selected" href="#profile">info</a><div class="los-profile-nav"><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">modding</a><a href="https://osu.ppy.sh/seasons/latest" target="_blank" rel="noreferrer">playlists</a><a href="https://osu.ppy.sh/multiplayer" target="_blank" rel="noreferrer">multiplayer</a></div><div class="mode-controls"><i class="fal fa-extra-mode-osu" title="osu!"></i><select id="local-mode" aria-label="Score mode"><option value="vn">standard</option><option value="rx">relax</option><option value="ap">autopilot</option></select></div></div>
+  <div class="profile-navigation"><a class="selected" href="#profile">info</a><div class="los-profile-nav"><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">modding</a><a href="https://osu.ppy.sh/seasons/latest" target="_blank" rel="noreferrer">playlists</a><a href="https://osu.ppy.sh/multiplayer" target="_blank" rel="noreferrer">multiplayer</a></div><ul class="game-mode" id="game-mode-nav"><li class="game-mode__item"><button type="button" class="game-mode-link game-mode-link--button game-mode-link--active" data-mode="osu" title="osu!" aria-label="osu!"><span class="fa-extra-mode-osu"></span></button></li><li class="game-mode__item"><button type="button" class="game-mode-link game-mode-link--button" data-mode="taiko" title="osu!taiko" aria-label="osu!taiko"><span class="fa-extra-mode-taiko"></span></button></li><li class="game-mode__item"><button type="button" class="game-mode-link game-mode-link--button" data-mode="fruits" title="osu!catch" aria-label="osu!catch"><span class="fa-extra-mode-fruits"></span></button></li><li class="game-mode__item"><button type="button" class="game-mode-link game-mode-link--button" data-mode="mania" title="osu!mania" aria-label="osu!mania"><span class="fa-extra-mode-mania"></span></button></li></ul></div>
   <div id="page-message" role="status" hidden></div>
   <div id="profile-content" hidden>
     <section id="profile" class="profile-overview">

@@ -188,6 +188,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
         [],
     );
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN country TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN playmode TEXT NOT NULL DEFAULT 'osu'", []);
 
     let _ = conn.execute(
         "CREATE TABLE IF NOT EXISTS rank_history (
@@ -354,7 +355,7 @@ pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
 
 pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<ProfileDetails> {
     let mut stmt = conn.prepare(
-        "SELECT about, location, devices, section_order, country FROM profile_details WHERE player_name = ?1",
+        "SELECT about, location, devices, section_order, country, playmode FROM profile_details WHERE player_name = ?1",
     )?;
     let result = stmt.query_row(params![player_name], |row| {
         let about: String = row.get(0)?;
@@ -362,11 +363,12 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
         let devices_json: String = row.get(2)?;
         let section_order_json: String = row.get(3)?;
         let country: String = row.get(4)?;
-        Ok((about, location, devices_json, section_order_json, country))
+        let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
+        Ok((about, location, devices_json, section_order_json, country, playmode))
     });
 
     match result {
-        Ok((about, location, devices_json, section_order_json, country)) => {
+        Ok((about, location, devices_json, section_order_json, country, playmode)) => {
             let devices: Vec<String> = serde_json::from_str(&devices_json).unwrap_or_default();
             let section_order: Vec<String> = serde_json::from_str(&section_order_json)
                 .unwrap_or_else(|_| default_section_order());
@@ -385,12 +387,15 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 country
             };
 
+            let playmode = if playmode.is_empty() { "osu".to_string() } else { playmode };
+
             Ok(ProfileDetails {
                 about,
                 location,
                 devices,
                 section_order,
                 country,
+                playmode,
             })
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -420,14 +425,15 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
         .unwrap_or_else(|_| serde_json::to_string(&default_section_order()).unwrap());
 
     conn.execute(
-        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country, playmode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(player_name) DO UPDATE SET
             about = excluded.about,
             location = excluded.location,
             devices = excluded.devices,
             section_order = excluded.section_order,
-            country = excluded.country",
+            country = excluded.country,
+            playmode = excluded.playmode",
         params![
             player_name,
             details.about,
@@ -435,6 +441,7 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
             devices_json,
             section_order_json,
             details.country,
+            details.playmode,
         ],
     )?;
 
@@ -1737,6 +1744,7 @@ mod tests {
                 "recent-activity".to_string(),
             ],
             country: "DE".to_string(),
+            playmode: "taiko".to_string(),
         };
 
         save_profile_details(&conn, "GermanUser", &custom).unwrap();
@@ -1841,6 +1849,7 @@ mod tests {
             devices: vec!["Mouse".to_string()],
             section_order: default_section_order(),
             country: "GB".to_string(),
+            playmode: "osu".to_string(),
         };
         save_profile_details(&conn, "Alice", &details).unwrap();
         record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-01", 500).unwrap();
