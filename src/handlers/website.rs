@@ -33,6 +33,8 @@ pub struct SessionResponse {
     pub profiles: Vec<String>,
     pub active: Option<String>,
     pub default: Option<String>,
+    #[serde(default)]
+    pub avatar_version: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +177,32 @@ pub struct ProfileResponse {
     pub medals: Vec<crate::types::medal::UserMedalDisplay>,
     #[serde(default)]
     pub rank_highest: Option<crate::db::RankHighest>,
+    #[serde(default)]
+    pub avatar_version: Option<String>,
+}
+
+pub fn compute_avatar_version(avatar_url: Option<&str>) -> String {
+    match avatar_url {
+        Some(url) => {
+            if let Some(path) = utils::is_path(url) {
+                if let Ok(metadata) = std::fs::metadata(&path) {
+                    if let Ok(modified) = metadata.modified() {
+                        let dur = modified
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default();
+                        return format!("{}-{}", dur.as_secs(), dur.subsec_nanos());
+                    }
+                }
+                if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                    return fname.to_string();
+                }
+            }
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(url, &mut hasher);
+            format!("{:x}", std::hash::Hasher::finish(&hasher))
+        }
+        None => "default".to_string(),
+    }
 }
 
 pub fn now_secs() -> u64 {
@@ -1128,6 +1156,8 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
             })
         })
         .collect();
+    let av_url = db::get_avatar(&conn, name).unwrap_or(None);
+    let avatar_version = Some(compute_avatar_version(av_url.as_deref()));
     drop(conn);
     drop(state_guard);
 
@@ -1157,6 +1187,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         recent_24h: recent_24h_public,
         medals: medals_display,
         rank_highest,
+        avatar_version,
     })
 }
 
@@ -1190,11 +1221,15 @@ async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Respo
     let active = state_guard.player.as_ref().map(|p| p.name.clone());
 
     // Fetch profile lists from DB
-    let (profiles, default) = {
+    let (profiles, default, avatar_version) = {
         let conn = state_guard.db.lock().await;
         let p_list = db::list_profiles(&conn).unwrap_or_default();
         let def = db::get_default_profile(&conn).unwrap_or_default();
-        (p_list, def)
+        let av_ver = username.as_ref().map(|u| {
+            let av = db::get_avatar(&conn, u).unwrap_or(None);
+            compute_avatar_version(av.as_deref())
+        });
+        (p_list, def, av_ver)
     };
 
     drop(state_guard);
@@ -1205,6 +1240,7 @@ async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Respo
         profiles,
         active,
         default,
+        avatar_version,
     });
 
     if set_cookie {
@@ -1301,13 +1337,15 @@ async fn handle_logout(state: SharedState, headers: &hyper::HeaderMap) -> Respon
 async fn serve_guest_avatar(state: &SharedState) -> Response {
     if let Some(asset) = EmbeddedAssets::get("vendor/avatar-guest@2x.01495bc4.png") {
         return Response::image(asset.data.to_vec(), "png")
-            .with_header("Cache-Control", "public, max-age=86400");
+            .with_header("Cache-Control", "no-cache, must-revalidate")
+            .with_header("Pragma", "no-cache");
     }
 
     let state_read = state.read().await;
     if !state_read.default_avatar.is_empty() {
         return Response::image(state_read.default_avatar.clone(), "png")
-            .with_header("Cache-Control", "public, max-age=86400");
+            .with_header("Cache-Control", "no-cache, must-revalidate")
+            .with_header("Pragma", "no-cache");
     }
 
     Response::not_found()
@@ -1333,7 +1371,8 @@ async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> 
         if let Ok(bytes) = tokio::fs::read(&path).await {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
             return Response::image(bytes, ext)
-                .with_header("Cache-Control", "public, max-age=86400");
+                .with_header("Cache-Control", "no-cache, must-revalidate")
+                .with_header("Pragma", "no-cache");
         }
     } else if pfp.starts_with("http://") || pfp.starts_with("https://") {
         let state_read = state.read().await;
@@ -1353,7 +1392,8 @@ async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> 
                         "png"
                     };
                     return Response::image(bytes.to_vec(), ext)
-                        .with_header("Cache-Control", "public, max-age=86400");
+                        .with_header("Cache-Control", "no-cache, must-revalidate")
+                        .with_header("Pragma", "no-cache");
                 }
             }
         }
@@ -2303,6 +2343,8 @@ mod tests {
         let resp = handle_avatar(shared_state.clone(), &params).await;
         assert_eq!(resp.status, StatusCode::OK);
         assert_eq!(resp.header("content-type").unwrap(), "image/png");
+        assert_eq!(resp.header("cache-control").unwrap(), "no-cache, must-revalidate");
+        assert_eq!(resp.header("pragma").unwrap(), "no-cache");
 
         // Custom avatar file path
         let temp_avatar = std::path::Path::new(".data").join("avatars").join("test_avatar.png");
@@ -2318,6 +2360,8 @@ mod tests {
         let resp_custom = handle_avatar(shared_state.clone(), &params).await;
         assert_eq!(resp_custom.status, StatusCode::OK);
         assert_eq!(resp_custom.body, b"\x89PNG\r\n\x1a\ntest");
+        assert_eq!(resp_custom.header("cache-control").unwrap(), "no-cache, must-revalidate");
+        assert_eq!(resp_custom.header("pragma").unwrap(), "no-cache");
 
         let _ = std::fs::remove_file(&temp_avatar);
     }
@@ -2398,6 +2442,21 @@ mod tests {
             assert!(av.is_some());
             let av_path = av.unwrap();
             assert!(std::path::Path::new(&av_path).exists());
+            drop(conn);
+            drop(s);
+
+            let session_after = handle_session(shared_state.clone(), &login_headers).await;
+            let s_after: SessionResponse = serde_json::from_slice(&session_after.body).unwrap();
+            assert!(s_after.avatar_version.is_some());
+            assert_ne!(s_after.avatar_version.as_deref(), Some("default"));
+
+            let mut p_params = HashMap::new();
+            p_params.insert("name".to_string(), "NewName".to_string());
+            let profile_after = handle_profile(shared_state.clone(), &p_params).await;
+            let p_data: ProfileResponse = serde_json::from_slice(&profile_after.body).unwrap();
+            assert!(p_data.avatar_version.is_some());
+            assert_ne!(p_data.avatar_version.as_deref(), Some("default"));
+
             let _ = std::fs::remove_file(&av_path);
         }
 

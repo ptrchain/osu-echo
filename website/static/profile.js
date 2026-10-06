@@ -23,8 +23,9 @@ async function api(path, body) {
 function showMessage(text) { $('page-message').textContent = text; $('page-message').hidden = !text; }
 function renderSession() {
   $('account-name').textContent = state.session.user || 'Sign in';
-  const accountImage=state.session.user?`/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${state.avatarVersion||0}`:fallbackAvatar;
-  if($('account-avatar').getAttribute('src')!==accountImage)$('account-avatar').src=accountImage;
+  const v = state.avatarVersion || state.session?.avatar_version || 'default';
+  const accountImage = state.session.user ? `/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${encodeURIComponent(v)}` : fallbackAvatar;
+  if ($('account-avatar').getAttribute('src') !== accountImage) $('account-avatar').src = accountImage;
   $('account-panel-name').textContent=state.session.user||'Guest';
   $('account-panel-status').textContent=state.session.active===state.session.user?'Active on the local server':'Local osu!';
   $('account-profile').href=state.session.user?`/users/${encodeURIComponent(state.session.user)}${state.mode ? `?mode=${state.mode}` : ''}`:'#profile';
@@ -502,7 +503,8 @@ function renderProfile() {
     $('about-content').textContent="This player hasn't written anything about themselves yet.";
     $('about-content').classList.add('subdued');
   }
-  $('avatar').src = `/site/avatar?name=${encodeURIComponent(p.name)}&v=${state.avatarVersion||0}`;
+  const v = (state.session?.user === p.name && state.avatarVersion) ? state.avatarVersion : (p.avatar_version || state.avatarVersion || 'default');
+  $('avatar').src = `/site/avatar?name=${encodeURIComponent(p.name)}&v=${encodeURIComponent(v)}`;
   $('edit-profile').hidden=state.session.user!==p.name;
   $('edit-profile-details').hidden=state.session.user!==p.name;
   $('edit-about').hidden=state.session.user!==p.name;
