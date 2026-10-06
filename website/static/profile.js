@@ -61,17 +61,167 @@ function scoreRow(score, index, top) {
   return `<div class="play-detail play-detail--highlightable"><div class="play-detail__group play-detail__group--top"><div class="play-detail__icon play-detail__icon--main">${grade}</div><div class="play-detail__detail"><a class="play-detail__title u-ellipsis-overflow" ${link?`href="${link}" target="_blank" rel="noreferrer"`:''}>${esc(map.title||'Unknown beatmap')} <small class="play-detail__artist">by ${esc(map.artist||'unknown artist')}</small></a><div class="play-detail__beatmap-and-time"><span class="play-detail__beatmap">${esc(map.version||'Unknown difficulty')}</span><time class="play-detail__time">${relative(score.time)}</time></div></div></div><div class="play-detail__group play-detail__group--bottom"><div class="play-detail__score-detail"><div class="play-detail__icon play-detail__icon--extra">${grade}</div><div class="play-detail__score-detail-top-right"><div class="play-detail__accuracy-and-weighted-pp"><span class="play-detail__accuracy">${num(score.acc,2)}%</span>${top?`<span class="play-detail__weighted-pp">${num(score.pp*weight)}pp</span>`:''}</div>${top?`<div class="play-detail__pp-weight">weighted ${num(weight*100)}%</div>`:''}</div></div><div class="play-detail__mods-pp"><div class="play-detail__mods">${modIcons(score.mods)}</div><div class="play-detail__pp">${num(score.pp)}<span class="play-detail__pp-unit">pp</span></div></div><div class="play-detail__more"><button class="popup-menu" data-score-detail="${key}" aria-label="Score details for ${esc(map.title||'unknown beatmap')}" aria-expanded="false" type="button"><i class="fas fa-ellipsis-v" aria-hidden="true"></i></button></div></div></div><div id="detail-${key}" class="score-expanded" hidden><span>Score <b>${num(score.score)}</b></span><span>Combo <b>${num(score.max_combo)}x</b></span><span>300 / 100 / 50 <b>${num(score.n300)} / ${num(score.n100)} / ${num(score.n50)}</b></span><span>Misses <b>${num(score.nmiss)}</b></span><span>Mods <b>${esc(score.mods)}</b></span>${state.session.user===state.name?`<button class="subtle-button" data-delete-score="${esc(score.id)}" type="button">Delete score</button>`:''}</div>`;
 }
 function renderHistory() {
-  const history=state.profile.play_history||[];
-  if(!history.length){$('play-history').textContent='No play history yet.';return;}
-  const start=new Date(history[0][0]+'-01T00:00:00Z');
-  const end=new Date(history[history.length-1][0]+'-01T00:00:00Z');
-  const values=new Map(history);
-  const months=[];
-  while(start<=end){const month=start.toISOString().slice(0,7);months.push([month,values.get(month)||0]);start.setUTCMonth(start.getUTCMonth()+1);}
-  const data=months.slice(-240),max=Math.max(...data.map(x=>x[1]),1);
-  const points=data.map(([m,n],i)=>`${45+i*535/Math.max(data.length-1,1)},${210-n/max*180}`).join(' ');
-  const lines=[0,.25,.5,.75,1].map(f=>`<line x1="45" x2="580" y1="${210-f*180}" y2="${210-f*180}" stroke="currentColor" opacity=".15"/><text x="36" y="${214-f*180}" text-anchor="end">${num(max*f)}</text>`).join('');
-  $('play-history').innerHTML=`<svg viewBox="0 0 600 250" role="img" aria-label="Monthly play counts from saved scores">${lines}<polyline points="${points}" fill="none" stroke="#ffcc22" stroke-width="2"/>${data.map(([m,n],i)=>`<circle cx="${45+i*535/Math.max(data.length-1,1)}" cy="${210-n/max*180}" r="3" fill="#ffcc22"><title>${m}: ${n} plays</title></circle>`).join('')}<text x="45" y="238">${esc(data[0][0])}</text><text x="580" y="238" text-anchor="end">${data.length>1?esc(data[data.length-1][0]):''}</text></svg>`;
+  const history = state.profile.play_history || [];
+  if (!history.length) {
+    $('play-history').textContent = 'No play history yet.';
+    return;
+  }
+  const values = new Map(history);
+  const firstMonthStr = history[0][0];
+  const lastMonthStr = history[history.length - 1][0];
+  let start = new Date(firstMonthStr + '-01T00:00:00Z');
+  if ((values.get(firstMonthStr) || 0) > 0) {
+    start.setUTCMonth(start.getUTCMonth() - 1);
+  }
+  let end = new Date(lastMonthStr + '-01T00:00:00Z');
+  const now = new Date();
+  const nowMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  if (end < nowMonth) {
+    end = nowMonth;
+  }
+
+  const months = [];
+  const cur = new Date(start.getTime());
+  while (cur <= end) {
+    const mStr = cur.toISOString().slice(0, 7);
+    months.push([mStr, values.get(mStr) || 0]);
+    cur.setUTCMonth(cur.getUTCMonth() + 1);
+  }
+  const data = months.slice(-240);
+  const maxVal = Math.max(...data.map(x => x[1]), 1);
+
+  // D3 nice ticks algorithm
+  const step0 = maxVal / 3;
+  const power = Math.pow(10, Math.floor(Math.log10(step0)));
+  const err = step0 / power;
+  let step = power;
+  if (err >= 7.0710678) step = power * 10;
+  else if (err >= 3.1622776) step = power * 5;
+  else if (err >= 1.4142135) step = power * 2;
+
+  const ticks = [];
+  for (let i = 0; i * step <= maxVal; i++) {
+    ticks.push(i * step);
+  }
+  if (ticks.length < 2) ticks.push(step);
+  let topTick = ticks[ticks.length - 1];
+  while (maxVal > topTick * 1.15) {
+    topTick += step;
+    ticks.push(topTick);
+  }
+
+  const gridLeft = 96, gridRight = 872;
+  const gridWidth = gridRight - gridLeft;
+  const gridTop = 20, gridBottom = 195;
+  const gridHeight = gridBottom - gridTop;
+  const getY = v => gridBottom - (v / topTick) * gridHeight;
+
+  // Horizontal grid lines and Y-axis labels
+  const hLines = ticks.map(t => {
+    const y = getY(t);
+    return `<line x1="${gridLeft}" x2="${gridRight}" y1="${y}" y2="${y}" stroke="rgba(0, 0, 0, 0.4)" stroke-width="1"/><text x="${gridLeft - 10}" y="${y}" dy="0.35em" text-anchor="end" fill="hsl(var(--hsl-f1))" font-size="11" font-family="Torus, Inter, Arial, sans-serif">${num(t)}</text>`;
+  }).join('');
+
+  // X-axis ticks (vertical grid lines and rotated labels)
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fullMonthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  const janIndices = [];
+  data.forEach(([m], i) => { if (m.endsWith('-01')) janIndices.push(i); });
+
+  let tickIndices = [];
+  if (janIndices.length >= 2) {
+    tickIndices = janIndices;
+  } else if (data.length <= 6) {
+    tickIndices = data.map((_, i) => i);
+  } else if (data.length <= 18) {
+    tickIndices = data.map((_, i) => i).filter(i => i % 2 === 0);
+  } else {
+    tickIndices = data.map(([m], i) => i).filter(i => {
+      const mo = parseInt(data[i][0].slice(5, 7), 10);
+      return [1, 4, 7, 10].includes(mo);
+    });
+  }
+
+  const vLines = tickIndices.map(i => {
+    const x = gridLeft + (i / Math.max(data.length - 1, 1)) * gridWidth;
+    const mStr = data[i][0];
+    const yStr = mStr.slice(0, 4);
+    const mIdx = parseInt(mStr.slice(5, 7), 10) - 1;
+    const label = `${monthNames[mIdx]} ${yStr}`;
+    return `<line x1="${x}" x2="${x}" y1="${gridTop}" y2="${gridBottom}" stroke="rgba(0, 0, 0, 0.4)" stroke-width="1"/><text x="${x}" y="${gridBottom + 10}" transform="rotate(45, ${x}, ${gridBottom + 10})" text-anchor="start" fill="hsl(var(--hsl-f1))" font-size="11" font-family="Torus, Inter, Arial, sans-serif">${label}</text>`;
+  }).join('');
+
+  // Data polyline points
+  const points = data.map(([m, n], i) => {
+    const x = gridLeft + (i / Math.max(data.length - 1, 1)) * gridWidth;
+    const y = getY(n);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  const html = `<svg id="ph-svg" viewBox="0 0 920 236" role="img" aria-label="Monthly play counts from saved scores">
+    ${hLines}
+    ${vLines}
+    <polyline points="${points}" fill="none" stroke="#ffcc22" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <g id="ph-hover" opacity="0" pointer-events="none" style="transition: opacity 100ms ease;">
+      <line id="ph-hover-line" y1="${gridTop}" y2="${gridBottom}" stroke="rgba(255, 255, 255, 0.25)" stroke-dasharray="3,3" stroke-width="1"/>
+      <circle id="ph-hover-dot" r="4.5" fill="#ffcc22" stroke="#251e22" stroke-width="2"/>
+      <g id="ph-tooltip">
+        <rect id="ph-tt-bg" rx="4" fill="rgba(20, 16, 18, 0.95)" stroke="rgba(255, 255, 255, 0.15)" stroke-width="1" width="130" height="26" x="-65" y="-34"/>
+        <text id="ph-tt-text" fill="#fff" font-size="11" font-weight="600" text-anchor="middle" y="-17"></text>
+      </g>
+    </g>
+    <rect id="ph-overlay" x="${gridLeft}" y="0" width="${gridWidth}" height="${gridBottom + 10}" fill="transparent" style="cursor: crosshair;"/>
+  </svg>`;
+
+  $('play-history').innerHTML = html;
+
+  const svg = $('ph-svg');
+  const overlay = $('ph-overlay');
+  const hoverG = $('ph-hover');
+  const hoverLine = $('ph-hover-line');
+  const hoverDot = $('ph-hover-dot');
+  const tt = $('ph-tooltip');
+  const ttBg = $('ph-tt-bg');
+  const ttText = $('ph-tt-text');
+
+  if (overlay && svg) {
+    overlay.addEventListener('mousemove', e => {
+      const rect = svg.getBoundingClientRect();
+      const svgX = ((e.clientX - rect.left) / rect.width) * 920;
+      const ratio = Math.max(0, Math.min(1, (svgX - gridLeft) / gridWidth));
+      const idx = Math.round(ratio * (data.length - 1));
+      if (idx < 0 || idx >= data.length) return;
+
+      const ptX = gridLeft + (idx / Math.max(data.length - 1, 1)) * gridWidth;
+      const ptY = getY(data[idx][1]);
+      const [yPart, mPart] = data[idx][0].split('-');
+      const mName = fullMonthNames[parseInt(mPart, 10) - 1];
+      const textStr = `${mName} ${yPart}: ${num(data[idx][1])} plays`;
+
+      hoverLine.setAttribute('x1', ptX);
+      hoverLine.setAttribute('x2', ptX);
+      hoverDot.setAttribute('cx', ptX);
+      hoverDot.setAttribute('cy', ptY);
+
+      ttText.textContent = textStr;
+      const textWidth = Math.max(130, textStr.length * 7 + 16);
+      ttBg.setAttribute('width', textWidth);
+      ttBg.setAttribute('x', -textWidth / 2);
+
+      let ttY = ptY - 8;
+      if (ttY < 30) ttY = ptY + 38;
+      let ttX = ptX;
+      if (ttX - textWidth / 2 < 10) ttX = textWidth / 2 + 10;
+      if (ttX + textWidth / 2 > 910) ttX = 910 - textWidth / 2;
+
+      tt.setAttribute('transform', `translate(${ttX}, ${ttY})`);
+      hoverG.setAttribute('opacity', '1');
+    });
+
+    overlay.addEventListener('mouseleave', () => {
+      hoverG.setAttribute('opacity', '0');
+    });
+  }
 }
 function renderMostPlayed() {
   const maps=state.profile.most_played||[];
