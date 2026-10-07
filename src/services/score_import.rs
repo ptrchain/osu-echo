@@ -5,6 +5,62 @@ use crate::types::replay::Replay;
 use crate::types::score::Score;
 use crate::utils;
 use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, OnceLock};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportProgress {
+    pub active: bool,
+    pub stage: String,
+    pub message: String,
+    pub current: usize,
+    pub total: usize,
+    pub percent: u32,
+    pub imported_count: usize,
+    pub replays_count: usize,
+    pub error: Option<String>,
+}
+
+impl Default for ImportProgress {
+    fn default() -> Self {
+        Self {
+            active: false,
+            stage: String::new(),
+            message: String::new(),
+            current: 0,
+            total: 0,
+            percent: 0,
+            imported_count: 0,
+            replays_count: 0,
+            error: None,
+        }
+    }
+}
+
+static IMPORT_PROGRESS: OnceLock<Mutex<std::collections::HashMap<String, ImportProgress>>> = OnceLock::new();
+
+fn get_progress_map() -> &'static Mutex<std::collections::HashMap<String, ImportProgress>> {
+    IMPORT_PROGRESS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn update_import_progress(player_name: &str, progress: ImportProgress) {
+    if let Ok(mut map) = get_progress_map().lock() {
+        map.insert(player_name.to_lowercase(), progress);
+    }
+}
+
+pub fn get_import_progress(player_name: &str) -> Option<ImportProgress> {
+    if let Ok(map) = get_progress_map().lock() {
+        map.get(&player_name.to_lowercase()).cloned()
+    } else {
+        None
+    }
+}
+
+pub fn clear_import_progress(player_name: &str) {
+    if let Ok(mut map) = get_progress_map().lock() {
+        map.remove(&player_name.to_lowercase());
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
@@ -148,16 +204,44 @@ pub fn parse_bancho_mods(mod_items: &[BanchoModItem]) -> (Mods, String) {
 pub async fn resolve_user_id_and_name(
     http: &reqwest::Client,
     query: &str,
+    api_key_opt: Option<&str>,
 ) -> Result<(i64, String), String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Err("User query is empty".to_string());
     }
 
+    // 1. If an official API v1 key is configured, query official API first (bypasses Cloudflare challenge)
+    if let Some(key) = api_key_opt {
+        let is_id = trimmed.parse::<i64>().is_ok();
+        let u_type = if is_id { "id" } else { "string" };
+        let url = format!(
+            "https://osu.ppy.sh/api/get_user?k={}&u={}&type={}",
+            key,
+            percent_encoding::utf8_percent_encode(trimmed, percent_encoding::NON_ALPHANUMERIC),
+            u_type
+        );
+        if let Ok(resp) = http.get(&url).send().await {
+            if resp.status().is_success() {
+                if let Ok(users) = resp.json::<Vec<serde_json::Value>>().await {
+                    if let Some(first) = users.first() {
+                        let id_opt = first.get("user_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok());
+                        let name_opt = first.get("username").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        if let (Some(uid), Some(uname)) = (id_opt, name_opt) {
+                            return Ok((uid, uname));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. If query is a numeric ID, use it directly
     if let Ok(id) = trimmed.parse::<i64>() {
         return Ok((id, id.to_string()));
     }
 
+    // 3. Fallback to public web page scraping
     let encoded = percent_encoding::utf8_percent_encode(trimmed, percent_encoding::NON_ALPHANUMERIC).to_string();
     let url = format!("https://osu.ppy.sh/users/{}", encoded);
 
@@ -170,6 +254,12 @@ pub async fn resolve_user_id_and_name(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Err(format!("User '{}' not found on osu.ppy.sh", trimmed));
+    }
+
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err(
+            "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Set OSU_API_KEY in your .env file or enter your numeric osu! User ID directly.".to_string(),
+        );
     }
 
     if !resp.status().is_success() {
@@ -220,6 +310,12 @@ pub async fn fetch_user_scores_web(
         return Ok(Vec::new());
     }
 
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
+        return Err(
+            "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Configure OSU_API_KEY in your .env file to bypass Cloudflare.".to_string(),
+        );
+    }
+
     if !resp.status().is_success() {
         return Err(format!("osu! scores endpoint returned HTTP {}", resp.status()));
     }
@@ -231,6 +327,131 @@ pub async fn fetch_user_scores_web(
         .map_err(|e| format!("Failed to deserialize Bancho scores JSON: {}", e))?;
 
     Ok(scores)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiV1UserScore {
+    pub beatmap_id: String,
+    pub score_id: Option<String>,
+    pub score: String,
+    pub maxcombo: String,
+    pub count50: String,
+    pub count100: String,
+    pub count300: String,
+    pub countmiss: String,
+    pub countkatu: String,
+    pub countgeki: String,
+    pub perfect: String,
+    pub enabled_mods: String,
+    pub user_id: String,
+    pub date: String,
+    pub rank: String,
+    pub pp: Option<String>,
+    pub replay_available: Option<String>,
+}
+
+pub async fn fetch_user_scores_api_v1(
+    http: &reqwest::Client,
+    api_key: &str,
+    user_id: i64,
+    score_type: &str,
+    mode_int: i32,
+    limit: usize,
+) -> Result<Vec<BanchoWebScore>, String> {
+    let endpoint = match score_type {
+        "recent" => "get_user_recent",
+        _ => "get_user_best",
+    };
+
+    let url = format!(
+        "https://osu.ppy.sh/api/{}?k={}&u={}&m={}&limit={}&type=id",
+        endpoint, api_key, user_id, mode_int, limit.clamp(1, 100)
+    );
+
+    let resp = http.get(&url).send().await
+        .map_err(|e| format!("Failed to query osu! API v1: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("osu! API v1 returned HTTP {}", resp.status()));
+    }
+
+    let api_scores: Vec<ApiV1UserScore> = resp.json().await
+        .map_err(|e| format!("Failed to parse osu! API v1 JSON: {}", e))?;
+
+    let mut result = Vec::new();
+    for s in api_scores {
+        let bmap_id = s.beatmap_id.parse::<i64>().unwrap_or(0);
+        let score_id = s.score_id.as_deref().and_then(|id| id.parse::<i64>().ok()).unwrap_or(0);
+        let sc_val = s.score.parse::<i64>().unwrap_or(0);
+        let max_combo = s.maxcombo.parse::<i32>().unwrap_or(0);
+        let n50 = s.count50.parse::<i32>().unwrap_or(0);
+        let n100 = s.count100.parse::<i32>().unwrap_or(0);
+        let n300 = s.count300.parse::<i32>().unwrap_or(0);
+        let nmiss = s.countmiss.parse::<i32>().unwrap_or(0);
+        let nkatu = s.countkatu.parse::<i32>().unwrap_or(0);
+        let ngeki = s.countgeki.parse::<i32>().unwrap_or(0);
+        let mods_int = s.enabled_mods.parse::<u32>().unwrap_or(0);
+        let pp_val = s.pp.as_deref().and_then(|p| p.parse::<f64>().ok());
+        let perfect = s.perfect == "1";
+        let replay = s.replay_available.as_deref() == Some("1");
+
+        let mods_obj = Mods::from_bits_truncate(mods_int);
+        let sn = mods_obj.short_name();
+        let mut mod_items = Vec::new();
+        if sn != "NM" {
+            let chars: Vec<char> = sn.chars().collect();
+            for chunk in chars.chunks(2) {
+                let s: String = chunk.iter().collect();
+                mod_items.push(BanchoModItem::Str(s));
+            }
+        }
+
+        let acc = crate::utils::calculate_accuracy(
+            mode_int as u8, n300, n100, n50, ngeki, nkatu, nmiss
+        );
+
+        result.push(BanchoWebScore {
+            id: score_id,
+            best_id: Some(score_id),
+            user_id,
+            accuracy: acc / 100.0,
+            mods: mod_items,
+            score: Some(sc_val),
+            legacy_score: Some(sc_val),
+            classic_total_score: Some(sc_val),
+            total_score: Some(sc_val),
+            max_combo,
+            passed: Some(true),
+            perfect: Some(perfect),
+            pp: pp_val,
+            rank: Some(s.rank),
+            created_at: s.date,
+            mode: Some(mode_to_ruleset_str(mode_int).to_string()),
+            mode_int: Some(mode_int),
+            replay: Some(replay),
+            statistics: BanchoStatistics {
+                count_50: n50,
+                count_100: n100,
+                count_300: n300,
+                count_geki: Some(ngeki),
+                count_katu: Some(nkatu),
+                count_miss: nmiss,
+            },
+            beatmap: Some(BanchoBeatmapMeta {
+                id: bmap_id,
+                beatmapset_id: 0,
+                checksum: None,
+                version: String::new(),
+                status: Some("ranked".to_string()),
+                difficulty_rating: None,
+                total_length: None,
+                bpm: None,
+            }),
+            beatmapset: None,
+        });
+    }
+
+    Ok(result)
 }
 
 pub async fn fetch_missing_beatmap_osu(
@@ -510,6 +731,18 @@ pub async fn execute_import(
         return Err("Please provide an osu! username or user ID.".to_string());
     }
 
+    update_import_progress(player_name, ImportProgress {
+        active: true,
+        stage: "resolving".to_string(),
+        message: format!("Resolving Bancho profile for '{}'...", query),
+        current: 0,
+        total: 0,
+        percent: 5,
+        imported_count: 0,
+        replays_count: 0,
+        error: None,
+    });
+
     let (http, config, db, target_player_mode) = {
         let s = state.read().await;
         (
@@ -526,7 +759,23 @@ pub async fn execute_import(
         _ => crate::db::ConflictPolicy::Skip,
     };
 
-    let (user_id, verified_username) = resolve_user_id_and_name(&http, query).await?;
+    let (user_id, verified_username) = match resolve_user_id_and_name(&http, query, config.osu_api_key.as_deref()).await {
+        Ok(res) => res,
+        Err(err) => {
+            update_import_progress(player_name, ImportProgress {
+                active: false,
+                stage: "error".to_string(),
+                message: err.clone(),
+                current: 0,
+                total: 0,
+                percent: 0,
+                imported_count: 0,
+                replays_count: 0,
+                error: Some(err.clone()),
+            });
+            return Err(err);
+        }
+    };
 
     let modes = if payload.modes.is_empty() {
         vec![mode_to_ruleset_str(target_player_mode).to_string()]
@@ -540,111 +789,240 @@ pub async fn execute_import(
         payload.types.clone()
     };
 
-    let mut bmap_cache: std::collections::HashMap<String, Beatmap> = std::collections::HashMap::new();
-    let mut all_import_records: Vec<(Score, String, Option<Beatmap>)> = Vec::new();
-    let mut replays_downloaded = 0usize;
+    update_import_progress(player_name, ImportProgress {
+        active: true,
+        stage: "fetching".to_string(),
+        message: format!("Fetching score categories for {} from osu.ppy.sh...", verified_username),
+        current: 0,
+        total: 0,
+        percent: 15,
+        imported_count: 0,
+        replays_count: 0,
+        error: None,
+    });
+
+    let mut fetched_score_entries: Vec<(i32, String, BanchoWebScore)> = Vec::new();
 
     for m_str in &modes {
         let m_int = parse_mode_str(m_str);
         let ruleset_str = mode_to_ruleset_str(m_int);
 
         for t_str in &types {
-            let web_scores = match fetch_user_scores_web(
-                &http,
-                user_id,
-                t_str,
-                ruleset_str,
-                100,
-                payload.osu_session.as_deref(),
-            ).await {
-                Ok(s) => s,
-                Err(err) => {
-                    crate::utils::log_error(&format!("Failed to fetch {} scores for {}: {}", t_str, verified_username, err));
-                    continue;
-                }
-            };
-
-            for raw in &web_scores {
-                if raw.passed == Some(false) {
-                    continue;
-                }
-
-                let checksum = raw.beatmap.as_ref().and_then(|b| b.checksum.clone()).unwrap_or_default();
-                let bmap_id = raw.beatmap.as_ref().map(|b| b.id).unwrap_or(0);
-
-                // 1. Resolve beatmap metadata & .osu content
-                let mut beatmap_opt: Option<Beatmap> = None;
-                if !checksum.is_empty() {
-                    if let Some(cached) = bmap_cache.get(&checksum) {
-                        beatmap_opt = Some(cached.clone());
-                    } else {
-                        let db_conn = db.lock().await;
-                        let existing_in_db = crate::db::get_beatmap_by_md5(&db_conn, &checksum).ok().flatten();
-                        drop(db_conn);
-
-                        if let Some(existing) = existing_in_db {
-                            if existing.file_content.as_deref().unwrap_or("").is_empty() {
-                                if let Some(fetched) = fetch_missing_beatmap_osu(&http, &config, bmap_id, &checksum).await {
-                                    bmap_cache.insert(checksum.clone(), fetched.clone());
-                                    beatmap_opt = Some(fetched);
-                                } else {
-                                    bmap_cache.insert(checksum.clone(), existing.clone());
-                                    beatmap_opt = Some(existing);
-                                }
-                            } else {
-                                bmap_cache.insert(checksum.clone(), existing.clone());
-                                beatmap_opt = Some(existing);
+            let web_scores = if let Some(ref api_key) = config.osu_api_key {
+                match fetch_user_scores_api_v1(&http, api_key, user_id, t_str, m_int, 100).await {
+                    Ok(scores) => scores,
+                    Err(api_err) => {
+                        crate::utils::log_error(&format!("API v1 fetch error for {}: {}, trying web endpoint", verified_username, api_err));
+                        match fetch_user_scores_web(
+                            &http,
+                            user_id,
+                            t_str,
+                            ruleset_str,
+                            100,
+                            payload.osu_session.as_deref(),
+                        ).await {
+                            Ok(s) => s,
+                            Err(err) => {
+                                crate::utils::log_error(&format!("Failed to fetch {} scores for {}: {}", t_str, verified_username, err));
+                                continue;
                             }
-                        } else if let Some(fetched) = fetch_missing_beatmap_osu(&http, &config, bmap_id, &checksum).await {
-                            bmap_cache.insert(checksum.clone(), fetched.clone());
-                            beatmap_opt = Some(fetched);
                         }
                     }
                 }
-
-                let beatmap_content = beatmap_opt.as_ref().and_then(|b| b.file_content.as_deref());
-
-                // 2. Normalize score to local
-                let (mut local_score, parsed_bmap) = parse_web_score_to_local(
-                    raw,
-                    player_name,
-                    m_int,
-                    payload.recalc_pp,
-                    beatmap_content,
-                );
-
-                let final_bmap = beatmap_opt.or(parsed_bmap);
-
-                // 3. Attempt replay download if requested
-                if payload.download_replays && raw.replay == Some(true) {
-                    let replay_res = download_score_replay(
-                        &http,
-                        ruleset_str,
-                        raw.id,
-                        payload.osu_session.as_deref(),
-                        config.osu_api_key.as_deref(),
-                        bmap_id,
-                        user_id,
-                        m_int,
-                    ).await;
-
-                    if let Some((frames, md5_opt)) = replay_res {
-                        local_score.replay_frames = Some(frames);
-                        local_score.replay_md5 = md5_opt;
-                        replays_downloaded += 1;
+            } else {
+                match fetch_user_scores_web(
+                    &http,
+                    user_id,
+                    t_str,
+                    ruleset_str,
+                    100,
+                    payload.osu_session.as_deref(),
+                ).await {
+                    Ok(s) => s,
+                    Err(err) => {
+                        crate::utils::log_error(&format!("Failed to fetch {} scores for {}: {}", t_str, verified_username, err));
+                        continue;
                     }
                 }
+            };
 
-                let bmap_status = raw.beatmap.as_ref()
-                    .and_then(|b| b.status.clone())
-                    .unwrap_or_else(|| "ranked".to_string());
-
-                all_import_records.push((local_score, bmap_status, final_bmap));
+            for raw in web_scores {
+                if raw.passed != Some(false) {
+                    fetched_score_entries.push((m_int, t_str.clone(), raw));
+                }
             }
         }
     }
 
+    let total_scores = fetched_score_entries.len();
+    if total_scores == 0 {
+        update_import_progress(player_name, ImportProgress {
+            active: false,
+            stage: "done".to_string(),
+            message: format!("No qualifying scores found on osu.ppy.sh for {}", verified_username),
+            current: 0,
+            total: 0,
+            percent: 100,
+            imported_count: 0,
+            replays_count: 0,
+            error: None,
+        });
+        return Ok(ImportScoresResponse {
+            ok: true,
+            user_id,
+            username: verified_username.clone(),
+            imported_count: 0,
+            skipped_count: 0,
+            replays_downloaded: 0,
+            new_pp: 0,
+            new_acc: 0.0,
+            medals_unlocked: 0,
+            message: format!("No qualifying scores found on osu.ppy.sh for {}", verified_username),
+        });
+    }
+
+    let mut bmap_cache: std::collections::HashMap<String, Beatmap> = std::collections::HashMap::new();
+    let mut all_import_records: Vec<(Score, String, Option<Beatmap>)> = Vec::new();
+    let mut replays_downloaded = 0usize;
+
+    for (idx, (m_int, _t_str, raw)) in fetched_score_entries.into_iter().enumerate() {
+        let current = idx + 1;
+        let percent = 20 + (((current as f64) / (total_scores as f64)) * 68.0) as u32;
+
+        let bmap_id = raw.beatmap.as_ref().map(|b| b.id).unwrap_or(0);
+        let checksum = raw.beatmap.as_ref().and_then(|b| b.checksum.clone()).unwrap_or_default();
+        let ruleset_str = mode_to_ruleset_str(m_int);
+
+        let map_label = raw.beatmapset.as_ref()
+            .map(|s| format!("{} - {}", s.artist, s.title))
+            .or_else(|| {
+                if bmap_id > 0 {
+                    Some(format!("Beatmap #{}", bmap_id))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| format!("Score #{}", current));
+
+        update_import_progress(player_name, ImportProgress {
+            active: true,
+            stage: "processing".to_string(),
+            message: format!("Importing {}/{} · {}", current, total_scores, map_label),
+            current,
+            total: total_scores,
+            percent,
+            imported_count: all_import_records.len(),
+            replays_count: replays_downloaded,
+            error: None,
+        });
+
+        // 1. Resolve beatmap metadata & .osu content
+        let mut beatmap_opt: Option<Beatmap> = None;
+        if !checksum.is_empty() {
+            if let Some(cached) = bmap_cache.get(&checksum) {
+                beatmap_opt = Some(cached.clone());
+            } else {
+                let db_conn = db.lock().await;
+                let existing_in_db = crate::db::get_beatmap_by_md5(&db_conn, &checksum).ok().flatten();
+                drop(db_conn);
+
+                if let Some(existing) = existing_in_db {
+                    if existing.file_content.as_deref().unwrap_or("").is_empty() {
+                        if let Some(fetched) = fetch_missing_beatmap_osu(&http, &config, bmap_id, &checksum).await {
+                            bmap_cache.insert(checksum.clone(), fetched.clone());
+                            beatmap_opt = Some(fetched);
+                        } else {
+                            bmap_cache.insert(checksum.clone(), existing.clone());
+                            beatmap_opt = Some(existing);
+                        }
+                    } else {
+                        bmap_cache.insert(checksum.clone(), existing.clone());
+                        beatmap_opt = Some(existing);
+                    }
+                } else if let Some(fetched) = fetch_missing_beatmap_osu(&http, &config, bmap_id, &checksum).await {
+                    bmap_cache.insert(checksum.clone(), fetched.clone());
+                    beatmap_opt = Some(fetched);
+                }
+            }
+        } else if bmap_id > 0 {
+            let id_key = format!("id:{}", bmap_id);
+            if let Some(cached) = bmap_cache.get(&id_key) {
+                beatmap_opt = Some(cached.clone());
+            } else {
+                let db_conn = db.lock().await;
+                let existing_in_db = crate::db::get_beatmap_by_id(&db_conn, bmap_id).ok().flatten();
+                drop(db_conn);
+
+                if let Some(existing) = existing_in_db {
+                    bmap_cache.insert(id_key.clone(), existing.clone());
+                    bmap_cache.insert(existing.file_md5.clone(), existing.clone());
+                    beatmap_opt = Some(existing);
+                } else if let Some(fetched) = fetch_missing_beatmap_osu(&http, &config, bmap_id, "").await {
+                    bmap_cache.insert(id_key.clone(), fetched.clone());
+                    bmap_cache.insert(fetched.file_md5.clone(), fetched.clone());
+                    beatmap_opt = Some(fetched);
+                }
+            }
+        }
+
+        let beatmap_content = beatmap_opt.as_ref().and_then(|b| b.file_content.as_deref());
+
+        // 2. Normalize score to local
+        let (mut local_score, parsed_bmap) = parse_web_score_to_local(
+            &raw,
+            player_name,
+            m_int,
+            payload.recalc_pp,
+            beatmap_content,
+        );
+
+        let final_bmap = beatmap_opt.or(parsed_bmap);
+
+        if local_score.md5.is_empty() {
+            if let Some(ref bm) = final_bmap {
+                local_score.md5 = bm.file_md5.clone();
+            }
+        }
+
+        // 3. Attempt replay download if requested
+        if payload.download_replays && raw.replay == Some(true) {
+            let replay_res = download_score_replay(
+                &http,
+                ruleset_str,
+                raw.id,
+                payload.osu_session.as_deref(),
+                config.osu_api_key.as_deref(),
+                bmap_id,
+                user_id,
+                m_int,
+            ).await;
+
+            if let Some((frames, md5_opt)) = replay_res {
+                local_score.replay_frames = Some(frames);
+                local_score.replay_md5 = md5_opt;
+                replays_downloaded += 1;
+            }
+        }
+
+        let bmap_status = raw.beatmap.as_ref()
+            .and_then(|b| b.status.clone())
+            .unwrap_or_else(|| "ranked".to_string());
+
+        all_import_records.push((local_score, bmap_status, final_bmap));
+    }
+
     if all_import_records.is_empty() {
+        update_import_progress(player_name, ImportProgress {
+            active: false,
+            stage: "done".to_string(),
+            message: format!("No qualifying scores found on osu.ppy.sh for {}", verified_username),
+            current: 0,
+            total: 0,
+            percent: 100,
+            imported_count: 0,
+            replays_count: 0,
+            error: None,
+        });
         return Ok(ImportScoresResponse {
             ok: true,
             user_id,
@@ -660,6 +1038,18 @@ pub async fn execute_import(
     }
 
     // 4. Batch import scores into SQLite
+    update_import_progress(player_name, ImportProgress {
+        active: true,
+        stage: "saving".to_string(),
+        message: format!("Saving {} imported scores to database...", all_import_records.len()),
+        current: total_scores,
+        total: total_scores,
+        percent: 92,
+        imported_count: all_import_records.len(),
+        replays_count: replays_downloaded,
+        error: None,
+    });
+
     let db_records: Vec<crate::db::ImportScoreRecord> = all_import_records
         .iter()
         .map(|(sc, st, bm)| crate::db::ImportScoreRecord {
@@ -688,6 +1078,18 @@ pub async fn execute_import(
     }
 
     // 6. Recalculate profile stats and medals
+    update_import_progress(player_name, ImportProgress {
+        active: true,
+        stage: "recalculating".to_string(),
+        message: "Recalculating profile statistics, PP, and medals...".to_string(),
+        current: total_scores,
+        total: total_scores,
+        percent: 96,
+        imported_count,
+        replays_count: replays_downloaded,
+        error: None,
+    });
+
     let (_count, new_pp, new_acc) = crate::handlers::banchobot::recalculate_profile(state, player_name).await;
 
     let newly_earned = {
@@ -714,6 +1116,21 @@ pub async fn execute_import(
             }
         }
     }
+
+    update_import_progress(player_name, ImportProgress {
+        active: false,
+        stage: "done".to_string(),
+        message: format!(
+            "Successfully imported {} score(s) ({} replays)! PP: {}pp | Acc: {:.2}%",
+            imported_count, replays_downloaded, new_pp, new_acc
+        ),
+        current: total_scores,
+        total: total_scores,
+        percent: 100,
+        imported_count,
+        replays_count: replays_downloaded,
+        error: None,
+    });
 
     Ok(ImportScoresResponse {
         ok: true,

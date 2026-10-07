@@ -198,8 +198,15 @@
     </details>
     <div id="import-scores-progress-box" class="import-progress-box" hidden>
       <div class="import-spinner-row">
-        <div class="import-spinner"></div>
+        <div class="import-spinner" id="import-scores-spinner"></div>
         <span id="import-scores-status" class="import-status loading">Fetching scores from osu.ppy.sh...</span>
+      </div>
+      <div class="import-progress-bar-wrap" id="import-progress-bar-wrap">
+        <div class="import-progress-bar-fill" id="import-progress-bar-fill" style="width: 0%"></div>
+      </div>
+      <div class="import-progress-meta" id="import-progress-meta">
+        <span id="import-progress-counter">Ready</span>
+        <span id="import-progress-percent">0%</span>
       </div>
     </div>
     <div style="margin-top:18px">

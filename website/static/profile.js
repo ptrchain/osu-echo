@@ -1002,13 +1002,49 @@ function showImportStatus(msg,type){
   const el=$('import-official-status');
   el.textContent=msg;el.className='import-status '+(type||'');el.hidden=!msg;
 }
-function showImportScoresStatus(msg,type){
-  const el=$('import-scores-status');
-  el.textContent=msg;el.className='import-status '+(type||'');
-  $('import-scores-progress-box').hidden=!msg;
-  const spinner=$('import-scores-progress-box').querySelector('.import-spinner');
-  if(spinner)spinner.style.display=type==='loading'?'block':'none';
+function setImportProgressBar(percent, current, total, importedCount, replaysCount, stage, error = false){
+  const bar = $('import-progress-bar-fill');
+  const counter = $('import-progress-counter');
+  const pctEl = $('import-progress-percent');
+  if(!bar) return;
+
+  bar.className = 'import-progress-bar-fill' + (error ? ' error' : (percent >= 100 ? ' success' : ''));
+  bar.style.width = Math.min(100, Math.max(0, percent)) + '%';
+  if(pctEl) pctEl.textContent = Math.round(percent) + '%';
+
+  if(counter){
+    if(total > 0){
+      let text = `${current} / ${total} scores`;
+      if(importedCount !== undefined && importedCount > 0){
+        text += ` · ${importedCount} saved`;
+        if(replaysCount) text += `, ${replaysCount} replays`;
+      }
+      counter.textContent = text;
+    }else if(stage){
+      counter.textContent = stage;
+    }else{
+      counter.textContent = '';
+    }
+  }
 }
+
+function showImportScoresStatus(msg, type, percent = 0){
+  const el = $('import-scores-status');
+  el.textContent = msg;
+  el.className = 'import-status ' + (type || '');
+  $('import-scores-progress-box').hidden = !msg;
+  const spinner = $('import-scores-spinner');
+  if(spinner) spinner.style.display = type === 'loading' ? 'block' : 'none';
+
+  if(type === 'loading'){
+    setImportProgressBar(percent, 0, 0, 0, 0, 'Starting...');
+  }else if(type === 'success'){
+    setImportProgressBar(100, 0, 0, undefined, undefined, 'Complete');
+  }else if(type === 'error'){
+    setImportProgressBar(100, 0, 0, undefined, undefined, 'Failed', true);
+  }
+}
+
 document.querySelectorAll('#import-mode-toggles .mode-toggle-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
     btn.classList.toggle('active');
@@ -1068,8 +1104,30 @@ $('import-scores-btn').addEventListener('click',async()=>{
   const controls=$('settings-scores-panel').querySelectorAll('input, button, select');
   controls.forEach(c=>{if(c!==btn)c.disabled=true;});
 
-  showImportScoresStatus(`Fetching ${types.join(', ')} scores for '${query}' from osu.ppy.sh...`,'loading');
+  showImportScoresStatus(`Connecting to osu.ppy.sh for '${query}'...`,'loading',5);
+
+  let pollInterval=null;
+  const startPolling=()=>{
+    pollInterval=setInterval(async()=>{
+      try{
+        const p=await api('/site/scores/import/status');
+        if(p&&p.active){
+          if(p.message)$('import-scores-status').textContent=p.message;
+          setImportProgressBar(
+            p.percent||0,
+            p.current||0,
+            p.total||0,
+            p.imported_count||0,
+            p.replays_count||0,
+            p.stage
+          );
+        }
+      }catch(_){}
+    },250);
+  };
+
   try{
+    startPolling();
     const res=await api('/site/scores/import',{
       query,
       modes,
@@ -1079,6 +1137,8 @@ $('import-scores-btn').addEventListener('click',async()=>{
       sync_playcount,
       osu_session,
     });
+    clearInterval(pollInterval);
+    setImportProgressBar(100,res.imported_count,res.imported_count,res.imported_count,res.replays_downloaded,'Complete');
     const medalPart=res.medals_unlocked>0?` • ${res.medals_unlocked} new medal(s) unlocked!`:'';
     const successMsg=`Successfully imported ${res.imported_count} score(s) (${res.replays_downloaded} replays)! PP: ${num(res.new_pp)}pp | Acc: ${num(res.new_acc,2)}%${medalPart}`;
     showImportScoresStatus(successMsg,'success');
@@ -1086,8 +1146,10 @@ $('import-scores-btn').addEventListener('click',async()=>{
       await loadProfile(state.name,false,true);
     }
   }catch(err){
+    clearInterval(pollInterval);
     showImportScoresStatus(err.message,'error');
   }finally{
+    clearInterval(pollInterval);
     btn.disabled=false;
     controls.forEach(c=>{c.disabled=false;});
   }

@@ -897,6 +897,7 @@ pub async fn handle(
         (&Method::GET, "scores/replay") => handle_score_replay(state, params).await,
         (&Method::POST, "scores/pin") => handle_pin_score(state, headers, body).await,
         (&Method::POST, "scores/import") => handle_import_scores(state, headers, body).await,
+        (&Method::GET, "scores/import/status") => handle_import_scores_status(state, headers).await,
         (&Method::POST, "import_official") => handle_import_official(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
@@ -1881,26 +1882,76 @@ async fn handle_import_official(
         return json_error(StatusCode::NOT_FOUND, &format!("User '{}' not found on osu.ppy.sh.", query));
     }
 
-    if !res.status().is_success() {
+    let api_key_opt = {
+        let s = state.read().await;
+        s.config.osu_api_key.clone()
+    };
+
+    let parsed = if res.status().is_success() {
+        let html = match res.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Failed to read response from osu.ppy.sh: {}", e),
+                );
+            }
+        };
+        match parse_official_userpage_html(&html) {
+            Ok(p) => p,
+            Err(err) => return json_error(StatusCode::UNPROCESSABLE_ENTITY, &err),
+        }
+    } else if let Some(ref key) = api_key_opt {
+        // Fallback to API v1 get_user when Cloudflare blocks HTML scraping
+        let is_id = query.parse::<i64>().is_ok();
+        let u_type = if is_id { "id" } else { "string" };
+        let api_url = format!("https://osu.ppy.sh/api/get_user?k={}&u={}&type={}", key, encoded_query, u_type);
+        let api_res = http_client.get(&api_url).send().await;
+        let user_opt = match api_res {
+            Ok(r) if r.status().is_success() => {
+                r.json::<Vec<serde_json::Value>>().await.ok().and_then(|v| v.into_iter().next())
+            }
+            _ => None,
+        };
+        match user_opt {
+            Some(u) => {
+                let u_id = u.get("user_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                let u_name = u.get("username").and_then(|v| v.as_str()).unwrap_or(query).to_string();
+                let u_country = u.get("country").and_then(|v| v.as_str()).map(|s| s.to_string());
+                OfficialUserParsed {
+                    id: u_id,
+                    username: u_name,
+                    country_code: u_country,
+                    location: None,
+                    playstyle: Vec::new(),
+                    raw_bio: None,
+                    avatar_url: Some(format!("https://a.ppy.sh/{}", u_id)),
+                }
+            }
+            None => {
+                if res.status() == StatusCode::FORBIDDEN {
+                    return json_error(
+                        StatusCode::BAD_GATEWAY,
+                        "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Configure OSU_API_KEY in .env.",
+                    );
+                }
+                return json_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("osu.ppy.sh returned status {}.", res.status()),
+                );
+            }
+        }
+    } else {
+        if res.status() == StatusCode::FORBIDDEN {
+            return json_error(
+                StatusCode::BAD_GATEWAY,
+                "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Set OSU_API_KEY in your .env file or enter your numeric osu! User ID.",
+            );
+        }
         return json_error(
             StatusCode::BAD_GATEWAY,
             &format!("osu.ppy.sh returned status {}.", res.status()),
         );
-    }
-
-    let html = match res.text().await {
-        Ok(t) => t,
-        Err(e) => {
-            return json_error(
-                StatusCode::BAD_GATEWAY,
-                &format!("Failed to read response from osu.ppy.sh: {}", e),
-            );
-        }
-    };
-
-    let parsed = match parse_official_userpage_html(&html) {
-        Ok(p) => p,
-        Err(err) => return json_error(StatusCode::UNPROCESSABLE_ENTITY, &err),
     };
 
     let mut current_details = {
@@ -2062,6 +2113,39 @@ async fn handle_import_official(
         details_updated,
         message,
     })
+}
+
+async fn handle_import_scores_status(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to check import status."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Session expired."),
+    };
+    drop(state_read);
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to check import status."),
+    };
+
+    let progress = crate::services::score_import::get_import_progress(&current_user)
+        .unwrap_or_default();
+
+    json_ok(&progress)
 }
 
 async fn handle_import_scores(
