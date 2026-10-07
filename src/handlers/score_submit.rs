@@ -542,6 +542,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         };
 
         let result = rosu_pp::Performance::new(map)
+            .lazer(false)
             .mode_or_ignore(game_mode)
             .mods(score.mods)
             .n300(score.n300 as u32)
@@ -1045,7 +1046,7 @@ mod tests {
                 _ => unreachable!(),
             };
 
-            let result = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).combo(4).n300(4).calculate();
+            let result = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).combo(4).n300(4).calculate();
 
             assert!(result.pp() >= 0.0);
         }

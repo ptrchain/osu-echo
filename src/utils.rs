@@ -426,7 +426,7 @@ pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, f
         bmap.diff_overall = parsed.od as f64;
         bmap.diff_size = parsed.cs as f64;
         bmap.diff_drain = parsed.hp as f64;
-        let diff = rosu_pp::Difficulty::new().calculate(&parsed);
+        let diff = rosu_pp::Difficulty::new().lazer(false).calculate(&parsed);
         bmap.difficultyrating = diff.stars();
         bmap.max_combo = diff.max_combo() as i32;
     }
@@ -999,6 +999,7 @@ pub fn calculate_bancho_score_pp(parsed_map: &rosu_pp::Beatmap, mode: i32, score
     let combo: u32 = score.maxcombo.parse().unwrap_or(0);
 
     let result = rosu_pp::Performance::new(parsed_map)
+        .lazer(false)
         .mode_or_ignore(game_mode)
         .mods(mods_u32)
         .n300(n300)

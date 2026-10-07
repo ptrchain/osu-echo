@@ -905,7 +905,7 @@ pub fn get_all_scores(conn: &Connection, name: &str) -> SqlResult<Vec<Score>> {
     let mut stmt = conn.prepare(
         "SELECT id, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
                 score, max_combo, perfect, mods, time, acc, pp,
-                replay_md5, replay_frames, mods_str
+                replay_md5, replay_frames, mods_str, submission_checksum, submission_identity
          FROM scores
          WHERE player_name = ?1
          ORDER BY time DESC",
@@ -935,8 +935,8 @@ pub fn get_all_scores(conn: &Connection, name: &str) -> SqlResult<Vec<Score>> {
                 mods_str: row.get(18)?,
                 scoreid: Some(row.get::<_, i64>(0)?),
                 additional_mods: None,
-                submission_checksum: None,
-                submission_identity: None,
+                submission_checksum: row.get(19).ok(),
+                submission_identity: row.get(20).ok(),
             })
         })?
         .filter_map(|r| r.ok())
@@ -949,7 +949,7 @@ pub fn get_scores_on_map(conn: &Connection, name: &str, md5: &str, mode: i32) ->
     let mut stmt = conn.prepare(
         "SELECT id, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
                 score, max_combo, perfect, mods, time, acc, pp,
-                replay_md5, replay_frames, mods_str
+                replay_md5, replay_frames, mods_str, submission_checksum, submission_identity
          FROM scores
          WHERE player_name = ?1 AND md5 = ?2 AND mode = ?3
          ORDER BY pp DESC",
@@ -979,8 +979,8 @@ pub fn get_scores_on_map(conn: &Connection, name: &str, md5: &str, mode: i32) ->
                 mods_str: row.get(18)?,
                 scoreid: Some(row.get::<_, i64>(0)?),
                 additional_mods: None,
-                submission_checksum: None,
-                submission_identity: None,
+                submission_checksum: row.get(19).ok(),
+                submission_identity: row.get(20).ok(),
             })
         })?
         .filter_map(|r| r.ok())
@@ -1043,7 +1043,7 @@ pub fn get_score_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Score>> {
     let mut stmt = conn.prepare(
         "SELECT id, player_name, mode, md5, n300, n100, n50, ngeki, nkatu, nmiss,
                 score, max_combo, perfect, mods, time, acc, pp,
-                replay_md5, replay_frames, mods_str
+                replay_md5, replay_frames, mods_str, submission_checksum, submission_identity
          FROM scores WHERE id = ?1",
     )?;
 
@@ -1070,8 +1070,8 @@ pub fn get_score_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Score>> {
             mods_str: row.get(19)?,
             scoreid: Some(row.get::<_, i64>(0)?),
             additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            submission_checksum: row.get(20).ok(),
+            submission_identity: row.get(21).ok(),
         })
     });
 

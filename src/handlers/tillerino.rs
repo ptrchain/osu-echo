@@ -235,12 +235,12 @@ pub fn calculate_np_breakdown(bmap: &Beatmap, content: &str, mods_u32: u32) -> O
         _ => rosu_pp::model::mode::GameMode::Osu,
     };
 
-    let pp95 = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).mods(mods_u32).accuracy(95.0).calculate().pp();
-    let pp98 = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).mods(mods_u32).accuracy(98.0).calculate().pp();
-    let pp99 = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).mods(mods_u32).accuracy(99.0).calculate().pp();
-    let pp100 = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).mods(mods_u32).accuracy(100.0).calculate().pp();
+    let pp95 = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).mods(mods_u32).accuracy(95.0).calculate().pp();
+    let pp98 = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).mods(mods_u32).accuracy(98.0).calculate().pp();
+    let pp99 = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).mods(mods_u32).accuracy(99.0).calculate().pp();
+    let pp100 = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).mods(mods_u32).accuracy(100.0).calculate().pp();
 
-    let diff = rosu_pp::Difficulty::new().mods(mods_u32).calculate(&parsed_map);
+    let diff = rosu_pp::Difficulty::new().lazer(false).mods(mods_u32).calculate(&parsed_map);
     let stars = diff.stars();
     let max_combo = diff.max_combo();
 
@@ -588,7 +588,7 @@ pub async fn handle_acc(state: &Arc<RwLock<AppState>>, target: &str, args: &[&st
             _ => rosu_pp::model::mode::GameMode::Osu,
         };
 
-        let result = rosu_pp::Performance::new(&parsed_map).mode_or_ignore(game_mode).mods(active_mods).accuracy(acc).calculate();
+        let result = rosu_pp::Performance::new(&parsed_map).lazer(false).mode_or_ignore(game_mode).mods(active_mods).accuracy(acc).calculate();
 
         let mods_obj = Mods::from_bits_truncate(active_mods);
         let mods_str = if mods_obj.is_empty() { String::new() } else { format!(" +{}", mods_obj.short_name()) };

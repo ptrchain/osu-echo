@@ -617,6 +617,7 @@ pub fn parse_web_score_to_local(
                     _ => rosu_pp::model::mode::GameMode::Osu,
                 };
                 let result = rosu_pp::Performance::new(&parsed_map)
+                    .lazer(false)
                     .mode_or_ignore(game_mode)
                     .mods(mods.bits())
                     .combo(raw.max_combo as u32)

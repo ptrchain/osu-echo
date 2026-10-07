@@ -1485,6 +1485,12 @@ pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &st
             continue;
         };
 
+        // If this is an imported Bancho score that already has an official PP value from osu!, preserve it!
+        let is_bancho_imported = score.submission_identity.as_deref().unwrap_or("").starts_with("bancho:");
+        if is_bancho_imported && score.pp.map(|p| p > 0.0).unwrap_or(false) {
+            continue;
+        }
+
         if !beatmap_cache.contains_key(&score.md5) {
             let mut bmap = {
                 let conn = db.lock().await;
@@ -1534,6 +1540,7 @@ pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &st
             };
 
             let result = rosu_pp::Performance::new(parsed_map)
+                .lazer(false)
                 .mode_or_ignore(game_mode)
                 .mods(score.mods)
                 .n300(score.n300.max(0) as u32)

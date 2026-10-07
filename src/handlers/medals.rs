@@ -109,6 +109,7 @@ pub fn evaluate_score_submission(
     };
     let stars = if let Some(parsed) = parsed_map {
         rosu_pp::Performance::new(parsed)
+            .lazer(false)
             .mode_or_ignore(game_mode)
             .mods(score.mods)
             .calculate()
