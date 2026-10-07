@@ -896,6 +896,7 @@ pub async fn handle(
         (&Method::POST, "scores/delete") => handle_delete_score(state, headers, body).await,
         (&Method::GET, "scores/replay") => handle_score_replay(state, params).await,
         (&Method::POST, "scores/pin") => handle_pin_score(state, headers, body).await,
+        (&Method::POST, "scores/import") => handle_import_scores(state, headers, body).await,
         (&Method::POST, "import_official") => handle_import_official(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
@@ -2063,6 +2064,49 @@ async fn handle_import_official(
     })
 }
 
+async fn handle_import_scores(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to import scores."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Session expired. Please sign in again."),
+    };
+    drop(state_read);
+
+    if !can_write(Some(&session), headers) {
+        return json_error(StatusCode::FORBIDDEN, "Refresh the page and try again.");
+    }
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to import scores."),
+    };
+
+    let payload: crate::services::score_import::ImportScoresPayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid request body: {}", e)),
+    };
+
+    match crate::services::score_import::execute_import(&state, &current_user, &payload).await {
+        Ok(res) => json_ok(&res),
+        Err(err) => json_error(StatusCode::BAD_REQUEST, &err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2907,6 +2951,62 @@ mod tests {
         let unpin_data: PinScoreResponse = serde_json::from_slice(&unpin_resp.body).unwrap();
         assert!(!unpin_data.pinned);
         assert!(unpin_data.pinned_scores.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_import_scores_route_auth_and_validation() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "ScoreImporter").unwrap();
+
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // 1. Unauthenticated -> 401
+        let empty_headers = HeaderMap::new();
+        let valid_payload = serde_json::json!({
+            "query": "peppy",
+            "modes": ["osu"],
+            "types": ["top"]
+        }).to_string();
+        let resp_unauth = handle_import_scores(shared_state.clone(), &empty_headers, valid_payload.as_bytes()).await;
+        assert_eq!(resp_unauth.status, StatusCode::UNAUTHORIZED);
+
+        // 2. Establish session
+        let s_resp = handle_session(shared_state.clone(), &HeaderMap::new()).await;
+        let s_data: SessionResponse = serde_json::from_slice(&s_resp.body).unwrap();
+        let set_cookie = s_resp.header("set-cookie").unwrap();
+        let session_token = extract_cookie(set_cookie, SESSION_COOKIE_NAME).unwrap().to_string();
+
+        let mut login_headers = HeaderMap::new();
+        login_headers.insert("cookie", HeaderValue::from_str(&format!("los_session={}", session_token)).unwrap());
+        login_headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5000"));
+        login_headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
+        login_headers.insert("x-csrf-token", HeaderValue::from_str(&s_data.csrf).unwrap());
+
+        // 3. Log in
+        let login_body = serde_json::json!({ "username": "ScoreImporter" }).to_string();
+        let l_resp = handle_login(shared_state.clone(), &login_headers, login_body.as_bytes()).await;
+        assert_eq!(l_resp.status, StatusCode::OK);
+
+        // 4. Bad CSRF -> 403
+        let mut bad_csrf_headers = login_headers.clone();
+        bad_csrf_headers.insert("x-csrf-token", HeaderValue::from_static("tampered-token"));
+        let resp_bad_csrf = handle_import_scores(shared_state.clone(), &bad_csrf_headers, valid_payload.as_bytes()).await;
+        assert_eq!(resp_bad_csrf.status, StatusCode::FORBIDDEN);
+
+        // 5. Invalid JSON payload -> 400
+        let resp_bad_json = handle_import_scores(shared_state.clone(), &login_headers, b"invalid-json").await;
+        assert_eq!(resp_bad_json.status, StatusCode::BAD_REQUEST);
+
+        // 6. Empty query -> 400
+        let empty_query_payload = serde_json::json!({
+            "query": "   ",
+            "modes": ["osu"],
+            "types": ["top"]
+        }).to_string();
+        let resp_empty_query = handle_import_scores(shared_state.clone(), &login_headers, empty_query_payload.as_bytes()).await;
+        assert_eq!(resp_empty_query.status, StatusCode::BAD_REQUEST);
     }
 }
 

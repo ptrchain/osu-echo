@@ -53,6 +53,9 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "clearscores" | "clearmap" | "removescores" | "deletescores" | "clearscore" | "removemap" | "clear" => {
             handle_clear_scores(state, player_name, reply_target, args).await
         }
+        "importscores" | "importscore" | "fetchscores" | "syncbancho" => {
+            handle_import_scores(state, player_name, reply_target, args).await
+        }
         "restrictself" | "restrict" => handle_restrictself(state, player_name, reply_target, args).await,
         "unrestrictself" | "unrestrict" => handle_unrestrictself(state, player_name, reply_target).await,
         _ => {
@@ -73,6 +76,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}recent / {p}r : Show your recent play\n\
         {p}tops / {p}t : Show top 5 plays\n\
         {p}stats / {p}profile : Show player stats\n\
+        {p}importscores [user] [mode] [type] : Import official osu! scores (top/pinned/firsts/recent)\n\
         {p}medals [sync] : Show medal progress or sync retroactively from saved scores\n\
         {p}mybest / {p}pb : Show your best score on the current map\n\
         {p}leaderboard / {p}lb : Show top scores on current map\n\
@@ -1623,6 +1627,96 @@ pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, tar
         count, new_pp, new_acc, medal_msg
     );
     reply(state, target, &msg).await;
+}
+
+pub async fn handle_import_scores(
+    state: &Arc<RwLock<AppState>>,
+    player_name: &str,
+    target: &str,
+    args: &[&str],
+) {
+    let known_modes = ["osu", "taiko", "fruits", "mania", "catch", "ctb"];
+    let known_cats = ["top", "best", "pinned", "firsts", "recent"];
+
+    let mut query = player_name.to_string();
+    let mut mode_arg = "osu".to_string();
+    let mut cat_arg = "top".to_string();
+
+    let mut remaining_args = Vec::new();
+    for &arg in args {
+        let lower = arg.to_lowercase();
+        if known_modes.contains(&lower.as_str()) {
+            mode_arg = match lower.as_str() {
+                "catch" | "ctb" => "fruits".to_string(),
+                m => m.to_string(),
+            };
+        } else if known_cats.contains(&lower.as_str()) {
+            cat_arg = match lower.as_str() {
+                "best" => "top".to_string(),
+                c => c.to_string(),
+            };
+        } else {
+            remaining_args.push(arg);
+        }
+    }
+
+    if let Some(&first_non_keyword) = remaining_args.first() {
+        if !first_non_keyword.trim().is_empty() {
+            query = first_non_keyword.trim().to_string();
+        }
+    }
+
+    reply(
+        state,
+        target,
+        &format!(
+            "Fetching {} scores for '{}' (mode: {}) from osu.ppy.sh... please wait.",
+            cat_arg, query, mode_arg
+        ),
+    )
+    .await;
+
+    let payload = crate::services::score_import::ImportScoresPayload {
+        query: query.clone(),
+        modes: vec![mode_arg],
+        types: vec![cat_arg],
+        conflict_policy: "replace_better".to_string(),
+        download_replays: true,
+        recalc_pp: false,
+        sync_playcount: true,
+        osu_session: None,
+    };
+
+    let state_clone = Arc::clone(state);
+    let target_owned = target.to_string();
+    let p_name_owned = player_name.to_string();
+
+    tokio::spawn(async move {
+        match crate::services::score_import::execute_import(&state_clone, &p_name_owned, &payload).await {
+            Ok(res) => {
+                let medal_part = if res.medals_unlocked > 0 {
+                    format!(" | Unlocked {} new medal(s)!", res.medals_unlocked)
+                } else {
+                    String::new()
+                };
+                let msg = format!(
+                    "Import complete for '{}'! Imported: {}, Skipped: {}, Replays: {} | PP: {}pp, Acc: {:.2}%{}",
+                    res.username,
+                    res.imported_count,
+                    res.skipped_count,
+                    res.replays_downloaded,
+                    res.new_pp,
+                    res.new_acc,
+                    medal_part,
+                );
+                reply(&state_clone, &target_owned, &msg).await;
+            }
+            Err(err) => {
+                let msg = format!("Import failed for '{}': {}", query, err);
+                reply(&state_clone, &target_owned, &msg).await;
+            }
+        }
+    });
 }
 
 pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
@@ -3239,6 +3333,62 @@ mod tests {
             }
         });
         assert!(sync_msg_found, "Must return sync status in response to !medals sync");
+    }
+
+    #[tokio::test]
+    async fn test_banchobot_importscores_command() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "ScoreBotTester").unwrap();
+
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        let player = crate::types::player::Player::new("ScoreBotTester".to_string());
+        app_state.player = Some(player);
+        let state = Arc::new(RwLock::new(app_state));
+
+        // 1. With explicit args: user mode type
+        handle_command(&state, "ScoreBotTester", "ScoreBotTester", "importscores", &["peppy", "osu", "top"]).await;
+
+        let s = state.read().await;
+        let p = s.player.as_ref().unwrap();
+        let pkts = packets::split_packets(&p.queue);
+        let ack_found = pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Fetching top scores for 'peppy' (mode: osu)")
+            } else {
+                false
+            }
+        });
+        assert!(ack_found, "Must acknowledge score import request for peppy");
+        drop(s);
+
+        // Clear queue
+        {
+            let mut sw = state.write().await;
+            sw.player.as_mut().unwrap().queue.clear();
+        }
+
+        // 2. Default args with alias syncbancho
+        handle_command(&state, "ScoreBotTester", "ScoreBotTester", "syncbancho", &[]).await;
+
+        let s2 = state.read().await;
+        let p2 = s2.player.as_ref().unwrap();
+        let pkts2 = packets::split_packets(&p2.queue);
+        let default_ack_found = pkts2.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Fetching top scores for 'ScoreBotTester' (mode: osu)")
+            } else {
+                false
+            }
+        });
+        assert!(default_ack_found, "Must acknowledge default score import for current player");
     }
 }
 
