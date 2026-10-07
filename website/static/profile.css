@@ -380,4 +380,161 @@ body{margin:0;background:hsl(var(--hsl-b6));color:#fff;font-family:Torus,Arial,s
   color: hsl(var(--hsl-h1));
 }
 
+/* Settings modal & Import Scores aesthetics */
+.settings-modal {
+  width: min(500px, calc(100% - 32px));
+}
+.dialog-tabs {
+  display: flex;
+  gap: 12px;
+  border-bottom: 2px solid hsl(var(--hsl-b2));
+  margin: -10px 0 20px;
+  padding-bottom: 0;
+}
+.dialog-tab {
+  background: none;
+  border: none;
+  color: hsl(var(--hsl-l1));
+  font-size: 15px;
+  font-weight: 600;
+  padding: 8px 14px 12px;
+  cursor: pointer;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.15s ease;
+}
+.dialog-tab:hover {
+  color: #fff;
+}
+.dialog-tab.active {
+  color: #fff;
+}
+.dialog-tab.active::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: hsl(var(--hsl-h1));
+  border-radius: 2px 2px 0 0;
+}
+.import-mode-toggles {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.mode-toggle-btn {
+  flex: 1;
+  min-width: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: hsl(var(--hsl-b5));
+  border: 1px solid hsl(var(--hsl-b2));
+  border-radius: 6px;
+  color: hsl(var(--hsl-l1));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+.mode-toggle-btn:hover {
+  color: #fff;
+  border-color: hsl(var(--hsl-h1));
+  background: hsl(var(--hsl-b3));
+}
+.mode-toggle-btn.active {
+  background: hsl(var(--hsl-b3));
+  border-color: hsl(var(--hsl-h1));
+  color: #fff;
+  box-shadow: 0 0 10px rgba(255, 102, 170, 0.25);
+}
+.import-types-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 6px;
+}
+.import-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #ded5db;
+  user-select: none;
+}
+.import-checkbox-label:hover {
+  color: #fff;
+}
+.import-checkbox-label input[type="checkbox"] {
+  accent-color: hsl(var(--hsl-h1));
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  margin: 0;
+}
+.import-options-group {
+  display: flex;
+  flex-direction: column;
+}
+.import-advanced-details {
+  margin-top: 14px;
+  background: hsl(var(--hsl-b5));
+  border-radius: 6px;
+  border: 1px solid hsl(var(--hsl-b2));
+  padding: 10px 14px;
+}
+.import-advanced-details summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: hsl(var(--hsl-l1));
+  user-select: none;
+}
+.import-advanced-details summary:hover {
+  color: #fff;
+}
+.advanced-cookie-box {
+  margin-top: 10px;
+}
+.advanced-cookie-box input {
+  font-family: monospace;
+  font-size: 12px;
+}
+.import-progress-box {
+  margin-top: 15px;
+  padding: 12px 14px;
+  background: hsl(var(--hsl-b5));
+  border-radius: 6px;
+  border: 1px solid hsl(var(--hsl-b2));
+}
+.import-spinner-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.import-spinner {
+  width: 18px;
+  height: 18px;
+  border: 2.5px solid hsl(var(--hsl-b2));
+  border-top-color: hsl(var(--hsl-h1));
+  border-radius: 50%;
+  animation: import-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes import-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+
 

@@ -4,14 +4,14 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>player info · Local osu!</title>
 <link rel="stylesheet" href="/site/static/vendor/osu-web.css">
-<link rel="stylesheet" href="/site/static/profile.css?v=los19">
-<script src="/site/static/profile.js?v=los15" defer></script>
+<link rel="stylesheet" href="/site/static/profile.css?v=los20">
+<script src="/site/static/profile.js?v=los16" defer></script>
 </head>
 <body class="t-user">
 <header class="local-header">
 <div class="nav2-header__triangles"></div>
 <nav class="local-nav" aria-label="Main navigation"><a href="/" class="local-logo" aria-label="Local osu! home"><img src="/site/static/vendor/osu-logo-white.59d385da.svg" alt="osu!"></a><div class="nav-links"><a href="/">home</a><a href="https://osu.ppy.sh/beatmapsets" target="_blank" rel="noreferrer">beatmaps</a><a href="https://osu.ppy.sh/rankings/osu/global" target="_blank" rel="noreferrer">rankings</a><a href="https://osu.ppy.sh/community/forums" target="_blank" rel="noreferrer">community</a><a href="https://osu.ppy.sh/store" target="_blank" rel="noreferrer">store</a><a href="https://osu.ppy.sh/wiki" target="_blank" rel="noreferrer">help</a></div><button id="account" class="account-button" type="button" title="Account" aria-expanded="false" aria-controls="account-panel"><img id="account-avatar" class="account-avatar" src="/site/static/vendor/avatar-guest@2x.01495bc4.png" alt=""><span id="account-name">Sign in</span></button></nav>
-<div id="account-panel" class="account-panel" hidden><div class="account-panel__heading"><span id="account-panel-name">Guest</span><small id="account-panel-status">Local osu!</small></div><a id="account-profile" href="#profile"><i class="fas fa-user"></i> My profile</a><button id="account-settings" type="button"><i class="fas fa-cog"></i> Settings</button><button id="account-switch" type="button"><i class="fas fa-exchange-alt"></i> Switch profile</button><button id="account-logout" type="button"><i class="fas fa-sign-out-alt"></i> Sign out</button></div>
+<div id="account-panel" class="account-panel" hidden><div class="account-panel__heading"><span id="account-panel-name">Guest</span><small id="account-panel-status">Local osu!</small></div><a id="account-profile" href="#profile"><i class="fas fa-user"></i> My profile</a><button id="account-settings" type="button"><i class="fas fa-cog"></i> Settings</button><button id="account-import-scores" type="button"><i class="fas fa-cloud-download-alt"></i> Import Scores</button><button id="account-switch" type="button"><i class="fas fa-exchange-alt"></i> Switch profile</button><button id="account-logout" type="button"><i class="fas fa-sign-out-alt"></i> Sign out</button></div>
 <div class="page-heading"><span class="header-v4__icon"></span>player info</div>
 </header>
 <header class="mobile-header"><a href="/" aria-label="Local osu! home"><img src="/site/static/vendor/osu-logo-white.59d385da.svg" alt="osu!"></a><span>player info</span><button id="mobile-menu-toggle" aria-label="Toggle navigation" aria-expanded="false" type="button"><i class="fas fa-chevron-down"></i></button></header>
@@ -84,6 +84,130 @@
   <form id="login-form"><label for="login-username">username</label><input id="login-username" name="username" autocomplete="username" required maxlength="64" placeholder="Your local profile name" list="profile-names"><datalist id="profile-names"></datalist><p class="login-help">Use your in-game username. New names create a profile; existing names switch the server to that profile. No password is needed.</p><p id="login-error" role="alert" hidden></p><button id="login-submit" class="pink-button" type="submit">Sign in</button></form>
   <div id="signed-in-actions" hidden><p id="signed-in-as"></p><button id="manage-profile" class="subtle-button" type="button">Edit profile</button><button id="logout" class="subtle-button" type="button">Sign out of website</button></div>
 </dialog>
-<dialog id="settings-dialog" class="login-dialog" aria-labelledby="settings-title"><button id="close-settings" class="close-dialog" type="button" aria-label="Close profile settings">×</button><h2 id="settings-title">Edit profile</h2><div class="official-import-box"><div class="official-import-header"><label for="import-official-query">Import from official osu!</label><span class="import-badge">osu.ppy.sh</span></div><div class="official-import-row"><input id="import-official-query" autocomplete="off" placeholder="osu! username or user ID (e.g. peppy or 2)"><button id="import-official-btn" class="subtle-button" type="button"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i> Import</button></div><p id="import-official-status" class="import-status" hidden></p></div><form id="settings-form"><div class="avatar-editor"><img id="settings-avatar" alt="Profile picture"><div><label for="avatar-file">Profile picture</label><input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"><p>PNG, JPEG, GIF or WebP · up to 2 MB</p><button id="reset-avatar" class="subtle-button" type="button">Use default picture</button></div></div><label for="settings-username">Username</label><input id="settings-username" autocomplete="off" maxlength="64" required><p class="login-help">Your scores stay with this profile when you rename it. Use the new name when signing in to the game.</p><label for="settings-country">Country</label><div class="settings-country-row"><span id="settings-country-flag" class="flag-country flag-country--medium" aria-hidden="true" style="display:none"></span><select id="settings-country"><option value="">Not specified</option></select></div><p class="login-help">Country rank compares your local pp against the official osu!standard country leaderboard.</p><label for="settings-location">Location</label><input id="settings-location" maxlength="100" placeholder="City or region (optional)"><fieldset class="device-options"><legend>Plays with</legend><label><input type="checkbox" name="device" value="Mouse"> Mouse</label><label><input type="checkbox" name="device" value="Keyboard"> Keyboard</label><label><input type="checkbox" name="device" value="Tablet"> Tablet</label><label><input type="checkbox" name="device" value="Touchscreen"> Touchscreen</label><label><input type="checkbox" name="device" value="Controller"> Controller</label></fieldset><fieldset class="section-order-editor"><legend>Profile section order</legend><div id="section-order-list"></div></fieldset><label for="settings-about">me!</label><textarea id="settings-about" rows="5" maxlength="5000" placeholder="Tell people about yourself"></textarea><p id="settings-error" role="alert" hidden></p><button id="settings-submit" type="submit" class="pink-button">Save changes</button></form></dialog>
+<dialog id="settings-dialog" class="login-dialog settings-modal" aria-labelledby="settings-title">
+  <button id="close-settings" class="close-dialog" type="button" aria-label="Close profile settings">×</button>
+  <div class="dialog-tabs">
+    <button type="button" id="tab-btn-profile" class="dialog-tab active"><i class="fas fa-user-edit"></i> Profile</button>
+    <button type="button" id="tab-btn-scores" class="dialog-tab"><i class="fas fa-cloud-download-alt"></i> Import Scores <span class="import-badge">osu.ppy.sh</span></button>
+  </div>
+  <div id="settings-profile-panel" class="settings-panel">
+    <h2 id="settings-title">Edit profile</h2>
+    <div class="official-import-box">
+      <div class="official-import-header">
+        <label for="import-official-query">Import from official osu!</label>
+        <span class="import-badge">osu.ppy.sh</span>
+      </div>
+      <div class="official-import-row">
+        <input id="import-official-query" autocomplete="off" placeholder="osu! username or user ID (e.g. peppy or 2)">
+        <button id="import-official-btn" class="subtle-button" type="button"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i> Import</button>
+      </div>
+      <p id="import-official-status" class="import-status" hidden></p>
+    </div>
+    <form id="settings-form">
+      <div class="avatar-editor">
+        <img id="settings-avatar" alt="Profile picture">
+        <div>
+          <label for="avatar-file">Profile picture</label>
+          <input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp">
+          <p>PNG, JPEG, GIF or WebP · up to 2 MB</p>
+          <button id="reset-avatar" class="subtle-button" type="button">Use default picture</button>
+        </div>
+      </div>
+      <label for="settings-username">Username</label>
+      <input id="settings-username" autocomplete="off" maxlength="64" required>
+      <p class="login-help">Your scores stay with this profile when you rename it. Use the new name when signing in to the game.</p>
+      <label for="settings-country">Country</label>
+      <div class="settings-country-row">
+        <span id="settings-country-flag" class="flag-country flag-country--medium" aria-hidden="true" style="display:none"></span>
+        <select id="settings-country"><option value="">Not specified</option></select>
+      </div>
+      <p class="login-help">Country rank compares your local pp against the official osu!standard country leaderboard.</p>
+      <label for="settings-location">Location</label>
+      <input id="settings-location" maxlength="100" placeholder="City or region (optional)">
+      <fieldset class="device-options">
+        <legend>Plays with</legend>
+        <label><input type="checkbox" name="device" value="Mouse"> Mouse</label>
+        <label><input type="checkbox" name="device" value="Keyboard"> Keyboard</label>
+        <label><input type="checkbox" name="device" value="Tablet"> Tablet</label>
+        <label><input type="checkbox" name="device" value="Touchscreen"> Touchscreen</label>
+        <label><input type="checkbox" name="device" value="Controller"> Controller</label>
+      </fieldset>
+      <fieldset class="section-order-editor">
+        <legend>Profile section order</legend>
+        <div id="section-order-list"></div>
+      </fieldset>
+      <label for="settings-about">me!</label>
+      <textarea id="settings-about" rows="5" maxlength="5000" placeholder="Tell people about yourself"></textarea>
+      <p id="settings-error" role="alert" hidden></p>
+      <button id="settings-submit" type="submit" class="pink-button">Save changes</button>
+    </form>
+  </div>
+  <div id="settings-scores-panel" class="settings-panel" hidden>
+    <h2>Import Bancho Scores</h2>
+    <p class="login-help" style="margin-top:-10px">Import official top plays, first places, replays, and beatmaps from osu.ppy.sh into Local osu!.</p>
+    <label for="import-scores-query">osu! Username or User ID</label>
+    <input id="import-scores-query" autocomplete="off" placeholder="e.g. peppy, Cookiezi, or 2">
+    <label style="margin-top:14px">Ruleset / Game Mode</label>
+    <div class="import-mode-toggles" id="import-mode-toggles">
+      <button type="button" class="mode-toggle-btn active" data-mode="osu"><span class="fa-extra-mode-osu"></span> osu!</button>
+      <button type="button" class="mode-toggle-btn" data-mode="taiko"><span class="fa-extra-mode-taiko"></span> Taiko</button>
+      <button type="button" class="mode-toggle-btn" data-mode="fruits"><span class="fa-extra-mode-fruits"></span> Catch</button>
+      <button type="button" class="mode-toggle-btn" data-mode="mania"><span class="fa-extra-mode-mania"></span> Mania</button>
+    </div>
+    <label style="margin-top:14px">Score Categories</label>
+    <div class="import-types-grid">
+      <label class="import-checkbox-label">
+        <input type="checkbox" name="import-type" value="top" checked>
+        <span>Top Ranks (Best Plays)</span>
+      </label>
+      <label class="import-checkbox-label">
+        <input type="checkbox" name="import-type" value="firsts">
+        <span>First Places (#1)</span>
+      </label>
+      <label class="import-checkbox-label">
+        <input type="checkbox" name="import-type" value="pinned">
+        <span>Pinned Scores</span>
+      </label>
+      <label class="import-checkbox-label">
+        <input type="checkbox" name="import-type" value="recent">
+        <span>Recent Plays</span>
+      </label>
+    </div>
+    <label for="import-scores-policy" style="margin-top:14px">Duplicate Conflict Policy</label>
+    <select id="import-scores-policy">
+      <option value="replace_better" selected>Replace if higher PP or score</option>
+      <option value="skip">Skip existing plays</option>
+      <option value="overwrite">Overwrite existing plays</option>
+    </select>
+    <div class="import-options-group" style="margin:14px 0 10px">
+      <label class="import-checkbox-label" style="margin-bottom:6px">
+        <input type="checkbox" id="import-scores-replays" checked>
+        <span>Download replays (.osr)</span>
+      </label>
+      <label class="import-checkbox-label">
+        <input type="checkbox" id="import-scores-playcount" checked>
+        <span>Sync total playcount</span>
+      </label>
+    </div>
+    <details class="import-advanced-details">
+      <summary><i class="fas fa-key"></i> Bancho Session Cookie (Optional for Replays)</summary>
+      <div class="advanced-cookie-box">
+        <p class="login-help" style="margin:6px 0 8px;font-size:12px">Required by osu.ppy.sh to download replays outside the top 50. Inspect browser cookies on osu.ppy.sh to copy <code>osu_session</code>.</p>
+        <input id="import-scores-session" type="password" placeholder="osu_session cookie value" autocomplete="off">
+      </div>
+    </details>
+    <div id="import-scores-progress-box" class="import-progress-box" hidden>
+      <div class="import-spinner-row">
+        <div class="import-spinner"></div>
+        <span id="import-scores-status" class="import-status loading">Fetching scores from osu.ppy.sh...</span>
+      </div>
+    </div>
+    <div style="margin-top:18px">
+      <button id="import-scores-btn" type="button" class="pink-button">
+        <i class="fas fa-cloud-download-alt"></i> Import Bancho Scores
+      </button>
+    </div>
+  </div>
+</dialog>
 <noscript><p class="noscript">Enable JavaScript to view local profiles and sign in.</p></noscript>
 </body></html>

@@ -956,12 +956,19 @@ function updateSettingsCountryFlag(){
     flagEl.style.display='none';
   }
 }
-async function openSettings(){
+async function openSettings(tab = 'profile'){
   if(!state.session.user){openLogin();return;}
   $('login-dialog').close();
   state.avatarUpload=null;state.resetAvatar=false;
   $('avatar-file').value='';$('settings-error').hidden=true;
   $('import-official-query').value='';showImportStatus('','');
+  if(!$('import-scores-query').value)$('import-scores-query').value=state.session.user;
+  showImportScoresStatus('','');
+  if(tab==='scores'){
+    selectSettingsTab('scores');
+  }else{
+    selectSettingsTab('profile');
+  }
   $('settings-username').value=state.session.user;
   $('settings-avatar').src=`/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${Date.now()}`;
   $('settings-dialog').showModal();
@@ -978,10 +985,38 @@ async function openSettings(){
     $('settings-submit').disabled=false;
   }catch(error){$('settings-error').textContent=error.message;$('settings-error').hidden=false;}
 }
+function selectSettingsTab(tab){
+  const isProfile = tab === 'profile';
+  $('tab-btn-profile').classList.toggle('active', isProfile);
+  $('tab-btn-scores').classList.toggle('active', !isProfile);
+  $('settings-profile-panel').hidden = !isProfile;
+  $('settings-scores-panel').hidden = isProfile;
+}
+$('tab-btn-profile').addEventListener('click',()=>selectSettingsTab('profile'));
+$('tab-btn-scores').addEventListener('click',()=>{
+  selectSettingsTab('scores');
+  if(!$('import-scores-query').value&&state.session?.user)$('import-scores-query').value=state.session.user;
+});
+if($('account-import-scores')){$('account-import-scores').addEventListener('click',()=>{closeAccount();openSettings('scores');});}
 function showImportStatus(msg,type){
   const el=$('import-official-status');
   el.textContent=msg;el.className='import-status '+(type||'');el.hidden=!msg;
 }
+function showImportScoresStatus(msg,type){
+  const el=$('import-scores-status');
+  el.textContent=msg;el.className='import-status '+(type||'');
+  $('import-scores-progress-box').hidden=!msg;
+  const spinner=$('import-scores-progress-box').querySelector('.import-spinner');
+  if(spinner)spinner.style.display=type==='loading'?'block':'none';
+}
+document.querySelectorAll('#import-mode-toggles .mode-toggle-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    btn.classList.toggle('active');
+    if(!document.querySelectorAll('#import-mode-toggles .mode-toggle-btn.active').length){
+      btn.classList.add('active');
+    }
+  });
+});
 $('import-official-btn').addEventListener('click',async()=>{
   const query=$('import-official-query').value.trim();
   if(!query){showImportStatus('Enter an official osu! username or user ID.','error');$('import-official-query').focus();return;}
@@ -1008,9 +1043,61 @@ $('import-official-btn').addEventListener('click',async()=>{
 $('import-official-query').addEventListener('keydown',e=>{
   if(e.key==='Enter'){e.preventDefault();$('import-official-btn').click();}
 });
-$('edit-profile').addEventListener('click',openSettings);
-$('edit-profile-details').addEventListener('click',openSettings);
-$('manage-profile').addEventListener('click',openSettings);
+$('import-scores-btn').addEventListener('click',async()=>{
+  const query=$('import-scores-query').value.trim();
+  if(!query){
+    showImportScoresStatus('Enter an official osu! username or user ID.','error');
+    $('import-scores-query').focus();
+    return;
+  }
+  const modes=[...document.querySelectorAll('#import-mode-toggles .mode-toggle-btn.active')].map(b=>b.dataset.mode);
+  if(!modes.length)modes.push('osu');
+  const types=[...document.querySelectorAll('input[name="import-type"]:checked')].map(cb=>cb.value);
+  if(!types.length){
+    showImportScoresStatus('Select at least one score category (e.g. Top Ranks).','error');
+    return;
+  }
+  const conflict_policy=$('import-scores-policy').value||'replace_better';
+  const download_replays=$('import-scores-replays').checked;
+  const sync_playcount=$('import-scores-playcount').checked;
+  const sessionVal=$('import-scores-session').value.trim();
+  const osu_session=sessionVal?sessionVal:undefined;
+
+  const btn=$('import-scores-btn');
+  btn.disabled=true;
+  const controls=$('settings-scores-panel').querySelectorAll('input, button, select');
+  controls.forEach(c=>{if(c!==btn)c.disabled=true;});
+
+  showImportScoresStatus(`Fetching ${types.join(', ')} scores for '${query}' from osu.ppy.sh...`,'loading');
+  try{
+    const res=await api('/site/scores/import',{
+      query,
+      modes,
+      types,
+      conflict_policy,
+      download_replays,
+      sync_playcount,
+      osu_session,
+    });
+    const medalPart=res.medals_unlocked>0?` • ${res.medals_unlocked} new medal(s) unlocked!`:'';
+    const successMsg=`Successfully imported ${res.imported_count} score(s) (${res.replays_downloaded} replays)! PP: ${num(res.new_pp)}pp | Acc: ${num(res.new_acc,2)}%${medalPart}`;
+    showImportScoresStatus(successMsg,'success');
+    if(state.name){
+      await loadProfile(state.name,false,true);
+    }
+  }catch(err){
+    showImportScoresStatus(err.message,'error');
+  }finally{
+    btn.disabled=false;
+    controls.forEach(c=>{c.disabled=false;});
+  }
+});
+$('import-scores-query').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();$('import-scores-btn').click();}
+});
+$('edit-profile').addEventListener('click',()=>openSettings('profile'));
+$('edit-profile-details').addEventListener('click',()=>openSettings('profile'));
+$('manage-profile').addEventListener('click',()=>openSettings('profile'));
 $('close-settings').addEventListener('click',()=>$('settings-dialog').close());
 $('reset-avatar').addEventListener('click',()=>{state.avatarUpload=null;state.resetAvatar=true;$('avatar-file').value='';$('settings-avatar').src=fallbackAvatar;});
 $('avatar-file').addEventListener('change',async()=>{
