@@ -33,6 +33,8 @@ pub struct ProfileDetails {
     pub country: String,
     #[serde(default = "default_playmode")]
     pub playmode: String,
+    #[serde(default)]
+    pub pinned_scores: Vec<String>,
 }
 
 impl Default for ProfileDetails {
@@ -44,6 +46,7 @@ impl Default for ProfileDetails {
             section_order: default_section_order(),
             country: String::new(),
             playmode: default_playmode(),
+            pinned_scores: Vec::new(),
         }
     }
 }
@@ -55,6 +58,9 @@ impl ProfileDetails {
         }
         if self.location.len() > 100 {
             return Err("Location exceeds maximum length of 100 characters");
+        }
+        if self.pinned_scores.len() > 20 {
+            return Err("Too many pinned scores (maximum 20)");
         }
         for device in &self.devices {
             if !SUPPORTED_DEVICES.iter().any(|d| d.eq_ignore_ascii_case(device)) {

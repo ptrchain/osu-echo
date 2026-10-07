@@ -52,13 +52,21 @@ function modIcons(value) {
   mods = [...new Set(mods)].filter(m => !(m==='DT' && mods.includes('NC')) && !(m==='SD' && mods.includes('PF')));
   return `<div class="mods">${mods.map(m=>{const type=['EZ','HT','NF'].includes(m)?'DifficultyReduction':['RX','AP','AT'].includes(m)?'Automation':m==='NM'?'System':'DifficultyIncrease';return `<div class="mod mod--type-${type}" title="${esc(m)}"><div class="mod__icon mod__icon--${esc(m)}" data-acronym="${esc(m)}"></div></div>`;}).join('')}</div>`;
 }
-function scoreRow(score, index, top) {
+function isScorePinned(scoreId) {
+  const pinned = (state.profile?.details?.pinned_scores || []).map(String);
+  return pinned.includes(String(scoreId));
+}
+function scoreRow(score, index, top, section = top ? 'top' : 'recent') {
   const map=score.beatmap||{};
   const link=Number(map.beatmap_id)>0?`https://osu.ppy.sh/beatmaps/${Number(map.beatmap_id)}`:null;
   const weight=.95**index;
   const grade=`<div class="score-rank score-rank--full score-rank--${esc(score.grade)}" role="img" aria-label="Grade ${esc(score.grade.replace('X','SS'))}"></div>`;
-  const key=`${top?'top':'recent'}-${index}`;
-  return `<div class="play-detail play-detail--highlightable"><div class="play-detail__group play-detail__group--top"><div class="play-detail__icon play-detail__icon--main">${grade}</div><div class="play-detail__detail"><a class="play-detail__title u-ellipsis-overflow" ${link?`href="${link}" target="_blank" rel="noreferrer"`:''}>${esc(map.title||'Unknown beatmap')} <small class="play-detail__artist">by ${esc(map.artist||'unknown artist')}</small></a><div class="play-detail__beatmap-and-time"><span class="play-detail__beatmap">${esc(map.version||'Unknown difficulty')}</span><time class="play-detail__time">${relative(score.time)}</time></div></div></div><div class="play-detail__group play-detail__group--bottom"><div class="play-detail__score-detail"><div class="play-detail__icon play-detail__icon--extra">${grade}</div><div class="play-detail__score-detail-top-right"><div class="play-detail__accuracy-and-weighted-pp"><span class="play-detail__accuracy">${num(score.acc,2)}%</span>${top?`<span class="play-detail__weighted-pp">${num(score.pp*weight)}pp</span>`:''}</div>${top?`<div class="play-detail__pp-weight">weighted ${num(weight*100)}%</div>`:''}</div></div><div class="play-detail__mods-pp"><div class="play-detail__mods">${modIcons(score.mods)}</div><div class="play-detail__pp">${num(score.pp)}<span class="play-detail__pp-unit">pp</span></div></div><div class="play-detail__more"><button class="popup-menu" data-score-detail="${key}" aria-label="Score details for ${esc(map.title||'unknown beatmap')}" aria-expanded="false" type="button"><i class="fas fa-ellipsis-v" aria-hidden="true"></i></button></div></div></div><div id="detail-${key}" class="score-expanded" hidden><span>Score <b>${num(score.score)}</b></span><span>Combo <b>${num(score.max_combo)}x</b></span><span>300 / 100 / 50 <b>${num(score.n300)} / ${num(score.n100)} / ${num(score.n50)}</b></span><span>Misses <b>${num(score.nmiss)}</b></span><span>Mods <b>${esc(score.mods)}</b></span>${state.session.user===state.name?`<button class="subtle-button" data-delete-score="${esc(score.id)}" type="button">Delete score</button>`:''}</div>`;
+  const key=`${section}-${index}`;
+  const isOwner = Boolean(state.session?.user && state.session.user === state.name);
+  const pinned = isScorePinned(score.id);
+  const hasReplay = Boolean(score.has_replay);
+
+  return `<div class="play-detail play-detail--highlightable" id="row-${key}"><div class="play-detail__group play-detail__group--top"><div class="play-detail__icon play-detail__icon--main">${grade}</div><div class="play-detail__detail"><a class="play-detail__title u-ellipsis-overflow" ${link?`href="${link}" target="_blank" rel="noreferrer"`:''}>${esc(map.title||'Unknown beatmap')} <small class="play-detail__artist">by ${esc(map.artist||'unknown artist')}</small></a><div class="play-detail__beatmap-and-time"><span class="play-detail__beatmap">${esc(map.version||'Unknown difficulty')}</span><time class="play-detail__time">${relative(score.time)}</time></div></div></div><div class="play-detail__group play-detail__group--bottom"><div class="play-detail__score-detail"><div class="play-detail__icon play-detail__icon--extra">${grade}</div><div class="play-detail__score-detail-top-right"><div class="play-detail__accuracy-and-weighted-pp"><span class="play-detail__accuracy">${num(score.acc,2)}%</span>${top?`<span class="play-detail__weighted-pp">${num(score.pp*weight)}pp</span>`:''}</div>${top?`<div class="play-detail__pp-weight">weighted ${num(weight*100)}%</div>`:''}</div></div><div class="play-detail__mods-pp"><div class="play-detail__mods">${modIcons(score.mods)}</div><div class="play-detail__pp">${num(score.pp)}<span class="play-detail__pp-unit">pp</span></div></div><div class="play-detail__more"><button class="popup-menu" data-score-menu-trigger="${key}" aria-label="Score options for ${esc(map.title||'unknown beatmap')}" aria-expanded="false" type="button"><i class="fas fa-ellipsis-v" aria-hidden="true"></i></button><div class="score-popup-menu" id="menu-${key}" hidden>${isOwner?`<button class="score-popup-item" type="button" data-score-action="pin" data-score-id="${esc(score.id)}">${pinned?'Unpin':'Pin'}</button>`:''}<button class="score-popup-item" type="button" data-score-action="details" data-score-key="${key}">View Details</button>${hasReplay?`<a class="score-popup-item" href="/site/scores/replay?id=${esc(score.id)}" download>Download Replay</a>`:`<button class="score-popup-item is-disabled" type="button" disabled title="No replay data recorded for this score">Download Replay</button>`}${isOwner?`<button class="score-popup-item score-popup-item--remove" type="button" data-score-action="remove" data-score-id="${esc(score.id)}">Remove score</button>`:''}</div></div></div></div><div id="detail-${key}" class="score-expanded" hidden><span>Score <b>${num(score.score)}</b></span><span>Combo <b>${num(score.max_combo)}x</b></span><span>300 / 100 / 50 <b>${num(score.n300)} / ${num(score.n100)} / ${num(score.n50)}</b></span><span>Misses <b>${num(score.nmiss)}</b></span><span>Mods <b>${esc(score.mods)}</b></span>${isOwner?`<button class="subtle-button" data-delete-score="${esc(score.id)}" type="button">Delete score</button>`:''}</div>`;
 }
 function renderHistory() {
   const history = state.profile.play_history || [];
@@ -242,11 +250,19 @@ function renderMostPlayed() {
 }
 function renderScores() {
   const p = state.profile;
+  const pinned = p.pinned || [];
+  if ($('pinned-section')) {
+    $('pinned-section').hidden = pinned.length === 0;
+    if ($('pinned-count')) $('pinned-count').textContent = num(pinned.length);
+    if ($('pinned-scores')) {
+      $('pinned-scores').innerHTML = pinned.length ? pinned.map((s, i) => scoreRow(s, i, false, 'pinned')).join('') : '';
+    }
+  }
   $('top-count').textContent = num(p.top.length);
   const recent=p.recent_24h||[];
   $('recent-count').textContent = num(recent.length);
-  $('top-scores').innerHTML = p.top.length ? p.top.slice(0,state.topLimit).map((s,i)=>scoreRow(s,i,true)).join('') : '<p class="empty-inline">No ranked plays yet. Your best performances will appear here.</p>';
-  $('recent-scores').innerHTML = recent.length ? recent.slice(0,state.recentLimit).map((s,i)=>scoreRow(s,i,false)).join('') : '<p class="empty-inline">No plays in the last 24 hours.</p>';
+  $('top-scores').innerHTML = p.top.length ? p.top.slice(0,state.topLimit).map((s,i)=>scoreRow(s,i,true,'top')).join('') : '<p class="empty-inline">No ranked plays yet. Your best performances will appear here.</p>';
+  $('recent-scores').innerHTML = recent.length ? recent.slice(0,state.recentLimit).map((s,i)=>scoreRow(s,i,false,'recent')).join('') : '<p class="empty-inline">No plays in the last 24 hours.</p>';
   $('more-top').hidden = p.top.length <= state.topLimit;
   $('more-recent').hidden = recent.length <= state.recentLimit;
 }
@@ -844,7 +860,7 @@ window.addEventListener('resize',updateSection);
 window.addEventListener('popstate',boot);
 // Keep new scores visible without changing the browser's selected profile.
 setInterval(async()=>{
-  if(document.hidden||$('login-dialog').open||document.querySelector('.score-expanded:not([hidden])')||$('settings-dialog').open||!state.name)return;
+  if(document.hidden||$('login-dialog').open||document.querySelector('.score-expanded:not([hidden])')||document.querySelector('.score-popup-menu:not([hidden])')||$('settings-dialog').open||!state.name)return;
   try{state.session=await api('/site/session');renderSession();await loadProfile(state.name,false,true);}catch{}
 },30000);
 boot();
@@ -854,9 +870,80 @@ $('account-avatar').addEventListener('error',()=>{if(!$('account-avatar').src.en
 $('avatar').addEventListener('error',()=>{if(!$('avatar').src.endsWith(fallbackAvatar))$('avatar').src=fallbackAvatar;});
 $('settings-avatar').addEventListener('error',()=>{if(!$('settings-avatar').src.endsWith(fallbackAvatar))$('settings-avatar').src=fallbackAvatar;});
 $('more-most').addEventListener('click',()=>{state.mostLimit=(state.mostLimit||5)+10;renderMostPlayed();});
-$('profile-content').addEventListener('click',event=>{
-  const button=event.target.closest('[data-score-detail]');if(!button)return;
-  const detail=$('detail-'+button.dataset.scoreDetail);detail.hidden=!detail.hidden;button.setAttribute('aria-expanded',String(!detail.hidden));
+function closeAllScoreMenus() {
+  document.querySelectorAll('.score-popup-menu:not([hidden])').forEach(m => {
+    m.hidden = true;
+  });
+  document.querySelectorAll('.play-detail.play-detail--menu-active').forEach(row => {
+    row.classList.remove('play-detail--menu-active');
+  });
+  document.querySelectorAll('[data-score-menu-trigger][aria-expanded="true"]').forEach(btn => {
+    btn.setAttribute('aria-expanded', 'false');
+  });
+}
+
+document.addEventListener('click', async event => {
+  const trigger = event.target.closest('[data-score-menu-trigger]');
+  if (trigger) {
+    const key = trigger.dataset.scoreMenuTrigger;
+    const menu = $('menu-' + key);
+    const row = $('row-' + key);
+    if (!menu) return;
+    const wasOpen = !menu.hidden;
+    closeAllScoreMenus();
+    if (!wasOpen) {
+      menu.hidden = false;
+      if (row) row.classList.add('play-detail--menu-active');
+      trigger.setAttribute('aria-expanded', 'true');
+    }
+    return;
+  }
+
+  const actionBtn = event.target.closest('[data-score-action]');
+  if (actionBtn) {
+    const action = actionBtn.dataset.scoreAction;
+    const scoreId = actionBtn.dataset.scoreId;
+    const key = actionBtn.dataset.scoreKey;
+    closeAllScoreMenus();
+
+    if (action === 'details') {
+      const detail = $('detail-' + key);
+      if (detail) {
+        detail.hidden = !detail.hidden;
+      }
+    } else if (action === 'pin') {
+      try {
+        await api('/site/scores/pin', { id: String(scoreId) });
+        await loadProfile(state.name);
+      } catch (err) {
+        showMessage(err.message);
+      }
+    } else if (action === 'remove') {
+      if (!confirm('Delete this score from your profile? Your pp and statistics will be recalculated. A recovery copy is retained on the server.')) return;
+      try {
+        await api('/site/scores/delete', { id: String(scoreId) });
+        await loadProfile(state.name);
+      } catch (err) {
+        showMessage(err.message);
+      }
+    }
+    return;
+  }
+
+  if (event.target.closest('.score-popup-menu a')) {
+    closeAllScoreMenus();
+    return;
+  }
+
+  if (!event.target.closest('.play-detail__more')) {
+    closeAllScoreMenus();
+  }
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    closeAllScoreMenus();
+  }
 });
 function updateSettingsCountryFlag(){
   const flagEl=$('settings-country-flag');

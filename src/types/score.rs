@@ -3,6 +3,31 @@ use crate::types::replay::Replay;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+fn write_uleb128(val: u32, out: &mut Vec<u8>) {
+    let mut v = val;
+    loop {
+        let mut byte = (v & 0x7F) as u8;
+        v >>= 7;
+        if v != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if v == 0 {
+            break;
+        }
+    }
+}
+
+fn write_osu_string(s: &str, out: &mut Vec<u8>) {
+    if s.is_empty() {
+        out.push(0x00);
+    } else {
+        out.push(0x0b);
+        write_uleb128(s.len() as u32, out);
+        out.extend_from_slice(s.as_bytes());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Score {
     pub mode: i32,
@@ -60,6 +85,45 @@ impl Score {
             submission_checksum: None,
             submission_identity: None,
         }
+    }
+
+    pub fn to_osr_bytes(&self) -> Option<Vec<u8>> {
+        self.to_osr_bytes_with_id(self.scoreid.unwrap_or(0))
+    }
+
+    pub fn to_osr_bytes_with_id(&self, online_id: i64) -> Option<Vec<u8>> {
+        use md5::Digest;
+        let frames_b64 = self.replay_frames.as_ref()?;
+        let raw_frames = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, frames_b64).ok()?;
+
+        let mut out = Vec::with_capacity(raw_frames.len() + 256);
+        out.push(self.mode as u8);
+        out.extend_from_slice(&20210520i32.to_le_bytes());
+        write_osu_string(&self.md5, &mut out);
+        write_osu_string(&self.name, &mut out);
+        let replay_md5 = self.replay_md5.clone().unwrap_or_else(|| {
+            format!("{:x}", md5::Md5::digest(&raw_frames))
+        });
+        write_osu_string(&replay_md5, &mut out);
+        out.extend_from_slice(&(self.n300 as i16).to_le_bytes());
+        out.extend_from_slice(&(self.n100 as i16).to_le_bytes());
+        out.extend_from_slice(&(self.n50 as i16).to_le_bytes());
+        out.extend_from_slice(&(self.ngeki as i16).to_le_bytes());
+        out.extend_from_slice(&(self.nkatu as i16).to_le_bytes());
+        out.extend_from_slice(&(self.nmiss as i16).to_le_bytes());
+        out.extend_from_slice(&(self.score as i32).to_le_bytes());
+        out.extend_from_slice(&(self.max_combo as i16).to_le_bytes());
+        out.push(if self.perfect { 1 } else { 0 });
+        out.extend_from_slice(&(self.mods as i32).to_le_bytes());
+        write_osu_string("", &mut out);
+        let ticks: i64 = (self.time + 62135596800i64) * 10_000_000i64;
+        out.extend_from_slice(&ticks.to_le_bytes());
+        out.extend_from_slice(&(raw_frames.len() as i32).to_le_bytes());
+        out.extend_from_slice(&raw_frames);
+        let sid = if online_id != 0 { online_id } else { self.scoreid.unwrap_or(0) };
+        out.extend_from_slice(&sid.to_le_bytes());
+
+        Some(out)
     }
 
     pub fn as_leaderboard_entry(&self, pp_leaderboard: bool, show_pp_pb: bool, mode: Option<Mods>) -> LeaderboardEntry {

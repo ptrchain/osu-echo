@@ -134,6 +134,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
             devices TEXT NOT NULL DEFAULT '[]',
             section_order TEXT NOT NULL DEFAULT '[\"me\",\"top-ranks\",\"historical\",\"beatmaps\",\"medals\",\"recent-activity\"]',
             country TEXT NOT NULL DEFAULT '',
+            pinned_scores TEXT NOT NULL DEFAULT '[]',
             FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
         );
 
@@ -189,6 +190,7 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     );
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN country TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN playmode TEXT NOT NULL DEFAULT 'osu'", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN pinned_scores TEXT NOT NULL DEFAULT '[]'", []);
 
     let _ = conn.execute(
         "CREATE TABLE IF NOT EXISTS rank_history (
@@ -354,24 +356,42 @@ pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
 }
 
 pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<ProfileDetails> {
-    let mut stmt = conn.prepare(
-        "SELECT about, location, devices, section_order, country, playmode FROM profile_details WHERE player_name = ?1",
-    )?;
-    let result = stmt.query_row(params![player_name], |row| {
-        let about: String = row.get(0)?;
-        let location: String = row.get(1)?;
-        let devices_json: String = row.get(2)?;
-        let section_order_json: String = row.get(3)?;
-        let country: String = row.get(4)?;
-        let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
-        Ok((about, location, devices_json, section_order_json, country, playmode))
-    });
+    let stmt_res = conn.prepare(
+        "SELECT about, location, devices, section_order, country, playmode, pinned_scores FROM profile_details WHERE player_name = ?1",
+    );
+    let result = match stmt_res {
+        Ok(mut stmt) => stmt.query_row(params![player_name], |row| {
+            let about: String = row.get(0)?;
+            let location: String = row.get(1)?;
+            let devices_json: String = row.get(2)?;
+            let section_order_json: String = row.get(3)?;
+            let country: String = row.get(4)?;
+            let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
+            let pinned_scores_json: String = row.get(6).unwrap_or_else(|_| "[]".to_string());
+            Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json))
+        }),
+        Err(_) => {
+            let mut fallback_stmt = conn.prepare(
+                "SELECT about, location, devices, section_order, country, playmode FROM profile_details WHERE player_name = ?1",
+            )?;
+            fallback_stmt.query_row(params![player_name], |row| {
+                let about: String = row.get(0)?;
+                let location: String = row.get(1)?;
+                let devices_json: String = row.get(2)?;
+                let section_order_json: String = row.get(3)?;
+                let country: String = row.get(4)?;
+                let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
+                Ok((about, location, devices_json, section_order_json, country, playmode, "[]".to_string()))
+            })
+        }
+    };
 
     match result {
-        Ok((about, location, devices_json, section_order_json, country, playmode)) => {
+        Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json)) => {
             let devices: Vec<String> = serde_json::from_str(&devices_json).unwrap_or_default();
             let section_order: Vec<String> = serde_json::from_str(&section_order_json)
                 .unwrap_or_else(|_| default_section_order());
+            let pinned_scores: Vec<String> = serde_json::from_str(&pinned_scores_json).unwrap_or_default();
 
             let country = if country.is_empty() {
                 if let Ok(c_byte) = get_profile_country(conn, player_name) {
@@ -396,6 +416,7 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 section_order,
                 country,
                 playmode,
+                pinned_scores,
             })
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
@@ -423,17 +444,19 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
     let devices_json = serde_json::to_string(&details.devices).unwrap_or_else(|_| "[]".to_string());
     let section_order_json = serde_json::to_string(&details.section_order)
         .unwrap_or_else(|_| serde_json::to_string(&default_section_order()).unwrap());
+    let pinned_scores_json = serde_json::to_string(&details.pinned_scores).unwrap_or_else(|_| "[]".to_string());
 
     conn.execute(
-        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country, playmode)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country, playmode, pinned_scores)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          ON CONFLICT(player_name) DO UPDATE SET
             about = excluded.about,
             location = excluded.location,
             devices = excluded.devices,
             section_order = excluded.section_order,
             country = excluded.country,
-            playmode = excluded.playmode",
+            playmode = excluded.playmode,
+            pinned_scores = excluded.pinned_scores",
         params![
             player_name,
             details.about,
@@ -442,6 +465,7 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
             section_order_json,
             details.country,
             details.playmode,
+            pinned_scores_json,
         ],
     )?;
 
@@ -1259,6 +1283,7 @@ pub struct ScoreWithBeatmap {
     pub creator: Option<String>,
     pub beatmap_id: Option<i64>,
     pub beatmapset_id: Option<i64>,
+    pub has_replay: bool,
 }
 
 pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> SqlResult<Vec<ScoreWithBeatmap>> {
@@ -1266,7 +1291,8 @@ pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> 
         "SELECT s.id, s.mode, s.md5, s.n300, s.n100, s.n50, s.ngeki, s.nkatu, s.nmiss,
                 s.score, s.max_combo, s.perfect, s.mods, s.time, s.acc, s.pp,
                 s.replay_md5, s.mods_str, s.bmap_status,
-                b.title, b.artist, b.version, b.creator, b.beatmap_id, b.beatmapset_id
+                b.title, b.artist, b.version, b.creator, b.beatmap_id, b.beatmapset_id,
+                (s.replay_frames IS NOT NULL AND s.replay_frames != '') AS has_replay
          FROM scores s
          LEFT JOIN beatmaps b ON s.md5 = b.file_md5
          WHERE s.player_name = ?1
@@ -1301,6 +1327,7 @@ pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> 
                 creator: row.get(22)?,
                 beatmap_id: row.get(23)?,
                 beatmapset_id: row.get(24)?,
+                has_replay: row.get::<_, i32>(25).unwrap_or(0) != 0,
             })
         })?
         .filter_map(|r| r.ok())
@@ -1771,6 +1798,7 @@ mod tests {
             ],
             country: "DE".to_string(),
             playmode: "taiko".to_string(),
+            pinned_scores: Vec::new(),
         };
 
         save_profile_details(&conn, "GermanUser", &custom).unwrap();
@@ -1876,6 +1904,7 @@ mod tests {
             section_order: default_section_order(),
             country: "GB".to_string(),
             playmode: "osu".to_string(),
+            pinned_scores: Vec::new(),
         };
         save_profile_details(&conn, "Alice", &details).unwrap();
         record_rank_snapshot_with_date(&conn, "Alice", 0, "2026-01-01", 500).unwrap();

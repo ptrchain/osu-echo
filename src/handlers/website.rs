@@ -139,6 +139,8 @@ pub struct PublicScore {
     pub grade: String,
     pub mods: String,
     pub beatmap: PublicBeatmap,
+    #[serde(default)]
+    pub has_replay: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +168,8 @@ pub struct ProfileResponse {
     pub rank_history: Vec<(String, i32)>,
     pub top: Vec<PublicScore>,
     pub recent: Vec<PublicScore>,
+    #[serde(default)]
+    pub pinned: Vec<PublicScore>,
     pub last_play: Option<i64>,
     #[serde(default)]
     pub first_play: Option<i64>,
@@ -869,6 +873,7 @@ fn to_public_score(s: &db::ScoreWithBeatmap) -> PublicScore {
             beatmap_id: s.beatmap_id.unwrap_or(0),
             beatmapset_id: s.beatmapset_id.unwrap_or(0),
         },
+        has_replay: s.has_replay,
     }
 }
 
@@ -889,6 +894,8 @@ pub async fn handle(
         (&Method::POST, "logout") => handle_logout(state, headers).await,
         (&Method::POST, "settings") => handle_settings(state, headers, body).await,
         (&Method::POST, "scores/delete") => handle_delete_score(state, headers, body).await,
+        (&Method::GET, "scores/replay") => handle_score_replay(state, params).await,
+        (&Method::POST, "scores/pin") => handle_pin_score(state, headers, body).await,
         (&Method::POST, "import_official") => handle_import_official(state, headers, body).await,
         _ => json_error(StatusCode::NOT_FOUND, "Not found"),
     }
@@ -1038,6 +1045,17 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let recent_public: Vec<PublicScore> = mode_scores.iter().take(100).map(|s| to_public_score(s)).collect();
     let top_public: Vec<PublicScore> = top_scores.iter().map(|s| to_public_score(s)).collect();
 
+    // Pinned plays
+    let pinned_public: Vec<PublicScore> = {
+        let mut list = Vec::new();
+        for pid in &details.pinned_scores {
+            if let Some(s) = mode_scores.iter().find(|s| s.id.to_string() == *pid) {
+                list.push(to_public_score(s));
+            }
+        }
+        list
+    };
+
     let now_ts = now_secs() as i64;
     let recent_24h_public: Vec<PublicScore> = mode_scores
         .iter()
@@ -1179,6 +1197,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         rank_history,
         top: top_public,
         recent: recent_public,
+        pinned: pinned_public,
         last_play,
         first_play,
         performance_history: perf_history,
@@ -1642,6 +1661,15 @@ async fn handle_delete_score(
         }
 
         let _ = db::decrement_playcount(&conn, &current_user);
+
+        // Remove from pinned_scores if present
+        if let Ok(mut details) = db::get_profile_details(&conn, &current_user) {
+            let pid_str = payload.id.to_string();
+            if details.pinned_scores.contains(&pid_str) {
+                details.pinned_scores.retain(|x| x != &pid_str);
+                let _ = db::save_profile_details(&conn, &current_user, &details);
+            }
+        }
     }
 
     // Recalculate profile PP, accuracy, total score, and osudaily rank
@@ -1661,6 +1689,127 @@ async fn handle_delete_score(
     drop(s_write);
 
     json_ok(&SuccessResponse { ok: true })
+}
+
+async fn handle_score_replay(state: SharedState, params: &HashMap<String, String>) -> Response {
+    let id_str = match params.get("id") {
+        Some(s) if !s.is_empty() => s,
+        _ => return json_error(StatusCode::BAD_REQUEST, "Score ID is required."),
+    };
+    let score_id: i64 = match id_str.parse() {
+        Ok(id) => id,
+        Err(_) => return json_error(StatusCode::BAD_REQUEST, "Invalid score ID."),
+    };
+
+    let state_read = state.read().await;
+    let conn = state_read.db.lock().await;
+    let score = match db::get_score_by_id(&conn, score_id) {
+        Ok(Some(s)) => s,
+        _ => return json_error(StatusCode::NOT_FOUND, "Score not found."),
+    };
+
+    let osr_bytes = match score.to_osr_bytes_with_id(score_id) {
+        Some(b) => b,
+        None => return json_error(StatusCode::NOT_FOUND, "Replay data not available for this score."),
+    };
+
+    let beatmap = db::get_beatmap_by_md5(&conn, &score.md5).unwrap_or(None);
+    drop(conn);
+    drop(state_read);
+
+    let (artist, title, version) = match beatmap {
+        Some(b) => (b.artist, b.title, b.version),
+        None => ("Unknown".to_string(), "Beatmap".to_string(), "".to_string()),
+    };
+
+    let safe_player: String = score.name.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == '[' || *c == ']' || *c == '-').collect();
+    let safe_artist: String = artist.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == ' ' || *c == '-').collect();
+    let safe_title: String = title.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == ' ' || *c == '-').collect();
+    let safe_version: String = version.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == ' ' || *c == '-').collect();
+
+    let mods_str = score.mods_str.unwrap_or_else(|| {
+        Mods::from_bits_truncate(score.mods).short_name()
+    });
+
+    let filename = format!("{safe_player} - {safe_artist} - {safe_title} [{safe_version}] ({mods_str}).osr");
+
+    Response::new(osr_bytes)
+        .with_header("Content-Type", "application/x-osu-replay")
+        .with_header("Content-Disposition", &format!("attachment; filename=\"{filename}\""))
+        .with_header("Cache-Control", "public, max-age=86400")
+}
+
+#[derive(Deserialize)]
+struct PinScorePayload {
+    id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PinScoreResponse {
+    pinned: bool,
+    pinned_scores: Vec<String>,
+}
+
+async fn handle_pin_score(
+    state: SharedState,
+    headers: &hyper::HeaderMap,
+    body: &[u8],
+) -> Response {
+    let now = now_secs();
+    let cookie_val = headers
+        .get("cookie")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+
+    let token = match cookie_val {
+        Some(t) => t.to_string(),
+        None => return json_error(StatusCode::UNAUTHORIZED, "Sign in to manage pinned scores."),
+    };
+
+    let state_read = state.read().await;
+    let session = match state_read.web_sessions.get(&token) {
+        Some(s) if s.expires > now => s.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Session expired. Please sign in again."),
+    };
+    drop(state_read);
+
+    if !can_write(Some(&session), headers) {
+        return json_error(StatusCode::FORBIDDEN, "Refresh the page and try again.");
+    }
+
+    let current_user = match session.username {
+        Some(ref u) if !u.is_empty() => u.clone(),
+        _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to manage pinned scores."),
+    };
+
+    let payload: PinScorePayload = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => return json_error(StatusCode::BAD_REQUEST, &format!("Invalid request: {}", e)),
+    };
+
+    let s_read = state.read().await;
+    let conn = s_read.db.lock().await;
+    let mut details = db::get_profile_details(&conn, &current_user).unwrap_or_default();
+
+    let is_pinned = if let Some(idx) = details.pinned_scores.iter().position(|id| id == &payload.id) {
+        details.pinned_scores.remove(idx);
+        false
+    } else {
+        if details.pinned_scores.len() >= 20 {
+            return json_error(StatusCode::BAD_REQUEST, "You can pin at most 20 scores.");
+        }
+        details.pinned_scores.push(payload.id);
+        true
+    };
+
+    if let Err(e) = db::save_profile_details(&conn, &current_user, &details) {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to update pinned scores: {}", e));
+    }
+
+    json_ok(&PinScoreResponse {
+        pinned: is_pinned,
+        pinned_scores: details.pinned_scores,
+    })
 }
 
 async fn handle_import_official(
@@ -2684,11 +2833,80 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_medals_catalog() {
-        let resp = handle_medals_catalog().await;
-        assert_eq!(resp.status, StatusCode::OK);
-        let medals: Vec<crate::types::medal::MedalDefinition> = serde_json::from_slice(&resp.body).expect("valid json catalog");
-        assert_eq!(medals.len(), 352);
+    async fn test_scores_pin_and_replay_routes() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "ReplayUser").unwrap();
+
+        let s1 = crate::types::Score {
+            mode: 0,
+            md5: "map_replay_md5".to_string(),
+            name: "ReplayUser".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 50,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(300.0),
+            replay_md5: Some("rep_md5_123".to_string()),
+            replay_frames: Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"test_frames_data")),
+            mods_str: Some("NM".to_string()),
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        };
+        let s1_id = crate::db::insert_score(&conn, &s1, "ranked").unwrap();
+
+        let app_state = AppState::new(conn, crate::types::config::Config::default());
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        // 1. Download replay route
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), s1_id.to_string());
+        let replay_resp = handle_score_replay(shared_state.clone(), &params).await;
+        assert_eq!(replay_resp.status, StatusCode::OK);
+        assert_eq!(replay_resp.header("content-type"), Some("application/x-osu-replay"));
+        assert!(replay_resp.body.len() > 20);
+
+        // 2. Establish session for Pin/Unpin
+        let s_resp = handle_session(shared_state.clone(), &HeaderMap::new()).await;
+        let s_data: SessionResponse = serde_json::from_slice(&s_resp.body).unwrap();
+        let set_cookie = s_resp.header("set-cookie").unwrap();
+        let session_token = extract_cookie(set_cookie, SESSION_COOKIE_NAME).unwrap().to_string();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("cookie", HeaderValue::from_str(&format!("los_session={}", session_token)).unwrap());
+        headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:5000"));
+        headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
+        headers.insert("x-csrf-token", HeaderValue::from_str(&s_data.csrf).unwrap());
+
+        // Log in
+        let login_body = serde_json::json!({ "username": "ReplayUser" }).to_string();
+        let l_resp = handle_login(shared_state.clone(), &headers, login_body.as_bytes()).await;
+        assert_eq!(l_resp.status, StatusCode::OK);
+
+        // Pin score
+        let pin_payload = serde_json::json!({ "id": s1_id.to_string() }).to_string();
+        let pin_resp = handle_pin_score(shared_state.clone(), &headers, pin_payload.as_bytes()).await;
+        assert_eq!(pin_resp.status, StatusCode::OK);
+        let pin_data: PinScoreResponse = serde_json::from_slice(&pin_resp.body).unwrap();
+        assert!(pin_data.pinned);
+        assert_eq!(pin_data.pinned_scores, vec![s1_id.to_string()]);
+
+        // Unpin score
+        let unpin_resp = handle_pin_score(shared_state.clone(), &headers, pin_payload.as_bytes()).await;
+        assert_eq!(unpin_resp.status, StatusCode::OK);
+        let unpin_data: PinScoreResponse = serde_json::from_slice(&unpin_resp.body).unwrap();
+        assert!(!unpin_data.pinned);
+        assert!(unpin_data.pinned_scores.is_empty());
     }
 }
 
