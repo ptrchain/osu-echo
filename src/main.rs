@@ -6,6 +6,7 @@ mod handlers;
 mod logger;
 mod packets;
 mod server;
+pub mod services;
 mod state;
 mod types;
 mod utils;
