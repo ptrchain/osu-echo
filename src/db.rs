@@ -5,6 +5,7 @@ pub use crate::types::profile::default_section_order;
 pub use crate::types::ProfileDetails;
 use crate::types::score::Score;
 use rusqlite::{params, Connection, Result as SqlResult};
+use serde::{Deserialize, Serialize};
 
 pub fn init_db(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
@@ -710,6 +711,148 @@ pub fn check_duplicate_score(conn: &Connection, checksum: Option<&str>, replay_m
 pub fn update_beatmap_file_content(conn: &Connection, md5: &str, content: &str) -> SqlResult<()> {
     conn.execute("UPDATE beatmaps SET file_content = ?1 WHERE file_md5 = ?2", params![content, md5])?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConflictPolicy {
+    Skip,
+    ReplaceIfBetter,
+    OverwriteAll,
+}
+
+pub struct ImportScoreRecord<'a> {
+    pub score: &'a Score,
+    pub bmap_status: &'a str,
+    pub beatmap: Option<&'a Beatmap>,
+}
+
+pub fn ensure_beatmap_registered(conn: &Connection, bmap: &Beatmap) -> SqlResult<()> {
+    let existing = get_beatmap_by_md5(conn, &bmap.file_md5)?;
+    match existing {
+        None => {
+            insert_beatmap(conn, bmap)?;
+        }
+        Some(curr) => {
+            let needs_metadata_update = curr.title.is_empty() && !bmap.title.is_empty();
+            let needs_content_update = curr.file_content.as_deref().unwrap_or("").is_empty()
+                && bmap.file_content.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+
+            if needs_metadata_update {
+                insert_beatmap(conn, bmap)?;
+            } else if needs_content_update {
+                if let Some(ref content) = bmap.file_content {
+                    update_beatmap_file_content(conn, &bmap.file_md5, content)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn score_exists_by_identity(conn: &Connection, player_name: &str, identity: &str) -> SqlResult<bool> {
+    let mut stmt = conn.prepare("SELECT COUNT(*) FROM scores WHERE player_name = ?1 AND submission_identity = ?2")?;
+    let count: i32 = stmt.query_row(params![player_name, identity], |row| row.get(0))?;
+    Ok(count > 0)
+}
+
+pub fn import_scores_batch(
+    conn: &Connection,
+    records: &[ImportScoreRecord],
+    policy: ConflictPolicy,
+) -> SqlResult<(usize, usize)> {
+    if records.is_empty() {
+        return Ok((0, 0));
+    }
+
+    conn.execute_batch("BEGIN IMMEDIATE;")?;
+
+    let res: SqlResult<(usize, usize)> = (|| {
+        let mut inserted = 0;
+        let mut skipped = 0;
+
+        for record in records {
+            let sc = record.score;
+            ensure_profile(conn, &sc.name)?;
+
+            if let Some(bmap) = record.beatmap {
+                ensure_beatmap_registered(conn, bmap)?;
+            }
+
+            let mut should_insert = true;
+
+            match policy {
+                ConflictPolicy::Skip => {
+                    if let Some(ref identity) = sc.submission_identity {
+                        if !identity.is_empty() && score_exists_by_identity(conn, &sc.name, identity)? {
+                            should_insert = false;
+                        }
+                    } else if let Some(ref r_md5) = sc.replay_md5 {
+                        if !r_md5.is_empty() && replay_md5_exists(conn, r_md5)? {
+                            should_insert = false;
+                        }
+                    }
+                }
+                ConflictPolicy::ReplaceIfBetter => {
+                    // Check if identical submission identity exists
+                    if let Some(ref identity) = sc.submission_identity {
+                        if !identity.is_empty() && score_exists_by_identity(conn, &sc.name, identity)? {
+                            should_insert = false;
+                        }
+                    }
+
+                    if should_insert {
+                        let mut stmt = conn.prepare(
+                            "SELECT id, pp FROM scores WHERE player_name = ?1 AND md5 = ?2 AND mode = ?3 ORDER BY pp DESC LIMIT 1"
+                        )?;
+                        let existing_best: Option<(i64, Option<f64>)> = stmt.query_row(
+                            params![sc.name, sc.md5, sc.mode],
+                            |r| Ok((r.get(0)?, r.get(1)?))
+                        ).ok();
+
+                        if let Some((existing_id, existing_pp)) = existing_best {
+                            let new_pp = sc.pp.unwrap_or(0.0);
+                            let old_pp = existing_pp.unwrap_or(0.0);
+                            if new_pp > old_pp {
+                                conn.execute("DELETE FROM scores WHERE id = ?1", params![existing_id])?;
+                            } else {
+                                should_insert = false;
+                            }
+                        }
+                    }
+                }
+                ConflictPolicy::OverwriteAll => {
+                    if let Some(ref identity) = sc.submission_identity {
+                        if !identity.is_empty() {
+                            conn.execute(
+                                "DELETE FROM scores WHERE player_name = ?1 AND submission_identity = ?2",
+                                params![sc.name, identity]
+                            )?;
+                        }
+                    }
+                }
+            }
+
+            if should_insert {
+                insert_score(conn, sc, record.bmap_status)?;
+                inserted += 1;
+            } else {
+                skipped += 1;
+            }
+        }
+
+        Ok((inserted, skipped))
+    })();
+
+    match res {
+        Ok(counts) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(counts)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(e)
+        }
+    }
 }
 
 pub fn get_ranked_scores(conn: &Connection, name: &str) -> SqlResult<Vec<Score>> {
@@ -2133,6 +2276,219 @@ mod tests {
 
         let empty = get_player_scores_with_beatmaps(&conn, "Bob").unwrap();
         assert_eq!(empty.len(), 0);
+    }
+
+    #[test]
+    fn test_import_scores_batch_skip_policy() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "import_map_1".to_string();
+        bmap.title = "Import Map 1".to_string();
+
+        let sc1 = Score {
+            mode: 0,
+            md5: "import_map_1".to_string(),
+            name: "Importer".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(200.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: None,
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: Some("bancho:1001".to_string()),
+        };
+
+        let mut sc2 = sc1.clone();
+        sc2.submission_identity = Some("bancho:1002".to_string());
+        sc2.pp = Some(210.0);
+
+        let recs = vec![
+            ImportScoreRecord { score: &sc1, bmap_status: "ranked", beatmap: Some(&bmap) },
+            ImportScoreRecord { score: &sc2, bmap_status: "ranked", beatmap: Some(&bmap) },
+        ];
+
+        let (inserted, skipped) = import_scores_batch(&conn, &recs, ConflictPolicy::Skip).unwrap();
+        assert_eq!(inserted, 2);
+        assert_eq!(skipped, 0);
+
+        assert!(score_exists_by_identity(&conn, "Importer", "bancho:1001").unwrap());
+        assert!(score_exists_by_identity(&conn, "Importer", "bancho:1002").unwrap());
+        assert!(!score_exists_by_identity(&conn, "Importer", "bancho:9999").unwrap());
+
+        // Re-importing same identities with Skip policy should skip both
+        let (inserted2, skipped2) = import_scores_batch(&conn, &recs, ConflictPolicy::Skip).unwrap();
+        assert_eq!(inserted2, 0);
+        assert_eq!(skipped2, 2);
+
+        let stored = get_all_scores(&conn, "Importer").unwrap();
+        assert_eq!(stored.len(), 2);
+    }
+
+    #[test]
+    fn test_import_scores_batch_replace_better_policy() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        ensure_profile(&conn, "PlayerReplace").unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "replace_map_1".to_string();
+
+        let sc_initial = Score {
+            mode: 0,
+            md5: "replace_map_1".to_string(),
+            name: "PlayerReplace".to_string(),
+            n300: 250,
+            n100: 50,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 500000,
+            max_combo: 300,
+            perfect: false,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(95.0),
+            pp: Some(100.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: None,
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: Some("local:1".to_string()),
+        };
+        insert_score(&conn, &sc_initial, "ranked").unwrap();
+
+        // Higher PP score should replace
+        let mut sc_better = sc_initial.clone();
+        sc_better.submission_identity = Some("bancho:2001".to_string());
+        sc_better.pp = Some(280.0);
+        sc_better.score = 1200000;
+
+        let rec_better = vec![
+            ImportScoreRecord { score: &sc_better, bmap_status: "ranked", beatmap: Some(&bmap) },
+        ];
+        let (ins1, skip1) = import_scores_batch(&conn, &rec_better, ConflictPolicy::ReplaceIfBetter).unwrap();
+        assert_eq!(ins1, 1);
+        assert_eq!(skip1, 0);
+
+        let scores = get_all_scores(&conn, "PlayerReplace").unwrap();
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].pp, Some(280.0));
+
+        // Lower PP score should be skipped
+        let mut sc_worse = sc_initial.clone();
+        sc_worse.submission_identity = Some("bancho:2002".to_string());
+        sc_worse.pp = Some(50.0);
+
+        let rec_worse = vec![
+            ImportScoreRecord { score: &sc_worse, bmap_status: "ranked", beatmap: Some(&bmap) },
+        ];
+        let (ins2, skip2) = import_scores_batch(&conn, &rec_worse, ConflictPolicy::ReplaceIfBetter).unwrap();
+        assert_eq!(ins2, 0);
+        assert_eq!(skip2, 1);
+
+        let scores_after = get_all_scores(&conn, "PlayerReplace").unwrap();
+        assert_eq!(scores_after.len(), 1);
+        assert_eq!(scores_after[0].pp, Some(280.0));
+    }
+
+    #[test]
+    fn test_import_scores_batch_overwrite_policy() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        let mut bmap = Beatmap::blank();
+        bmap.file_md5 = "overwrite_map".to_string();
+
+        let sc1 = Score {
+            mode: 0,
+            md5: "overwrite_map".to_string(),
+            name: "OverwritePlayer".to_string(),
+            n300: 300,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 1000000,
+            max_combo: 500,
+            perfect: true,
+            mods: 0,
+            time: 1700000000,
+            acc: Some(100.0),
+            pp: Some(150.0),
+            replay_md5: None,
+            replay_frames: None,
+            mods_str: None,
+            scoreid: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: Some("bancho:3001".to_string()),
+        };
+
+        let rec1 = vec![
+            ImportScoreRecord { score: &sc1, bmap_status: "ranked", beatmap: Some(&bmap) },
+        ];
+        let (ins1, _) = import_scores_batch(&conn, &rec1, ConflictPolicy::Skip).unwrap();
+        assert_eq!(ins1, 1);
+
+        // OverwriteAll with updated score
+        let mut sc_updated = sc1.clone();
+        sc_updated.score = 2500000;
+        sc_updated.pp = Some(300.0);
+
+        let rec_updated = vec![
+            ImportScoreRecord { score: &sc_updated, bmap_status: "ranked", beatmap: Some(&bmap) },
+        ];
+        let (ins2, skip2) = import_scores_batch(&conn, &rec_updated, ConflictPolicy::OverwriteAll).unwrap();
+        assert_eq!(ins2, 1);
+        assert_eq!(skip2, 0);
+
+        let scores = get_all_scores(&conn, "OverwritePlayer").unwrap();
+        assert_eq!(scores.len(), 1);
+        assert_eq!(scores[0].score, 2500000);
+        assert_eq!(scores[0].pp, Some(300.0));
+    }
+
+    #[test]
+    fn test_ensure_beatmap_registered_upgrades_content() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+
+        let mut bmap_blank = Beatmap::blank();
+        bmap_blank.file_md5 = "upgrade_map".to_string();
+        ensure_beatmap_registered(&conn, &bmap_blank).unwrap();
+
+        let existing = get_beatmap_by_md5(&conn, "upgrade_map").unwrap().unwrap();
+        assert_eq!(existing.title, "");
+        assert_eq!(existing.file_content, None);
+
+        let mut bmap_full = Beatmap::blank();
+        bmap_full.file_md5 = "upgrade_map".to_string();
+        bmap_full.title = "Complete Title".to_string();
+        bmap_full.file_content = Some("osu file format v14".to_string());
+        ensure_beatmap_registered(&conn, &bmap_full).unwrap();
+
+        let upgraded = get_beatmap_by_md5(&conn, "upgrade_map").unwrap().unwrap();
+        assert_eq!(upgraded.title, "Complete Title");
+        assert_eq!(upgraded.file_content.as_deref(), Some("osu file format v14"));
     }
 }
 
