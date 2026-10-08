@@ -7,6 +7,12 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
         || path == "/profile/"
         || path == "/osu"
         || path == "/osu/"
+        || path == "/settings"
+        || path == "/settings/"
+        || path == "/home/account/edit"
+        || path == "/home/account/edit/"
+        || path == "/osu/settings"
+        || path == "/osu/settings/"
     {
         return RouteMatch::UserProfileWeb;
     }
@@ -269,6 +275,8 @@ mod tests {
             ("/site/logout", RouteMatch::WebApi("logout".to_string())),
             ("/osu", RouteMatch::UserProfileWeb),
             ("/osu/", RouteMatch::UserProfileWeb),
+            ("/settings", RouteMatch::UserProfileWeb),
+            ("/home/account/edit", RouteMatch::UserProfileWeb),
         ];
 
         for (path, expected) in cases {

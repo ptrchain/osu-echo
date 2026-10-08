@@ -26,6 +26,16 @@ pub struct ProfileDetails {
     #[serde(default)]
     pub location: String,
     #[serde(default)]
+    pub interests: String,
+    #[serde(default)]
+    pub occupation: String,
+    #[serde(default)]
+    pub twitter: String,
+    #[serde(default)]
+    pub discord: String,
+    #[serde(default)]
+    pub website: String,
+    #[serde(default)]
     pub devices: Vec<String>,
     #[serde(default = "default_section_order")]
     pub section_order: Vec<String>,
@@ -42,6 +52,11 @@ impl Default for ProfileDetails {
         Self {
             about: String::new(),
             location: String::new(),
+            interests: String::new(),
+            occupation: String::new(),
+            twitter: String::new(),
+            discord: String::new(),
+            website: String::new(),
             devices: Vec::new(),
             section_order: default_section_order(),
             country: String::new(),
@@ -58,6 +73,21 @@ impl ProfileDetails {
         }
         if self.location.len() > 100 {
             return Err("Location exceeds maximum length of 100 characters");
+        }
+        if self.interests.len() > 200 {
+            return Err("Interests exceeds maximum length of 200 characters");
+        }
+        if self.occupation.len() > 200 {
+            return Err("Occupation exceeds maximum length of 200 characters");
+        }
+        if self.twitter.len() > 100 {
+            return Err("Twitter username exceeds maximum length of 100 characters");
+        }
+        if self.discord.len() > 100 {
+            return Err("Discord username exceeds maximum length of 100 characters");
+        }
+        if self.website.len() > 200 {
+            return Err("Website exceeds maximum length of 200 characters");
         }
         if self.pinned_scores.len() > 20 {
             return Err("Too many pinned scores (maximum 20)");

@@ -574,3 +574,687 @@ body{margin:0;background:hsl(var(--hsl-b6));color:#fff;font-family:Torus,Arial,s
   color: hsl(var(--hsl-h1));
   font-family: monospace;
 }
+
+/* ==========================================================================
+   Account Settings Dedicated Page (Official osu! Dashboard Aesthetics)
+   ========================================================================== */
+
+/* Header & Page overrides when in settings mode */
+body.t-settings {
+  background-color: #141018 !important;
+}
+body.t-settings .page-heading {
+  display: none !important;
+}
+body.t-settings .local-header {
+  height: 100px !important;
+  background-color: #1d1826 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+body.t-settings .nav2-header__triangles {
+  display: none !important;
+}
+body.t-settings .profile-shell {
+  display: none !important;
+}
+
+.settings-page {
+  animation: settings-fade-in 0.15s ease-out;
+  min-height: calc(100vh - 100px);
+  background-color: #16121c;
+}
+@keyframes settings-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Dashboard Banner */
+.dashboard-banner {
+  background-color: #1d1826;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding-top: 26px;
+}
+.dashboard-banner__container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+.dashboard-banner__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.dashboard-banner__icon {
+  width: 26px;
+  height: 26px;
+  color: #ffffff;
+  flex-shrink: 0;
+}
+.dashboard-banner__title {
+  font-family: Torus, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 24px;
+  font-weight: 500;
+  color: #ffffff;
+  letter-spacing: -0.2px;
+}
+.dashboard-subnav {
+  display: flex;
+  gap: 24px;
+  margin-top: 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  position: relative;
+  bottom: -1px;
+}
+.dashboard-subnav::-webkit-scrollbar {
+  display: none;
+}
+.dashboard-subnav__item {
+  background: none;
+  border: none;
+  padding: 8px 2px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #8f859d;
+  text-decoration: none;
+  cursor: pointer;
+  position: relative;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 3px solid transparent;
+}
+.dashboard-subnav__item:hover {
+  color: #ffffff;
+}
+.dashboard-subnav__item.is-active {
+  color: #ffffff;
+  border-bottom: 3px solid #b87bf8;
+}
+.dashboard-subnav__item.is-disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Main Container & Layout */
+.settings-page__body {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+  box-sizing: border-box;
+}
+
+.osu-page--account-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+}
+
+.account-edit {
+  background-color: hsl(var(--hsl-b5));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}
+
+@media (min-width: 900px) {
+  .account-edit {
+    flex-direction: row;
+  }
+}
+
+.account-edit--first {
+  position: relative;
+}
+
+.account-edit--first::after {
+  box-shadow: inset 0 2px 3px -1px rgba(0, 0, 0, 0.25);
+  content: "";
+  height: 100%;
+  left: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  width: 100%;
+}
+
+.account-edit__section {
+  flex: none;
+  width: 250px;
+  padding: 20px 20px 20px 20px;
+  box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+  .account-edit__section {
+    padding-bottom: 0;
+    padding-left: 50px;
+  }
+}
+
+.account-edit__section-title {
+  color: #fff;
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  overflow-wrap: break-word;
+  font-family: Torus, Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+.account-edit__input-groups {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-edit__input-group {
+  background-color: hsl(var(--hsl-b4));
+  padding: 12px 18px;
+  box-sizing: border-box;
+}
+
+.account-edit__input-group + .account-edit__input-group {
+  margin-top: 1px;
+}
+
+.account-edit-entry {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 8px 0;
+  text-transform: none;
+  box-sizing: border-box;
+}
+
+.account-edit-entry--block {
+  display: block;
+}
+
+@media (min-width: 900px) {
+  .account-edit-entry--block,
+  .account-edit-entry--no-label {
+    padding-left: 160px;
+  }
+}
+
+.account-edit-entry__label {
+  order: -1;
+  padding-bottom: 5px;
+  width: 100%;
+  color: hsl(var(--hsl-f1));
+  font-weight: 700;
+  font-size: 12px;
+  transition: color 0.15s ease;
+  box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+  .account-edit-entry__label {
+    align-self: center;
+    order: 0;
+    padding-bottom: 0;
+    padding-right: 12px;
+    text-align: right;
+    width: 160px;
+    flex: none;
+  }
+}
+
+.account-edit-entry__label--top-pinned {
+  align-self: flex-start;
+  padding-top: 6px;
+}
+
+.account-edit-entry:focus-within > .account-edit-entry__label,
+.account-edit-entry__input:focus ~ .account-edit-entry__label {
+  color: hsl(var(--hsl-l1));
+}
+
+.account-edit-entry__input {
+  align-self: stretch;
+  background-color: hsl(var(--hsl-b3));
+  border: 2px solid transparent;
+  border-radius: 4px;
+  color: #fff;
+  flex: 1;
+  max-width: 250px;
+  width: 250px;
+  height: 32px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.account-edit-entry__input:focus {
+  outline: none;
+  border-color: hsl(var(--hsl-l1));
+  background-color: hsl(var(--hsl-b2));
+}
+
+.account-edit-entry--wide .account-edit-entry__input {
+  max-width: 100%;
+  width: 100%;
+}
+
+.account-edit-entry--read-only .account-edit-entry__input {
+  background: none;
+  border-color: transparent;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+}
+
+.account-edit-entry__button {
+  margin-left: 10px;
+}
+
+.account-edit-entry__group {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.account-edit-entry__group .osu-select {
+  max-width: 250px;
+  width: 250px;
+}
+
+/* Username Inline Edit */
+.settings-username-view {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-username-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+}
+.settings-username-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.settings-input-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-hint {
+  font-size: 12px;
+  color: hsl(var(--hsl-f1));
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+
+/* Country Picker */
+.settings-country-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+#settings-country-flag {
+  display: inline-block;
+  vertical-align: middle;
+}
+.osu-select {
+  cursor: pointer;
+}
+
+/* Checkbox & Switch Groups */
+.account-edit-entry__checkboxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+}
+
+.account-edit-entry__checkboxes-label {
+  margin-bottom: 8px;
+  font-weight: 700;
+  color: hsl(var(--hsl-f1));
+  width: 100%;
+  text-transform: lowercase;
+}
+
+.account-edit-entry__checkbox {
+  margin: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.account-edit-entry__checkbox-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: #ffffff;
+}
+
+/* Buttons (Official osu! Big Buttons) */
+.btn-osu-big--account-edit {
+  --bg: #7057bd;
+  --hover-bg: #8266d6;
+  --active-bg: #5f48a5;
+  --colour: #ffffff;
+  background: var(--bg);
+  color: var(--colour);
+  border-radius: 4px;
+  padding: 7px 14px;
+  min-width: 110px;
+  height: 34px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+.btn-osu-big--account-edit:hover {
+  background: var(--hover-bg);
+  color: #ffffff;
+}
+.btn-osu-big--account-edit:active {
+  background: var(--active-bg);
+}
+.btn-osu-big--account-edit-small {
+  min-width: 70px;
+  padding: 4px 10px;
+  height: 28px;
+  font-size: 12px;
+}
+.btn-osu-big--secondary {
+  --bg: rgba(255, 255, 255, 0.08);
+  --hover-bg: rgba(255, 255, 255, 0.15);
+  --active-bg: rgba(255, 255, 255, 0.22);
+  --colour: #d0c9dc;
+}
+.btn-osu-big__content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+.btn-osu-big__left {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: left;
+}
+.btn-osu-big__icon {
+  font-size: 120%;
+  display: flex;
+  align-items: center;
+}
+
+/* Save Status & Pill */
+.account-edit-status {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+  margin-left: 14px;
+}
+.account-edit-status__content--saved {
+  color: #88b300;
+  font-size: 13px;
+  font-weight: 700;
+  animation: pill-pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Avatar Section */
+.account-edit-entry__avatar {
+  border-radius: 50%;
+  width: 128px;
+  height: 128px;
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  background-color: hsl(var(--hsl-b3));
+}
+.account-edit-entry__drop-overlay {
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 10px;
+  box-sizing: border-box;
+  background-color: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  pointer-events: none;
+  border-radius: 50%;
+}
+.js-account-edit-avatar--hover .account-edit-entry__drop-overlay {
+  opacity: 1;
+}
+.account-edit-entry__overlay-spinner {
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 24px;
+  border-radius: 50%;
+}
+.js-account-edit-avatar--saving .account-edit-entry__overlay-spinner {
+  display: flex;
+}
+.account-edit-entry__rules {
+  margin-top: 10px;
+  font-size: 11px;
+  color: hsl(var(--hsl-f1));
+  line-height: 1.45;
+  max-width: 480px;
+}
+.account-edit-entry__rules a {
+  color: hsl(var(--hsl-l1));
+  text-decoration: none;
+}
+.account-edit-entry__rules a:hover {
+  text-decoration: underline;
+}
+
+/* Signature & BBCode */
+.account-edit-entry__misc-info--signature-preview {
+  background-color: hsl(var(--hsl-b3));
+  border-radius: 4px;
+  padding: 12px 16px;
+  min-height: 40px;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  margin-bottom: 8px;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.5;
+  box-sizing: border-box;
+}
+.account-edit-entry--wide textarea.account-edit-entry__input {
+  height: 130px;
+  resize: vertical;
+  width: 100%;
+  max-width: 100%;
+  border-radius: 4px 4px 0 0;
+}
+.bbcode-toolbar {
+  background-color: hsl(var(--hsl-b2));
+  border-radius: 0 0 4px 4px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  width: 100%;
+}
+.bbcode-toolbar__btn {
+  background: none;
+  border: none;
+  color: #ffffff;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+  min-width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  transition: opacity 0.1s ease;
+}
+.bbcode-toolbar__btn:hover {
+  opacity: 1;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+.bbcode-select {
+  background-color: hsl(var(--hsl-b3));
+  border: none;
+  border-radius: 3px;
+  color: #ffffff;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  height: 22px;
+}
+.bbcode-toolbar__help {
+  margin-left: auto;
+  color: hsl(var(--hsl-f1));
+  font-size: 12px;
+  text-decoration: none;
+  padding: 2px 6px;
+}
+.bbcode-toolbar__help:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+/* Status Banner */
+.settings-status-banner {
+  padding: 12px 18px;
+  border-radius: 6px;
+  margin: 0 0 16px 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.settings-status-banner.error {
+  background-color: #3b171f;
+  border: 1px solid #75222f;
+  color: #ff9ca7;
+}
+.settings-status-banner.success {
+  background-color: #173620;
+  border: 1px solid #236939;
+  color: #83f5a5;
+}
+
+/* Inline Action (Official Import) */
+.settings-inline-action {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 500px;
+}
+.settings-inline-action .account-edit-entry__input {
+  flex: 1;
+}
+
+/* Profile Section Reordering List */
+.section-order-list {
+  max-width: 440px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+.section-order-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background-color: hsl(var(--hsl-b3));
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  padding: 8px 14px;
+  color: #ffffff;
+  font-size: 13px;
+}
+.section-order-row span {
+  font-weight: 600;
+}
+.section-order-row button {
+  background-color: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #ccc;
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+.section-order-row button:hover:not(:disabled) {
+  background-color: #7057bd;
+  color: #fff;
+}
+.section-order-row button:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+/* Responsive adjustments */
+@media (max-width: 899px) {
+  .account-edit {
+    flex-direction: column;
+  }
+  .account-edit__section {
+    width: 100%;
+    padding: 16px 18px 8px;
+  }
+  .account-edit-entry {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .account-edit-entry__label {
+    width: 100%;
+    text-align: left;
+    padding-bottom: 4px;
+  }
+  .account-edit-entry--block,
+  .account-edit-entry--no-label {
+    padding-left: 0;
+  }
+  .account-edit-entry__input,
+  .settings-username-edit,
+  .section-order-list,
+  .settings-inline-action {
+    width: 100%;
+    max-width: 100%;
+  }
+}

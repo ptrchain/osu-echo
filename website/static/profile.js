@@ -646,7 +646,57 @@ function renderProfile() {
       linksRow.appendChild(locItem);
     }
 
-    // 5. Forum posts (if any)
+    // 5. Interests
+    if (details.interests && details.interests.trim()) {
+      const intItem = document.createElement('span');
+      intItem.className = 'profile-links__item';
+      intItem.innerHTML = `<span class="profile-links__icon"><i class="fas fa-heart" aria-hidden="true"></i></span><span class="profile-links__value">${esc(details.interests.trim())}</span>`;
+      linksRow.appendChild(intItem);
+    }
+
+    // 6. Occupation
+    if (details.occupation && details.occupation.trim()) {
+      const occItem = document.createElement('span');
+      occItem.className = 'profile-links__item';
+      occItem.innerHTML = `<span class="profile-links__icon"><i class="fas fa-briefcase" aria-hidden="true"></i></span><span class="profile-links__value">${esc(details.occupation.trim())}</span>`;
+      linksRow.appendChild(occItem);
+    }
+
+    // 7. Twitter
+    if (details.twitter && details.twitter.trim()) {
+      const twHandle = details.twitter.trim().replace(/^@/, '');
+      const twItem = document.createElement('a');
+      twItem.className = 'profile-links__item';
+      twItem.href = `https://twitter.com/${encodeURIComponent(twHandle)}`;
+      twItem.target = '_blank';
+      twItem.rel = 'noreferrer';
+      twItem.innerHTML = `<span class="profile-links__icon"><i class="fab fa-twitter" aria-hidden="true"></i></span><span class="profile-links__value">@${esc(twHandle)}</span>`;
+      linksRow.appendChild(twItem);
+    }
+
+    // 8. Discord
+    if (details.discord && details.discord.trim()) {
+      const discItem = document.createElement('span');
+      discItem.className = 'profile-links__item';
+      discItem.innerHTML = `<span class="profile-links__icon"><i class="fab fa-discord" aria-hidden="true"></i></span><span class="profile-links__value">${esc(details.discord.trim())}</span>`;
+      linksRow.appendChild(discItem);
+    }
+
+    // 9. Website
+    if (details.website && details.website.trim()) {
+      const rawUrl = details.website.trim();
+      const href = /^https?:\/\//i.test(rawUrl) ? rawUrl : `https://${rawUrl}`;
+      const dispUrl = rawUrl.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+      const webItem = document.createElement('a');
+      webItem.className = 'profile-links__item';
+      webItem.href = href;
+      webItem.target = '_blank';
+      webItem.rel = 'noreferrer';
+      webItem.innerHTML = `<span class="profile-links__icon"><i class="fas fa-globe" aria-hidden="true"></i></span><span class="profile-links__value">${esc(dispUrl)}</span>`;
+      linksRow.appendChild(webItem);
+    }
+
+    // 10. Forum posts (if any)
     if (details.post_count != null && details.post_count > 0) {
       const postItem = document.createElement('span');
       postItem.className = 'profile-links__item';
@@ -654,7 +704,7 @@ function renderProfile() {
       linksRow.appendChild(postItem);
     }
 
-    // 6. Comments (if any)
+    // 11. Comments (if any)
     if (details.comments_count != null && details.comments_count > 0) {
       const commItem = document.createElement('span');
       commItem.className = 'profile-links__item';
@@ -729,6 +779,65 @@ async function loadProfile(name, navigate = false, quiet = false) {
     if (!quiet) { $('profile-content').hidden = true; showMessage(error.message); }
   }
 }
+function isSettingsUrl(path = location.pathname, hash = location.hash) {
+  const p = (path || '').toLowerCase();
+  const h = (hash || '').toLowerCase();
+  return p === '/settings' || p === '/settings/' || p === '/home/account/edit' || p === '/home/account/edit/' || p === '/osu/settings' || p === '/osu/settings/' || h === '#settings' || h === '#account-settings' || h === '#import-scores' || h.startsWith('#settings-sec-');
+}
+async function showSettingsPage(sectionId = null, navigate = false) {
+  if (!state.session?.user) {
+    openLogin();
+    return;
+  }
+  closeAccount();
+  document.body.classList.add('t-settings');
+  document.body.classList.remove('t-user');
+  if ($('welcome')) $('welcome').hidden = true;
+  if ($('profile-content')) $('profile-content').hidden = true;
+  const shell = document.querySelector('.profile-shell');
+  if (shell) shell.hidden = true;
+  const nav = document.querySelector('.profile-navigation');
+  if (nav) nav.hidden = true;
+  const heading = document.querySelector('.page-heading');
+  if (heading) heading.hidden = true;
+  if ($('settings-page')) $('settings-page').hidden = false;
+  document.title = 'account settings · Local osu!';
+
+  document.querySelectorAll('.dashboard-subnav__item').forEach(item => item.classList.remove('is-active'));
+  const activeTab = (sectionId === 'settings-sec-scores') ? $('dash-link-import') : $('dash-link-account');
+  if (activeTab) activeTab.classList.add('is-active');
+
+  if (navigate) {
+    const targetUrl = '/settings' + (sectionId ? '#' + sectionId : '');
+    if (location.pathname !== '/settings' || location.hash !== (sectionId ? '#' + sectionId : '')) {
+      history.pushState({ page: 'settings', section: sectionId }, '', targetUrl);
+    }
+  }
+
+  await loadSettingsData();
+
+  if (sectionId) {
+    const el = $(sectionId);
+    if (el) {
+      setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    }
+  } else {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+async function showProfilePage(name = null, navigate = false) {
+  document.body.classList.remove('t-settings');
+  document.body.classList.add('t-user');
+  if ($('settings-page')) $('settings-page').hidden = true;
+  const shell = document.querySelector('.profile-shell');
+  if (shell) shell.hidden = false;
+  const nav = document.querySelector('.profile-navigation');
+  if (nav) nav.hidden = false;
+  const heading = document.querySelector('.page-heading');
+  if (heading) heading.hidden = false;
+  const targetName = name || state.name || state.session?.user || state.session?.active || state.session?.default;
+  await loadProfile(targetName, navigate);
+}
 async function boot() {
   try {
     state.session = await api('/site/session');
@@ -737,11 +846,23 @@ async function boot() {
     state.mode = ['osu','taiko','fruits','mania','vn','rx','ap'].includes(query.get('mode')) ? query.get('mode') : 'osu';
     if (state.mode === 'vn') state.mode = 'osu';
     updateModeSelector();
+
+    if (isSettingsUrl()) {
+      const hash = location.hash.replace('#', '');
+      const secId = hash.startsWith('settings-sec-') ? hash : (hash === 'scores' || hash === 'import-scores' ? 'settings-sec-scores' : null);
+      if (!state.session?.user) {
+        openLogin();
+        return;
+      }
+      await showSettingsPage(secId, false);
+      return;
+    }
+
     let name = /\/(?:users|u)\/([^/]+)/.exec(location.pathname)?.[1];
     if (name) name = decodeURIComponent(name);
     // The game's fixed user ID 2 links to its current local profile.
     if (name === '2' && !state.session.profiles.includes('2')) name = state.session.active;
-    await loadProfile(name || state.session.user || state.session.active || state.session.default);
+    await showProfilePage(name || state.session.user || state.session.active || state.session.default, false);
   } catch (error) { showMessage(`Cannot load the local server: ${error.message}`); }
 }
 function closeAccount(){ $('account-panel').hidden=true;$('account').setAttribute('aria-expanded','false'); }
@@ -751,15 +872,26 @@ $('account').addEventListener('click',()=>{
   $('account').setAttribute('aria-expanded',String(!$('account-panel').hidden));
 });
 $('account-switch').addEventListener('click',openLogin);
-$('account-settings').addEventListener('click',()=>{closeAccount();openSettings();});
+$('account-settings').addEventListener('click',()=>{closeAccount();showSettingsPage('settings-sec-profile',true);});
 $('account-logout').addEventListener('click',()=>{closeAccount();$('logout').click();});
 document.addEventListener('click',event=>{if(!event.target.closest('#account-panel,#account'))closeAccount();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('account-panel').hidden){closeAccount();$('account').focus();}});
 $('mobile-account').addEventListener('click',openLogin);
 $('mobile-menu-toggle').addEventListener('click',()=>{const hidden=!$('mobile-menu').hidden;$('mobile-menu').hidden=hidden;$('mobile-menu-toggle').setAttribute('aria-expanded',String(!hidden));});
 $('first-login').addEventListener('click',openLogin);
-$('close-login').addEventListener('click',()=>$('login-dialog').close());
-$('login-dialog').addEventListener('click',event=>{if(event.target===$('login-dialog')){const r=$('login-dialog').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)$('login-dialog').close();}});
+function dismissLoginDialog(){
+  $('login-dialog').close();
+  if (isSettingsUrl() && !state.session?.user) {
+    showProfilePage(state.session?.default || 'mrekk', true);
+  }
+}
+$('close-login').addEventListener('click', dismissLoginDialog);
+$('login-dialog').addEventListener('click',event=>{
+  if(event.target===$('login-dialog')){
+    const r=$('login-dialog').getBoundingClientRect();
+    if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom) dismissLoginDialog();
+  }
+});
 $('login-form').addEventListener('submit',async event=>{
   event.preventDefault(); $('login-error').hidden=true; $('login-submit').disabled=true;
   try {
@@ -767,12 +899,27 @@ $('login-form').addEventListener('submit',async event=>{
     const result=await api('/site/login',{username:$('login-username').value});
     state.session=await api('/site/session'); renderSession();
     state.topLimit=5;state.recentLimit=5;
-    await loadProfile(result.name,true);$('login-dialog').close();
+    if (isSettingsUrl()) {
+      await showSettingsPage(null, false);
+    } else {
+      await loadProfile(result.name,true);
+    }
+    $('login-dialog').close();
   } catch(error){$('login-error').textContent=error.message;$('login-error').hidden=false;}
   finally{$('login-submit').disabled=false;}
 });
 $('logout').addEventListener('click',async()=>{
-  try{await api('/site/logout',{});state.session=await api('/site/session');renderSession();renderProfile();$('login-dialog').close();}
+  try{
+    await api('/site/logout',{});
+    state.session=await api('/site/session');
+    renderSession();
+    if (isSettingsUrl()) {
+      await showProfilePage(state.session.default, true);
+    } else {
+      renderProfile();
+    }
+    $('login-dialog').close();
+  }
   catch(error){$('login-error').textContent=error.message;$('login-error').hidden=false;}
 });
 function updateModeSelector(){
@@ -850,9 +997,15 @@ let sectionFrame=0;
 function updateSection(){
   sectionFrame=0;
   const sectionLinks=[...document.querySelectorAll('.section-tabs a')];
+  if(!sectionLinks.length) return;
   const offset=matchMedia('(max-width:899px)').matches?105:65;
   let current=sectionLinks[0];
-  for(const link of sectionLinks){if(document.querySelector(link.hash).getBoundingClientRect().top<=offset)current=link;}
+  for(const link of sectionLinks){
+    try {
+      const target = link.hash ? document.querySelector(link.hash) : null;
+      if(target && target.getBoundingClientRect().top <= offset) current = link;
+    } catch (_) {}
+  }
   for(const link of sectionLinks){link.classList.toggle('selected',link===current);if(link===current)link.setAttribute('aria-current','location');else link.removeAttribute('aria-current');}
 }
 window.addEventListener('scroll',()=>{if(!sectionFrame)sectionFrame=requestAnimationFrame(updateSection);},{passive:true});
@@ -860,7 +1013,7 @@ window.addEventListener('resize',updateSection);
 window.addEventListener('popstate',boot);
 // Keep new scores visible without changing the browser's selected profile.
 setInterval(async()=>{
-  if(document.hidden||$('login-dialog').open||document.querySelector('.score-expanded:not([hidden])')||document.querySelector('.score-popup-menu:not([hidden])')||$('settings-dialog').open||!state.name)return;
+  if(document.hidden||$('login-dialog').open||document.querySelector('.score-expanded:not([hidden])')||document.querySelector('.score-popup-menu:not([hidden])')||($('settings-page')&&!$('settings-page').hidden)||!state.name)return;
   try{state.session=await api('/site/session');renderSession();await loadProfile(state.name,false,true);}catch{}
 },30000);
 boot();
@@ -945,59 +1098,103 @@ document.addEventListener('keydown', event => {
     closeAllScoreMenus();
   }
 });
+function initCountryList() {
+  const select = $('settings-country');
+  if (!select) return;
+  if (select.options.length <= 1) {
+    const codes = "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(' ');
+    codes.sort((a,b) => countryName(a).localeCompare(countryName(b))).forEach(code => {
+      const opt = document.createElement('option');
+      opt.value = code;
+      opt.textContent = countryName(code);
+      select.append(opt);
+    });
+    select.addEventListener('change', updateSettingsCountryFlag);
+  }
+}
+initCountryList();
+
 function updateSettingsCountryFlag(){
   const flagEl=$('settings-country-flag');
   if(!flagEl)return;
-  const val=($('settings-country').value||'').trim().toUpperCase();
+  const val=($('settings-country')?.value||'').trim().toUpperCase();
   if(val&&val.length===2){
     flagEl.style.backgroundImage=countryFlagBackground(val);
-    flagEl.style.display='block';
+    flagEl.style.display='inline-block';
   }else{
     flagEl.style.display='none';
   }
 }
-async function openSettings(tab = 'profile'){
-  if(!state.session.user){openLogin();return;}
-  $('login-dialog').close();
-  state.avatarUpload=null;state.resetAvatar=false;
-  $('avatar-file').value='';$('settings-error').hidden=true;
-  $('import-official-query').value='';showImportStatus('','');
-  if(!$('import-scores-query').value)$('import-scores-query').value=state.session.user;
-  showImportScoresStatus('','');
-  if(tab==='scores'){
-    selectSettingsTab('scores');
-  }else{
-    selectSettingsTab('profile');
+function flashStatus(pillId, text = 'Updated!'){
+  const pill=$(pillId);
+  if(!pill)return;
+  pill.textContent=text;
+  pill.hidden=false;
+  clearTimeout(pill._timeout);
+  pill._timeout=setTimeout(()=>{ pill.hidden=true; },2500);
+}
+function showSettingsStatus(msg, type = 'info'){
+  const banner=$('settings-status-banner');
+  if(!banner)return;
+  banner.textContent=msg;
+  banner.className='settings-status-banner '+(type==='error'?'settings-status-banner--error':'settings-status-banner--success');
+  banner.hidden=!msg;
+  if(msg&&type!=='error'){
+    clearTimeout(banner._timeout);
+    banner._timeout=setTimeout(()=>{ banner.hidden=true; },3500);
   }
-  $('settings-username').value=state.session.user;
-  $('settings-avatar').src=`/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${Date.now()}`;
-  $('settings-dialog').showModal();
-  $('settings-submit').disabled=true;
+}
+async function loadSettingsData(){
+  if(!state.session?.user)return;
+  state.avatarUpload=null;
+  state.resetAvatar=false;
+  if($('avatar-file')) $('avatar-file').value='';
+  if($('settings-status-banner')) $('settings-status-banner').hidden=true;
+  if($('settings-username-display')) $('settings-username-display').textContent=state.session.user;
+  if($('settings-username')) $('settings-username').value=state.session.user;
+  if($('settings-username-view')) $('settings-username-view').hidden=false;
+  if($('settings-username-edit')) $('settings-username-edit').hidden=true;
+
+  const v=state.avatarVersion||state.session?.avatar_version||Date.now();
+  if($('settings-avatar')) $('settings-avatar').src=`/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${encodeURIComponent(v)}`;
+
+  if($('import-scores-query') && !$('import-scores-query').value) $('import-scores-query').value=state.session.user;
+
   try{
-    const profile=await api(`/site/profile?name=${encodeURIComponent(state.session.user)}&mode=${state.mode}`);
+    const profile=await api(`/site/profile?name=${encodeURIComponent(state.session.user)}&mode=${state.mode||'osu'}`);
     const details=profile.details||{};
-    $('settings-country').value=details.country||'';
+    if($('settings-country')) $('settings-country').value=details.country||'';
     updateSettingsCountryFlag();
-    $('settings-location').value=details.location||'';
-    $('settings-about').value=details.about||'';
-    state.sectionOrder=[...(details.section_order||defaultSectionOrder)];renderSectionOrder();
-    document.querySelectorAll('input[name=device]').forEach(input=>input.checked=(details.devices||[]).includes(input.value));
-    $('settings-submit').disabled=false;
-  }catch(error){$('settings-error').textContent=error.message;$('settings-error').hidden=false;}
+    if($('settings-location')) $('settings-location').value=details.location||'';
+    if($('settings-interests')) $('settings-interests').value=details.interests||'';
+    if($('settings-occupation')) $('settings-occupation').value=details.occupation||'';
+    if($('settings-twitter')) $('settings-twitter').value=details.twitter||'';
+    if($('settings-discord')) $('settings-discord').value=details.discord||'';
+    if($('settings-website')) $('settings-website').value=details.website||'';
+    if($('settings-about')) $('settings-about').value=details.about||'';
+    updateSignaturePreview();
+
+    state.sectionOrder=[...(details.section_order||defaultSectionOrder)];
+    renderSectionOrder();
+
+    const devices=details.devices||[];
+    document.querySelectorAll('input[name=device]').forEach(input=>{
+      input.checked=devices.includes(input.value);
+    });
+
+    const currentMode=['osu','taiko','fruits','mania'].includes(state.mode)?state.mode:'osu';
+    const modeRadio=document.querySelector(`input[name="playmode"][value="${currentMode}"]`);
+    if(modeRadio)modeRadio.checked=true;
+  }catch(error){
+    showSettingsStatus(error.message,'error');
+  }
+}
+function openSettings(tab = 'profile'){
+  showSettingsPage(tab==='scores'?'settings-sec-scores':'settings-sec-profile',true);
 }
 function selectSettingsTab(tab){
-  const isProfile = tab === 'profile';
-  $('tab-btn-profile').classList.toggle('active', isProfile);
-  $('tab-btn-scores').classList.toggle('active', !isProfile);
-  $('settings-profile-panel').hidden = !isProfile;
-  $('settings-scores-panel').hidden = isProfile;
+  showSettingsPage(tab==='scores'?'settings-sec-scores':'settings-sec-profile',true);
 }
-$('tab-btn-profile').addEventListener('click',()=>selectSettingsTab('profile'));
-$('tab-btn-scores').addEventListener('click',()=>{
-  selectSettingsTab('scores');
-  if(!$('import-scores-query').value&&state.session?.user)$('import-scores-query').value=state.session.user;
-});
-if($('account-import-scores')){$('account-import-scores').addEventListener('click',()=>{closeAccount();openSettings('scores');});}
 function showImportStatus(msg,type){
   const el=$('import-official-status');
   el.textContent=msg;el.className='import-status '+(type||'');el.hidden=!msg;
@@ -1064,6 +1261,11 @@ $('import-official-btn').addEventListener('click',async()=>{
     if(details.about!==undefined)$('settings-about').value=details.about;
     if(details.location!==undefined)$('settings-location').value=details.location;
     if(details.country!==undefined){$('settings-country').value=details.country;updateSettingsCountryFlag();}
+    if(details.interests!==undefined)$('settings-interests').value=details.interests;
+    if(details.occupation!==undefined)$('settings-occupation').value=details.occupation;
+    if(details.twitter!==undefined)$('settings-twitter').value=details.twitter;
+    if(details.discord!==undefined)$('settings-discord').value=details.discord;
+    if(details.website!==undefined)$('settings-website').value=details.website;
     if(Array.isArray(details.devices)){
       document.querySelectorAll('input[name=device]').forEach(input=>{input.checked=details.devices.includes(input.value);});
     }
@@ -1072,7 +1274,7 @@ $('import-official-btn').addEventListener('click',async()=>{
       state.avatarUpload=res.avatar_data_url;
       state.resetAvatar=false;
     }
-    showImportStatus(`Imported ${res.official_username} (#${res.official_id})! Review and click Save changes below.`,'success');
+    showImportStatus(`Imported ${res.official_username} (#${res.official_id})! Review and click update in each section to save.`,'success');
   }catch(err){showImportStatus(err.message,'error');}
   finally{btn.disabled=false;}
 });
@@ -1101,7 +1303,8 @@ $('import-scores-btn').addEventListener('click',async()=>{
 
   const btn=$('import-scores-btn');
   btn.disabled=true;
-  const controls=$('settings-scores-panel').querySelectorAll('input, button, select');
+  const panel=$('settings-sec-scores')||$('settings-scores-panel');
+  const controls=panel ? panel.querySelectorAll('input, button, select') : [];
   controls.forEach(c=>{if(c!==btn)c.disabled=true;});
 
   showImportScoresStatus(`Connecting to osu.ppy.sh for '${query}'...`,'loading',5);
@@ -1157,38 +1360,311 @@ $('import-scores-btn').addEventListener('click',async()=>{
 $('import-scores-query').addEventListener('keydown',e=>{
   if(e.key==='Enter'){e.preventDefault();$('import-scores-btn').click();}
 });
-$('edit-profile').addEventListener('click',()=>openSettings('profile'));
-$('edit-profile-details').addEventListener('click',()=>openSettings('profile'));
-$('manage-profile').addEventListener('click',()=>openSettings('profile'));
-$('close-settings').addEventListener('click',()=>$('settings-dialog').close());
-$('reset-avatar').addEventListener('click',()=>{state.avatarUpload=null;state.resetAvatar=true;$('avatar-file').value='';$('settings-avatar').src=fallbackAvatar;});
-$('avatar-file').addEventListener('change',async()=>{
-  const file=$('avatar-file').files[0];if(!file)return;
-  $('settings-error').hidden=true;
-  if(file.size>2*1024*1024||!['image/png','image/jpeg','image/gif','image/webp'].includes(file.type)){
-    $('settings-error').textContent='Choose a PNG, JPEG, GIF or WebP up to 2 MB.';$('settings-error').hidden=false;$('avatar-file').value='';return;
+// Settings update & submission logic
+async function saveSettingsSection(patch, pillId, successMsg = 'Updated!'){
+  if (!state.session?.user) return;
+  if ($('settings-status-banner')) $('settings-status-banner').hidden = true;
+  try {
+    const curDetails = (state.profile && state.profile.name === state.session.user) ? (state.profile.details || {}) : {};
+    const newDetails = {
+      ...curDetails,
+      country: $('settings-country')?.value || '',
+      location: $('settings-location')?.value || '',
+      interests: $('settings-interests')?.value || '',
+      occupation: $('settings-occupation')?.value || '',
+      twitter: $('settings-twitter')?.value || '',
+      discord: $('settings-discord')?.value || '',
+      website: $('settings-website')?.value || '',
+      about: $('settings-about')?.value || '',
+      devices: [...document.querySelectorAll('input[name=device]:checked')].map(i => i.value),
+      section_order: state.sectionOrder || defaultSectionOrder,
+      ...patch,
+    };
+
+    const body = {
+      username: state.session.user,
+      reset_avatar: Boolean(state.resetAvatar),
+      details: newDetails,
+    };
+    if (state.avatarUpload) {
+      body.avatar = state.avatarUpload;
+    }
+
+    const res = await api('/site/settings', body);
+    state.session = await api('/site/session');
+    renderSession();
+    if (state.name === state.session.user) {
+      await loadProfile(state.session.user, false, true);
+    }
+    if (pillId) flashStatus(pillId, successMsg);
+    return res;
+  } catch (err) {
+    showSettingsStatus(err.message, 'error');
+    throw err;
   }
-  const reader=new FileReader();$('settings-submit').disabled=true;
-  reader.onload=()=>{if($('avatar-file').files[0]===file){state.avatarUpload=reader.result;state.resetAvatar=false;$('settings-avatar').src=reader.result;}$('settings-submit').disabled=false;};
-  reader.onerror=()=>{$('settings-error').textContent='The image could not be read.';$('settings-error').hidden=false;$('settings-submit').disabled=false;};
+}
+
+const on = (id, event, handler) => { const el = $(id); if (el) el.addEventListener(event, handler); };
+
+// Rename profile handlers
+on('btn-toggle-rename', 'click', () => {
+  if ($('settings-username-view')) $('settings-username-view').hidden = true;
+  if ($('settings-username-edit')) $('settings-username-edit').hidden = false;
+  if ($('settings-username')) {
+    $('settings-username').value = state.session.user || '';
+    $('settings-username').focus();
+    $('settings-username').select();
+  }
+});
+
+on('btn-cancel-rename', 'click', () => {
+  if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
+  if ($('settings-username-view')) $('settings-username-view').hidden = false;
+});
+
+on('btn-submit-rename', 'click', async () => {
+  const newName = ($('settings-username')?.value || '').trim();
+  if (!newName) {
+    showSettingsStatus('Please enter a username.', 'error');
+    return;
+  }
+  if (newName === state.session.user) {
+    if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
+    if ($('settings-username-view')) $('settings-username-view').hidden = false;
+    return;
+  }
+  const btn = $('btn-submit-rename');
+  if (btn) btn.disabled = true;
+  try {
+    const curDetails = (state.profile && state.profile.name === state.session.user) ? (state.profile.details || {}) : {};
+    const res = await api('/site/settings', {
+      username: newName,
+      reset_avatar: false,
+      details: curDetails,
+    });
+    state.session = await api('/site/session');
+    state.name = res.name;
+    renderSession();
+    if ($('settings-username-display')) $('settings-username-display').textContent = res.name;
+    if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
+    if ($('settings-username-view')) $('settings-username-view').hidden = false;
+    showSettingsStatus(`Username changed to ${res.name}`, 'info');
+  } catch (err) {
+    showSettingsStatus(err.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+on('settings-username', 'keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('btn-submit-rename')?.click(); }
+  else if (e.key === 'Escape') { e.preventDefault(); $('btn-cancel-rename')?.click(); }
+});
+
+// Avatar management
+async function handleAvatarFile(file) {
+  if (!file) return;
+  if (file.size > 2 * 1024 * 1024 || !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type)) {
+    showSettingsStatus('Choose a PNG, JPEG, GIF or WebP up to 2 MB.', 'error');
+    if ($('avatar-file')) $('avatar-file').value = '';
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = async () => {
+    state.avatarUpload = reader.result;
+    state.resetAvatar = false;
+    if ($('settings-avatar')) $('settings-avatar').src = reader.result;
+    const dropZone = $('avatar-drop-zone');
+    if (dropZone) dropZone.classList.add('js-account-edit-avatar--saving');
+    try {
+      await saveSettingsSection({}, 'save-status-avatar', 'Avatar updated!');
+      state.avatarVersion = Date.now();
+      renderSession();
+    } catch (_) {}
+    finally {
+      if (dropZone) dropZone.classList.remove('js-account-edit-avatar--saving');
+    }
+  };
+  reader.onerror = () => {
+    showSettingsStatus('The image could not be read.', 'error');
+  };
   reader.readAsDataURL(file);
-});
-$('settings-form').addEventListener('submit',async event=>{
-  event.preventDefault();$('settings-submit').disabled=true;$('settings-error').hidden=true;
-  try{
-    const body={username:$('settings-username').value,reset_avatar:state.resetAvatar,details:{section_order:state.sectionOrder,country:$('settings-country').value,location:$('settings-location').value,about:$('settings-about').value,devices:[...document.querySelectorAll('input[name=device]:checked')].map(input=>input.value)}};
-    if(state.avatarUpload)body.avatar=state.avatarUpload;
-    const result=await api('/site/settings',body);
-    state.session=await api('/site/session');state.avatarVersion=Date.now();renderSession();
-    await loadProfile(result.name,true);$('settings-dialog').close();
-  }catch(error){$('settings-error').textContent=error.message;$('settings-error').hidden=false;}
-  finally{$('settings-submit').disabled=false;}
+}
+
+on('btn-upload-avatar', 'click', () => $('avatar-file')?.click());
+on('avatar-file', 'change', () => {
+  handleAvatarFile($('avatar-file')?.files?.[0]);
 });
 
-"AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(' ').sort((a,b)=>countryName(a).localeCompare(countryName(b))).forEach(code=>{const option=document.createElement('option');option.value=code;option.textContent=countryName(code);$('settings-country').append(option);});
-$('settings-country').addEventListener('change',updateSettingsCountryFlag);
+const avatarDropZone = $('avatar-drop-zone');
+if (avatarDropZone) {
+  avatarDropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    avatarDropZone.classList.add('js-account-edit-avatar--hover');
+  });
+  avatarDropZone.addEventListener('dragleave', e => {
+    e.preventDefault();
+    avatarDropZone.classList.remove('js-account-edit-avatar--hover');
+  });
+  avatarDropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    avatarDropZone.classList.remove('js-account-edit-avatar--hover');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleAvatarFile(file);
+  });
+}
 
-$('edit-about').addEventListener('click',async()=>{await openSettings();if(!$('settings-submit').disabled)$('settings-about').focus();});
+on('reset-avatar', 'click', async () => {
+  state.avatarUpload = null;
+  state.resetAvatar = true;
+  if ($('avatar-file')) $('avatar-file').value = '';
+  if ($('settings-avatar')) $('settings-avatar').src = fallbackAvatar;
+  try {
+    await saveSettingsSection({}, 'save-status-avatar', 'Avatar reset!');
+    state.avatarVersion = Date.now();
+    renderSession();
+  } catch (_) {}
+});
+
+// Signature live preview & BBCode toolbar
+function updateSignaturePreview() {
+  const ta = $('settings-about');
+  const preview = $('settings-signature-preview');
+  if (!preview) return;
+  const raw = ta ? ta.value.trim() : '';
+  if (raw) {
+    preview.innerHTML = parseBBCode(raw);
+  } else {
+    preview.innerHTML = '<span style="color:hsl(var(--hsl-f1));font-style:italic;">Signature preview</span>';
+  }
+}
+
+function insertBBCode(openTag, closeTag = '', placeholder = '') {
+  const ta = $('settings-about');
+  if (!ta) return;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const sel = ta.value.substring(start, end) || placeholder;
+  const replacement = openTag + sel + closeTag;
+  ta.focus();
+  ta.setRangeText(replacement, start, end, 'select');
+  updateSignaturePreview();
+}
+
+function initBBCodeToolbar() {
+  const toolbar = $('settings-bbcode-toolbar');
+  if (!toolbar) return;
+  toolbar.querySelectorAll('button[data-tag]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tag = btn.dataset.tag;
+      switch (tag) {
+        case 'b': insertBBCode('[b]', '[/b]', 'bold text'); break;
+        case 'i': insertBBCode('[i]', '[/i]', 'italic text'); break;
+        case 's': insertBBCode('[strike]', '[/strike]', 'strike text'); break;
+        case 'heading': insertBBCode('[heading]', '[/heading]', 'Heading'); break;
+        case 'url': {
+          const url = prompt('Enter the link URL (e.g. https://...):', 'https://');
+          if (url) insertBBCode(`[url=${url}]`, '[/url]', 'link text');
+          break;
+        }
+        case 'quote': insertBBCode('[quote]', '[/quote]', 'Quote text'); break;
+        case 'list': insertBBCode('[list]\n[*] ', '\n[*] Item 2\n[/list]', 'Item 1'); break;
+        case 'list-ol': insertBBCode('[list=1]\n[*] ', '\n[*] Item 2\n[/list]', 'Item 1'); break;
+        case 'img': {
+          const url = prompt('Enter the image URL (e.g. https://...):', 'https://');
+          if (url) insertBBCode(`[img]${url}[/img]`);
+          break;
+        }
+      }
+    });
+  });
+
+  const sizeSelect = $('bbcode-font-size');
+  if (sizeSelect) {
+    sizeSelect.addEventListener('change', () => {
+      const val = sizeSelect.value;
+      if (val) {
+        insertBBCode(`[size=${val}]`, '[/size]', 'text');
+        sizeSelect.value = '';
+      }
+    });
+  }
+
+  on('settings-about', 'input', updateSignaturePreview);
+}
+initBBCodeToolbar();
+
+// Section update buttons
+on('btn-save-profile', 'click', async () => {
+  const btn = $('btn-save-profile');
+  if (btn) btn.disabled = true;
+  try {
+    await saveSettingsSection({
+      country: $('settings-country')?.value || '',
+      location: $('settings-location')?.value || '',
+      interests: $('settings-interests')?.value || '',
+      occupation: $('settings-occupation')?.value || '',
+      twitter: $('settings-twitter')?.value || '',
+      discord: $('settings-discord')?.value || '',
+      website: $('settings-website')?.value || '',
+    }, 'save-status-profile');
+  } catch (_) {}
+  finally { if (btn) btn.disabled = false; }
+});
+
+on('btn-save-signature', 'click', async () => {
+  const btn = $('btn-save-signature');
+  if (btn) btn.disabled = true;
+  try {
+    await saveSettingsSection({ about: $('settings-about')?.value || '' }, 'save-status-signature');
+  } catch (_) {}
+  finally { if (btn) btn.disabled = false; }
+});
+
+on('btn-save-playstyles', 'click', async () => {
+  const btn = $('btn-save-playstyles');
+  if (btn) btn.disabled = true;
+  try {
+    const devices = [...document.querySelectorAll('input[name=device]:checked')].map(i => i.value);
+    const selectedMode = document.querySelector('input[name="playmode"]:checked')?.value || 'osu';
+    state.mode = selectedMode;
+    updateModeSelector();
+    await saveSettingsSection({ devices }, 'save-status-playstyles');
+  } catch (_) {}
+  finally { if (btn) btn.disabled = false; }
+});
+
+on('btn-save-order', 'click', async () => {
+  const btn = $('btn-save-order');
+  if (btn) btn.disabled = true;
+  try {
+    await saveSettingsSection({ section_order: state.sectionOrder }, 'save-status-order');
+  } catch (_) {}
+  finally { if (btn) btn.disabled = false; }
+});
+
+// Dashboard header and navigation links
+on('dash-link-dashboard', 'click', e => {
+  e.preventDefault();
+  showProfilePage(state.session?.user, true);
+});
+on('dash-link-account', 'click', e => {
+  e.preventDefault();
+  showSettingsPage('settings-sec-profile', true);
+});
+on('dash-link-import', 'click', e => {
+  e.preventDefault();
+  showSettingsPage('settings-sec-scores', true);
+});
+
+on('edit-profile', 'click', () => showSettingsPage('settings-sec-profile', true));
+on('edit-profile-details', 'click', () => showSettingsPage('settings-sec-profile', true));
+on('manage-profile', 'click', () => showSettingsPage('settings-sec-profile', true));
+on('edit-about', 'click', () => showSettingsPage('settings-sec-signature', true));
+on('account-import-scores', 'click', () => {
+  closeAccount();
+  showSettingsPage('settings-sec-scores', true);
+});
 
 function formatHighestDate(dateStr){
   if(!dateStr)return'';
@@ -1312,7 +1788,12 @@ function renderPerformanceGraph(){
   wrap.addEventListener('touchend',()=>{hover.hidden=true;});
 }
 function renderSectionOrder(){
-  $('section-order-list').innerHTML=state.sectionOrder.map((id,i)=>`<div class="section-order-row"><span>${esc(document.querySelector('.section-tabs a[href="#'+id+'"]').textContent)}</span><button type="button" data-order="${i}" data-direction="-1" aria-label="Move ${esc(id)} up" ${i===0?'disabled':''}>↑</button><button type="button" data-order="${i}" data-direction="1" aria-label="Move ${esc(id)} down" ${i===state.sectionOrder.length-1?'disabled':''}>↓</button></div>`).join('');
+  const sectionLabels = { 'me': 'me!', 'top-ranks': 'ranks', 'historical': 'historical', 'beatmaps': 'beatmaps', 'medals': 'medals', 'recent-activity': 'recent' };
+  $('section-order-list').innerHTML=state.sectionOrder.map((id,i)=>{
+    const link=document.querySelector('.section-tabs a[href="#'+id+'"]');
+    const name=link?link.textContent:(sectionLabels[id]||id);
+    return `<div class="section-order-row"><span>${esc(name)}</span><button type="button" data-order="${i}" data-direction="-1" aria-label="Move ${esc(id)} up" ${i===0?'disabled':''}>↑</button><button type="button" data-order="${i}" data-direction="1" aria-label="Move ${esc(id)} down" ${i===state.sectionOrder.length-1?'disabled':''}>↓</button></div>`;
+  }).join('');
 }
 $('section-order-list').addEventListener('click',event=>{
   const button=event.target.closest('[data-order]');if(!button)return;

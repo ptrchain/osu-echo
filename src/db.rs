@@ -132,9 +132,15 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
             player_name TEXT PRIMARY KEY,
             about TEXT NOT NULL DEFAULT '',
             location TEXT NOT NULL DEFAULT '',
+            interests TEXT NOT NULL DEFAULT '',
+            occupation TEXT NOT NULL DEFAULT '',
+            twitter TEXT NOT NULL DEFAULT '',
+            discord TEXT NOT NULL DEFAULT '',
+            website TEXT NOT NULL DEFAULT '',
             devices TEXT NOT NULL DEFAULT '[]',
             section_order TEXT NOT NULL DEFAULT '[\"me\",\"top-ranks\",\"historical\",\"beatmaps\",\"medals\",\"recent-activity\"]',
             country TEXT NOT NULL DEFAULT '',
+            playmode TEXT NOT NULL DEFAULT 'osu',
             pinned_scores TEXT NOT NULL DEFAULT '[]',
             FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
         );
@@ -182,9 +188,16 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
             player_name TEXT PRIMARY KEY,
             about TEXT NOT NULL DEFAULT '',
             location TEXT NOT NULL DEFAULT '',
+            interests TEXT NOT NULL DEFAULT '',
+            occupation TEXT NOT NULL DEFAULT '',
+            twitter TEXT NOT NULL DEFAULT '',
+            discord TEXT NOT NULL DEFAULT '',
+            website TEXT NOT NULL DEFAULT '',
             devices TEXT NOT NULL DEFAULT '[]',
             section_order TEXT NOT NULL DEFAULT '[\"me\",\"top-ranks\",\"historical\",\"beatmaps\",\"medals\",\"recent-activity\"]',
             country TEXT NOT NULL DEFAULT '',
+            playmode TEXT NOT NULL DEFAULT 'osu',
+            pinned_scores TEXT NOT NULL DEFAULT '[]',
             FOREIGN KEY (player_name) REFERENCES profiles(name) ON DELETE CASCADE ON UPDATE CASCADE
         )",
         [],
@@ -192,6 +205,11 @@ pub fn init_db(conn: &Connection) -> SqlResult<()> {
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN country TEXT NOT NULL DEFAULT ''", []);
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN playmode TEXT NOT NULL DEFAULT 'osu'", []);
     let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN pinned_scores TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN interests TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN occupation TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN twitter TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN discord TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute("ALTER TABLE profile_details ADD COLUMN website TEXT NOT NULL DEFAULT ''", []);
 
     let _ = conn.execute(
         "CREATE TABLE IF NOT EXISTS rank_history (
@@ -358,7 +376,7 @@ pub fn wipe_profile(conn: &Connection, name: &str) -> SqlResult<()> {
 
 pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<ProfileDetails> {
     let stmt_res = conn.prepare(
-        "SELECT about, location, devices, section_order, country, playmode, pinned_scores FROM profile_details WHERE player_name = ?1",
+        "SELECT about, location, devices, section_order, country, playmode, pinned_scores, interests, occupation, twitter, discord, website FROM profile_details WHERE player_name = ?1",
     );
     let result = match stmt_res {
         Ok(mut stmt) => stmt.query_row(params![player_name], |row| {
@@ -369,11 +387,16 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
             let country: String = row.get(4)?;
             let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
             let pinned_scores_json: String = row.get(6).unwrap_or_else(|_| "[]".to_string());
-            Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json))
+            let interests: String = row.get(7).unwrap_or_default();
+            let occupation: String = row.get(8).unwrap_or_default();
+            let twitter: String = row.get(9).unwrap_or_default();
+            let discord: String = row.get(10).unwrap_or_default();
+            let website: String = row.get(11).unwrap_or_default();
+            Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, interests, occupation, twitter, discord, website))
         }),
         Err(_) => {
             let mut fallback_stmt = conn.prepare(
-                "SELECT about, location, devices, section_order, country, playmode FROM profile_details WHERE player_name = ?1",
+                "SELECT about, location, devices, section_order, country, playmode, pinned_scores FROM profile_details WHERE player_name = ?1",
             )?;
             fallback_stmt.query_row(params![player_name], |row| {
                 let about: String = row.get(0)?;
@@ -382,13 +405,14 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 let section_order_json: String = row.get(3)?;
                 let country: String = row.get(4)?;
                 let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
-                Ok((about, location, devices_json, section_order_json, country, playmode, "[]".to_string()))
+                let pinned_scores_json: String = row.get(6).unwrap_or_else(|_| "[]".to_string());
+                Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, String::new(), String::new(), String::new(), String::new(), String::new()))
             })
         }
     };
 
     match result {
-        Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json)) => {
+        Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, interests, occupation, twitter, discord, website)) => {
             let devices: Vec<String> = serde_json::from_str(&devices_json).unwrap_or_default();
             let section_order: Vec<String> = serde_json::from_str(&section_order_json)
                 .unwrap_or_else(|_| default_section_order());
@@ -413,6 +437,11 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
             Ok(ProfileDetails {
                 about,
                 location,
+                interests,
+                occupation,
+                twitter,
+                discord,
+                website,
                 devices,
                 section_order,
                 country,
@@ -448,8 +477,8 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
     let pinned_scores_json = serde_json::to_string(&details.pinned_scores).unwrap_or_else(|_| "[]".to_string());
 
     conn.execute(
-        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country, playmode, pinned_scores)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO profile_details (player_name, about, location, devices, section_order, country, playmode, pinned_scores, interests, occupation, twitter, discord, website)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(player_name) DO UPDATE SET
             about = excluded.about,
             location = excluded.location,
@@ -457,7 +486,12 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
             section_order = excluded.section_order,
             country = excluded.country,
             playmode = excluded.playmode,
-            pinned_scores = excluded.pinned_scores",
+            pinned_scores = excluded.pinned_scores,
+            interests = excluded.interests,
+            occupation = excluded.occupation,
+            twitter = excluded.twitter,
+            discord = excluded.discord,
+            website = excluded.website",
         params![
             player_name,
             details.about,
@@ -467,6 +501,11 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
             details.country,
             details.playmode,
             pinned_scores_json,
+            details.interests,
+            details.occupation,
+            details.twitter,
+            details.discord,
+            details.website,
         ],
     )?;
 
@@ -1930,6 +1969,11 @@ mod tests {
         let custom = ProfileDetails {
             about: "Hello world from osu! userpage".to_string(),
             location: "Berlin, Germany".to_string(),
+            interests: "Mapping & modding".to_string(),
+            occupation: "Developer".to_string(),
+            twitter: "peppy".to_string(),
+            discord: "peppy#0001".to_string(),
+            website: "https://osu.ppy.sh".to_string(),
             devices: vec!["Keyboard".to_string(), "Tablet".to_string()],
             section_order: vec![
                 "top-ranks".to_string(),
@@ -2043,6 +2087,11 @@ mod tests {
         let details = ProfileDetails {
             about: "Alice's Bio".to_string(),
             location: "Wonderland".to_string(),
+            interests: String::new(),
+            occupation: String::new(),
+            twitter: String::new(),
+            discord: String::new(),
+            website: String::new(),
             devices: vec!["Mouse".to_string()],
             section_order: default_section_order(),
             country: "GB".to_string(),
