@@ -9,6 +9,7 @@
 *.md
 !README.md
 !website/README.md
+!RELEASE_NOTES.md
 *.db
 *.db-journal
 *.db-wal
