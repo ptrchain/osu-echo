@@ -145,6 +145,7 @@ pub fn build_score_webhook_payload(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn send_score_webhook(
     http: HttpClient,
     webhook_url: String,

@@ -77,7 +77,7 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
         {p}tops / {p}t : Show top 5 plays\n\
         {p}stats / {p}profile : Show player stats\n\
         {p}importscores [user] [mode] [type] : Import official osu! scores (top/pinned/firsts/recent)\n\
-        {p}medals [sync] : Show medal progress or sync retroactively from saved scores\n\
+        {p}medals / {p}medal [name/sync] : Show medal progress, lookup medal by name, or sync retroactively\n\
         {p}mybest / {p}pb : Show your best score on the current map\n\
         {p}leaderboard / {p}lb : Show top scores on current map\n\
         {p}clearscores / {p}clearmap [set] : Clear your scores on the current beatmap (or set)\n\
@@ -675,7 +675,7 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
                     let is_canonical = db::get_beatmap_by_id(&db_conn, target_bmap.beatmap_id)
                         .ok()
                         .flatten()
-                        .map_or(false, |c| c.file_md5.eq_ignore_ascii_case(&effective_md5));
+                        .is_some_and(|c| c.file_md5.eq_ignore_ascii_case(&effective_md5));
                     if is_canonical {
                         let _ = db::set_beatmap_status(&db_conn, target_bmap.beatmap_id, status);
                     }
@@ -1770,6 +1770,26 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
             }
         }
         _ => {
+            if !args.is_empty() && subcmd != "info" && subcmd != "stats" && subcmd != "all" {
+                let query = args.join(" ").to_lowercase();
+                let all_medals = crate::types::medal::get_all_medals();
+                if let Some(m) = all_medals.iter().find(|m| m.name.eq_ignore_ascii_case(&query))
+                    .or_else(|| all_medals.iter().find(|m| m.name.to_lowercase().contains(&query))) {
+                    let has_it = {
+                        let s = state.read().await;
+                        let conn = s.db.lock().await;
+                        db::get_user_medals(&conn, player_name).unwrap_or_default().iter().any(|r| r.medal_id == m.id)
+                    };
+                    let status = if has_it { "Unlocked" } else { "Locked" };
+                    let msg = format!(
+                        "Medal: {} [{}] ({})\n{}\nStatus: {}",
+                        m.name, m.id, m.category.as_str(), m.description, status
+                    );
+                    reply(state, target, &msg).await;
+                    return;
+                }
+            }
+
             let (total_unlocked, skill_cnt, hush_cnt, mod_cnt, packs_cnt) = {
                 let s = state.read().await;
                 let conn = s.db.lock().await;
@@ -2144,7 +2164,7 @@ pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &st
 
     let is_already_restricted = {
         let s = state.read().await;
-        s.player.as_ref().map_or(false, |p| p.is_restricted)
+        s.player.as_ref().is_some_and(|p| p.is_restricted)
     };
 
     if is_already_restricted && args.is_empty() {
@@ -3340,6 +3360,24 @@ mod tests {
             }
         });
         assert!(sync_msg_found, "Must return sync status in response to !medals sync");
+        drop(s);
+
+        // Test !medal <name> lookup command
+        handle_command(&state, "MedalBotTester", "MedalBotTester", "medal", &["500", "Combo"]).await;
+        let s = state.read().await;
+        let p = s.player.as_ref().unwrap();
+        let pkts = packets::split_packets(&p.queue);
+        let lookup_found = pkts.iter().any(|pkt| {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let _sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msg.contains("Medal: 500 Combo") && msg.contains("Skill & Dedication")
+            } else {
+                false
+            }
+        });
+        assert!(lookup_found, "Must return medal details for !medal 500 Combo");
     }
 
     #[tokio::test]

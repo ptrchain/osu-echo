@@ -802,8 +802,10 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();
 
-        let mut config = crate::types::config::Config::default();
-        config.enable_recent_channel = false;
+        let config = crate::types::config::Config {
+            enable_recent_channel: false,
+            ..Default::default()
+        };
         let mut app_state = AppState::new(conn, config);
         app_state.pending_login_name = Some("NoRecentTester".to_string());
         let shared_state = Arc::new(RwLock::new(app_state));

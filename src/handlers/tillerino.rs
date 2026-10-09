@@ -351,7 +351,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
             let s = state.read().await;
             let db_conn = s.db.lock().await;
             if let Ok(Some(m)) = db::get_beatmap_by_id(&db_conn, id) {
-                let matches_hint = target_hint.as_deref().map_or(true, |h| utils::beatmap_matches_hint(&m, h));
+                let matches_hint = target_hint.as_deref().is_none_or(|h| utils::beatmap_matches_hint(&m, h));
                 if matches_hint {
                     bmap = Some(m);
                 }
@@ -400,7 +400,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
             let md5_matches = target_md5.is_some() && target_md5.as_deref() == Some(&last.file_md5);
             let set_matches = target_set_id.is_some()
                 && Some(last.beatmapset_id) == target_set_id
-                && target_hint.as_deref().map_or(true, |h| utils::beatmap_matches_hint(last, h));
+                && target_hint.as_deref().is_none_or(|h| utils::beatmap_matches_hint(last, h));
             let no_filter = is_direct_np;
             if id_matches || md5_matches || set_matches || no_filter {
                 bmap = Some(last.clone());

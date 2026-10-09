@@ -30,9 +30,11 @@ pub struct AppState {
     pub default_avatar: Vec<u8>,
     pub last_np_map: Option<Beatmap>,
     pub recent_recommendations: Vec<String>,
-    pub bancho_score_cache: HashMap<(i64, i32, Option<u32>, i32), (std::time::Instant, Vec<crate::types::score::BanchoScore>)>,
+    pub bancho_score_cache: HashMap<BanchoScoreCacheKey, (std::time::Instant, Vec<crate::types::score::BanchoScore>)>,
     pub web_sessions: HashMap<String, WebSession>,
 }
+
+pub type BanchoScoreCacheKey = (i64, i32, Option<u32>, i32);
 
 impl AppState {
     pub fn new(db: Connection, config: Config) -> Self {

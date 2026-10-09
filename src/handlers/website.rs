@@ -588,7 +588,8 @@ fn json_error(status: StatusCode, message: &str) -> Response {
     Response::json(&val).with_status(status).with_header("Cache-Control", "no-store")
 }
 
-static DAILY_CACHE: TokioMutex<Option<HashMap<i32, (Instant, Option<i32>)>>> =
+type DailyCacheMap = HashMap<i32, (Instant, Option<i32>)>;
+static DAILY_CACHE: TokioMutex<Option<DailyCacheMap>> =
     TokioMutex::const_new(None);
 static DAILY_LAST_REQUEST: TokioMutex<Option<Instant>> = TokioMutex::const_new(None);
 
@@ -641,7 +642,8 @@ pub async fn get_daily_rank(
     rank
 }
 
-static COUNTRY_RANK_CACHE: TokioMutex<Option<HashMap<(String, i32), (Instant, Option<i32>)>>> =
+type CountryRankCacheMap = HashMap<(String, i32), (Instant, Option<i32>)>;
+static COUNTRY_RANK_CACHE: TokioMutex<Option<CountryRankCacheMap>> =
     TokioMutex::const_new(None);
 static OAUTH_TOKEN: TokioMutex<Option<(String, Instant)>> = TokioMutex::const_new(None);
 
@@ -932,7 +934,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         return json_error(StatusCode::BAD_REQUEST, "Unknown mode.");
     }
 
-    let is_active = state_guard.player.as_ref().map_or(false, |p| p.name == name);
+    let is_active = state_guard.player.as_ref().is_some_and(|p| p.name == name);
     let http_client = state_guard.http.clone();
     let daily_key = state_guard.config.osu_daily_api_key.clone();
     let oauth_creds = match (
@@ -948,8 +950,8 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
 
     // Filter scores by mode:
     let (rx_bit, ap_bit) = (
-        Mods::RELAX.bits() as u32,
-        Mods::AUTOPILOT.bits() as u32,
+        Mods::RELAX.bits(),
+        Mods::AUTOPILOT.bits(),
     );
 
     let target_ruleset: Option<i32> = match mode_str {
@@ -1082,7 +1084,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
             beatmap: to_public_score(rep).beatmap,
         })
         .collect();
-    most_played.sort_by(|a, b| b.count.cmp(&a.count));
+    most_played.sort_by_key(|a| std::cmp::Reverse(a.count));
     most_played.truncate(100);
 
     // Play history (by YYYY-MM)
@@ -2594,7 +2596,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x02,
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&valid_png);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(valid_png);
         let data_url = format!("data:image/png;base64,{}", b64);
 
         let (ext, bytes) = parse_and_validate_avatar(&data_url).unwrap();
@@ -2682,7 +2684,7 @@ mod tests {
             0x00, 0x00, 0x00, 0x10,
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
-        let avatar_b64 = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&valid_png));
+        let avatar_b64 = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(valid_png));
 
         let settings_body = serde_json::json!({
             "username": "NewName",

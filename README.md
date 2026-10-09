@@ -6,12 +6,19 @@ A local osu! server written in Rust. It lets you run your own private server on 
 
 ## Features
 
+### New in v1.1
+- **osu!web Userpage**: A pixel-perfect, authentic osu!web profile running locally in your browser (`http://localhost:5000/users/<username>`). Track real-time weighted PP, global and country ranks, hit accuracy, level progress, play history charts, top performance plays, first places, most played beatmaps, and customizable "Me" userpage sections (BBCode/Markdown support, badges, and peripheral gear).
+- **352 Achievement Medals**: Complete offline emulation of all 352 official osu! medals across Skill & Dedication, Hush-Hush (secret riddle achievements), Mod Introduction, and Beatmap Packs. Features real-time unlock notification toasts on score submission, in-game lookup (`!medal <name>`), and retroactive scanning (`!medals sync`).
+- **Official Bancho Score Importer**: Migrate your plays and top scores from official osu! (`osu.ppy.sh`). Import Top plays, Pinned scores, First places (#1s), and Recent plays across all 4 rulesets (Standard, Taiko, Catch, Mania). Automatically downloads `.osr` replays, computes local PP with `rosu-pp`, syncs play counts, and retroactively evaluates medals.
+- **Web Settings & Management Dashboard**: Built-in configuration and profile customizer at `http://localhost:5000/settings`. Configure server ports, folder paths, API keys (osu! v1/v2, osudaily), Discord webhooks, and customize your avatar, banner cover, and profile details without editing files manually.
+
+### Core Features
 - **Score & Replay Tracking**: Automatically saves your plays, scores, and `.osr` replay files locally in a self-contained SQLite database.
 - **Real-Time PP Calculation**: Computes live PP for all plays using `rosu-pp` across all game modes (Standard, Taiko, Catch, Mania).
 - **Custom & Unranked Maps**: Full support for unranked maps, practice diffs, custom speed rates, and osu!trainer modifications.
 - **Built-in osu!direct Mirror**: In-game beatmap search and 1-click downloads powered by the Catboy (Mino) mirror (no osu! supporter or external accounts required).
 - **In-Game Bot Companions**:
-  - **BanchoBot**: Manages leaderboard statuses, personal bests, score announcements, and profile statistics.
+  - **BanchoBot**: Manages leaderboard statuses, personal bests, score announcements, profile statistics, medals, and score imports.
   - **Tillerino**: Send `/np` in chat or PM to get instant difficulty breakdowns and PP calculations for Nomod, HD, HR, DT, etc.
 - **Local Leaderboards & Profiles**: Track personal bests, total score, hit accuracy, play count, and global rank estimates.
 - **Discord Webhook Integration**: Automatically post submitted plays with Rich Embeds and configurable minimum PP thresholds directly to a Discord channel.
@@ -70,6 +77,12 @@ To connect your osu! client to the local server:
 3. Launch osu! using the shortcut.
 4. Log in with any username and password. The server will create your profile automatically.
 
+### 4. Web Interface & Userpage
+
+While `osu-echo` is running, open your web browser to access the built-in web portal:
+- **User Profile**: `http://localhost:5000/users/<username>` — View your authentic osu!web player page with live performance calculation, rank graphs, top plays, first places, most played maps, and 352 achievement medals.
+- **Settings & Management**: `http://localhost:5000/settings` — Web-based configuration editor, profile appearance customizer (avatar, banner, bio, hardware gear), and interactive Bancho Score Importer.
+
 ## In-Game Commands
 
 You can send commands in chat channels or via private message to **BanchoBot** or **Tillerino**.
@@ -84,6 +97,8 @@ You can send commands in chat channels or via private message to **BanchoBot** o
 | `!tops` / `!t` | Show your top 5 highest PP plays |
 | `!mybest` / `!pb` | Show your best score on the current beatmap |
 | `!leaderboard` / `!lb` | Show top local scores on the current beatmap |
+| `!medals` / `!medal <name>` | Show medal progress summary, look up medal details by name, or sync retroactively (`!medals sync`) |
+| `!importscores [username]` | Import official osu! scores, replay files, and medals (`top`, `pinned`, `firsts`, `recent`) |
 | `!mode <std/taiko/ctb/mania>` | Switch active game mode |
 | `!country <code>` | Set country flag on your profile (e.g. `!country US`, `!country DE`) |
 | `!status <ranked/unranked/loved>` | Change the status of the current beatmap |

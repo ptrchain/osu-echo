@@ -460,8 +460,10 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 String::new()
             };
 
-            let mut details = ProfileDetails::default();
-            details.country = country;
+            let details = ProfileDetails {
+                country,
+                ..Default::default()
+            };
             Ok(details)
         }
         Err(e) => Err(e),

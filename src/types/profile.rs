@@ -124,12 +124,16 @@ mod tests {
         let valid = ProfileDetails::default();
         assert!(valid.validate().is_ok());
 
-        let mut invalid_about = ProfileDetails::default();
-        invalid_about.about = "a".repeat(5001);
+        let invalid_about = ProfileDetails {
+            about: "a".repeat(5001),
+            ..Default::default()
+        };
         assert!(invalid_about.validate().is_err());
 
-        let mut invalid_location = ProfileDetails::default();
-        invalid_location.location = "b".repeat(101);
+        let invalid_location = ProfileDetails {
+            location: "b".repeat(101),
+            ..Default::default()
+        };
         assert!(invalid_location.validate().is_err());
 
         let mut invalid_device = ProfileDetails::default();
@@ -141,16 +145,22 @@ mod tests {
         valid_device.devices.push("keyboard".to_string());
         assert!(valid_device.validate().is_ok());
 
-        let mut invalid_sections = ProfileDetails::default();
-        invalid_sections.section_order = vec!["me".to_string(), "me".to_string()];
+        let invalid_sections = ProfileDetails {
+            section_order: vec!["me".to_string(), "me".to_string()],
+            ..Default::default()
+        };
         assert!(invalid_sections.validate().is_err());
 
-        let mut invalid_country = ProfileDetails::default();
-        invalid_country.country = "ZZZ".to_string();
+        let invalid_country = ProfileDetails {
+            country: "ZZZ".to_string(),
+            ..Default::default()
+        };
         assert!(invalid_country.validate().is_err());
 
-        let mut valid_country = ProfileDetails::default();
-        valid_country.country = "DE".to_string();
+        let valid_country = ProfileDetails {
+            country: "DE".to_string(),
+            ..Default::default()
+        };
         assert!(valid_country.validate().is_ok());
     }
 }

@@ -59,7 +59,7 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
 
     let is_restricted = {
         let s = state.read().await;
-        s.player.as_ref().map_or(false, |p| p.is_restricted)
+        s.player.as_ref().is_some_and(|p| p.is_restricted)
     };
 
     if is_restricted {

@@ -46,15 +46,9 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
     }
 
     // Direct beatmap download: /d/123, /d/123n, /osu/d/123, /b/d/123
-    let download_sub = if let Some(sub) = path.strip_prefix("/d/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/osu/d/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/b/d/") {
-        Some(sub)
-    } else {
-        None
-    };
+    let download_sub = path.strip_prefix("/d/")
+        .or_else(|| path.strip_prefix("/osu/d/"))
+        .or_else(|| path.strip_prefix("/b/d/"));
 
     if let Some(sub) = download_sub {
         let digits: String = sub.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -64,36 +58,23 @@ pub fn match_route(path: &str, _query: &HashMap<String, String>) -> RouteMatch {
     }
 
     // Thumbnails: /thumb/123l.jpg, /osu/thumb/123l.jpg, /b/thumb/123l.jpg, /b/123l.jpg
-    let thumb_sub = if let Some(sub) = path.strip_prefix("/thumb/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/osu/thumb/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/b/thumb/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/b/") {
-        if sub.ends_with(".jpg") || sub.ends_with(".png") || sub.ends_with(".jpeg") {
-            Some(sub)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+    let thumb_sub = path.strip_prefix("/thumb/")
+        .or_else(|| path.strip_prefix("/osu/thumb/"))
+        .or_else(|| path.strip_prefix("/b/thumb/"))
+        .or_else(|| {
+            path.strip_prefix("/b/").filter(|sub| {
+                sub.ends_with(".jpg") || sub.ends_with(".png") || sub.ends_with(".jpeg")
+            })
+        });
 
     if let Some(filename) = thumb_sub {
         return RouteMatch::Thumbnail(filename.to_string());
     }
 
     // Previews: /preview/123.mp3, /osu/preview/123.mp3, /b/preview/123.mp3
-    let preview_sub = if let Some(sub) = path.strip_prefix("/preview/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/osu/preview/") {
-        Some(sub)
-    } else if let Some(sub) = path.strip_prefix("/b/preview/") {
-        Some(sub)
-    } else {
-        None
-    };
+    let preview_sub = path.strip_prefix("/preview/")
+        .or_else(|| path.strip_prefix("/osu/preview/"))
+        .or_else(|| path.strip_prefix("/b/preview/"));
 
     if let Some(filename) = preview_sub {
         return RouteMatch::Preview(filename.to_string());

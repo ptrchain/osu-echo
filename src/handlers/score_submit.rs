@@ -232,8 +232,8 @@ fn format_achievements_new(medal_ids: &[i32]) -> Option<String> {
         .iter()
         .filter_map(|&id| {
             get_medal_by_id(id).map(|m| {
-                let clean_name = m.name.replace('+', " ").replace('/', "-").replace('|', "-");
-                let clean_desc = m.description.replace('+', " ").replace('/', "-").replace('|', "-").replace('\n', " ");
+                let clean_name = m.name.replace('+', " ").replace(['/', '|'], "-");
+                let clean_desc = m.description.replace('+', " ").replace(['/', '|'], "-").replace('\n', " ");
                 format!("{}+{}+{}", m.icon_url, clean_name, clean_desc)
             })
         })

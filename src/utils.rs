@@ -406,7 +406,7 @@ pub fn parse_osu_file_to_beatmap(content: &str, fallback_bmap_id: Option<i64>, f
         || v_lower.contains("nerf")
         || v_lower.contains("buff")
         || v_lower.contains("cut")
-        || (v_lower.ends_with('x') && v_lower.chars().rev().nth(1).map_or(false, |c| c.is_ascii_digit()));
+        || (v_lower.ends_with('x') && v_lower.chars().rev().nth(1).is_some_and(|c| c.is_ascii_digit()));
 
     if is_custom_diff {
         bmap.beatmap_id = 0;
@@ -537,10 +537,8 @@ pub fn beatmap_matches_hint(bmap: &crate::types::beatmap::Beatmap, hint: &str) -
         if !bmap.title.is_empty() {
             let bt = bmap.title.to_lowercase();
             let et_lower = et.to_lowercase();
-            if bt != et_lower && !bt.contains(&et_lower) && !et_lower.contains(&bt) {
-                if et_lower.len() >= 3 {
-                    return false;
-                }
+            if bt != et_lower && !bt.contains(&et_lower) && !et_lower.contains(&bt) && et_lower.len() >= 3 {
+                return false;
             }
         }
     }
@@ -549,10 +547,8 @@ pub fn beatmap_matches_hint(bmap: &crate::types::beatmap::Beatmap, hint: &str) -
         if !bmap.artist.is_empty() {
             let ba = bmap.artist.to_lowercase();
             let ea_lower = ea.to_lowercase();
-            if ba != ea_lower && !ba.contains(&ea_lower) && !ea_lower.contains(&ba) {
-                if ea_lower.len() >= 3 {
-                    return false;
-                }
+            if ba != ea_lower && !ba.contains(&ea_lower) && !ea_lower.contains(&ba) && ea_lower.len() >= 3 {
+                return false;
             }
         }
     }
@@ -621,7 +617,7 @@ pub fn find_and_parse_local_osu_file(
                                 .filter(|w| w.len() >= 3 && !matches!(*w, "the" | "and" | "for" | "ver" | "feat" | "remix"))
                                 .collect();
                             let matched_words = words.iter().filter(|w| folder_name.contains(**w)).count();
-                            if matched_words > 0 && matched_words >= (words.len() + 1) / 2 {
+                            if matched_words > 0 && matched_words >= words.len().div_ceil(2) {
                                 folder_score += 30;
                             }
                         }
@@ -648,7 +644,7 @@ pub fn find_and_parse_local_osu_file(
             }
         }
 
-        candidate_folders.sort_by(|a, b| b.0.cmp(&a.0));
+        candidate_folders.sort_by_key(|a| std::cmp::Reverse(a.0));
 
         for (_, folder_path) in candidate_folders {
             if let Some((b, c)) = scan_dir_for_osu_file(&folder_path, map_id, map_md5, Some(hint), None) {
@@ -738,7 +734,7 @@ pub fn find_local_mapset_folder(
 pub fn resolve_songs_folder(config: &crate::types::config::Config) -> Option<std::path::PathBuf> {
     #[cfg(test)]
     {
-        return config.songs_folder().filter(|p| p.exists());
+        config.songs_folder().filter(|p| p.exists())
     }
     #[cfg(not(test))]
     {
@@ -880,7 +876,7 @@ fn scan_dir_for_osu_file(
                             if bmap.beatmap_id == 0 {
                                 bmap.beatmap_id = map_id.unwrap_or(0);
                             }
-                            if best_match.as_ref().map_or(true, |(s, _, _)| score > *s) {
+                            if best_match.as_ref().is_none_or(|(s, _, _)| score > *s) {
                                 best_match = Some((score, bmap, content));
                             }
                         }

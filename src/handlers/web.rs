@@ -51,7 +51,7 @@ async fn score_sub(state: Arc<RwLock<AppState>>, method: &hyper::Method, headers
         if s.player.is_none() {
             return Response::empty().with_status(hyper::StatusCode::NOT_FOUND);
         }
-        if s.player.as_ref().map_or(false, |p| p.is_restricted) {
+        if s.player.as_ref().is_some_and(|p| p.is_restricted) {
             return Response::new(b"error: ban\n".to_vec());
         }
     }
@@ -1365,8 +1365,10 @@ mod tests {
         };
         db::insert_score(&conn, &score_main, "ranked").unwrap();
 
-        let mut config = crate::types::config::Config::default();
-        config.pp_leaderboard = true;
+        let config = crate::types::config::Config {
+            pp_leaderboard: true,
+            ..Default::default()
+        };
         let mut app_state = AppState::new(conn, config);
         let mut player = crate::types::player::Player::new("MainPlayer".to_string());
         player.userid = 2;
@@ -1579,8 +1581,10 @@ mod tests {
         bmap.approved = 1;
         db::insert_beatmap(&conn, &bmap).unwrap();
 
-        let mut config = crate::types::config::Config::default();
-        config.amount_of_scores_on_lb = 50;
+        let config = crate::types::config::Config {
+            amount_of_scores_on_lb: 50,
+            ..Default::default()
+        };
         let mut app_state = AppState::new(conn, config);
 
         // Pre-populate bancho_score_cache for map 8881
@@ -1890,9 +1894,11 @@ mod tests {
         };
         db::insert_score(&conn, &score, "ranked").unwrap();
 
-        let mut config = crate::types::config::Config::default();
-        config.pp_leaderboard = false;
-        config.show_pp_for_personal_best = true;
+        let config = crate::types::config::Config {
+            pp_leaderboard: false,
+            show_pp_for_personal_best: true,
+            ..Default::default()
+        };
 
         let mut app_state = AppState::new(conn, config);
         app_state.player = Some(crate::types::player::Player::new("PBUser".to_string()));

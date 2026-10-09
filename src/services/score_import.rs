@@ -7,7 +7,7 @@ use crate::utils;
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, OnceLock};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ImportProgress {
     pub active: bool,
     pub stage: String,
@@ -18,22 +18,6 @@ pub struct ImportProgress {
     pub imported_count: usize,
     pub replays_count: usize,
     pub error: Option<String>,
-}
-
-impl Default for ImportProgress {
-    fn default() -> Self {
-        Self {
-            active: false,
-            stage: String::new(),
-            message: String::new(),
-            current: 0,
-            total: 0,
-            percent: 0,
-            imported_count: 0,
-            replays_count: 0,
-            error: None,
-        }
-    }
 }
 
 static IMPORT_PROGRESS: OnceLock<Mutex<std::collections::HashMap<String, ImportProgress>>> = OnceLock::new();
@@ -502,6 +486,7 @@ pub async fn fetch_missing_beatmap_osu(
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn download_score_replay(
     http: &reqwest::Client,
     ruleset: &str,

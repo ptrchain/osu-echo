@@ -236,6 +236,7 @@ pub fn write_dotenv(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_dotenv_full(
     host: Option<&str>,
     port: Option<u16>,

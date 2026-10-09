@@ -448,9 +448,8 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
                 || path.starts_with("/u/")
                 || path.starts_with("/users/")
                 || path == "/favicon.ico"
+                || path.starts_with("/osu")
             {
-                path.clone()
-            } else if path.starts_with("/osu") {
                 path.clone()
             } else {
                 format!("/osu{}", path)
