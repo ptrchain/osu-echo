@@ -26,6 +26,7 @@ function renderSession() {
   const v = state.avatarVersion || state.session?.avatar_version || 'default';
   const accountImage = state.session.user ? `/site/avatar?name=${encodeURIComponent(state.session.user)}&v=${encodeURIComponent(v)}` : fallbackAvatar;
   if ($('account-avatar').getAttribute('src') !== accountImage) $('account-avatar').src = accountImage;
+  if ($('settings-avatar') && $('settings-avatar').getAttribute('src') !== accountImage) $('settings-avatar').src = accountImage;
   $('account-panel-name').textContent=state.session.user||'Guest';
   $('account-panel-status').textContent=state.session.active===state.session.user?'Active on the local server':'Local osu!';
   $('account-profile').href=state.session.user?`/users/${encodeURIComponent(state.session.user)}${state.mode ? `?mode=${state.mode}` : ''}`:'#profile';
@@ -723,7 +724,7 @@ function renderProfile() {
   $('avatar').src = `/site/avatar?name=${encodeURIComponent(p.name)}&v=${encodeURIComponent(v)}`;
   $('edit-profile').hidden=state.session.user!==p.name;
   $('edit-profile-details').hidden=state.session.user!==p.name;
-  $('edit-about').hidden=state.session.user!==p.name;
+  if ($('edit-about')) $('edit-about').hidden = true;
   const level=scoreLevel(p.total_score);
   $('level-number').textContent=level.level;
   $('level-badge').title=`Level ${level.level} · calculated from saved total score`;
@@ -803,9 +804,19 @@ async function showSettingsPage(sectionId = null, navigate = false) {
   if ($('settings-page')) $('settings-page').hidden = false;
   document.title = 'account settings · Local osu!';
 
-  document.querySelectorAll('.dashboard-subnav__item').forEach(item => item.classList.remove('is-active'));
+  document.querySelectorAll('.dashboard-subnav__item, .header-nav-v4__link').forEach(item => {
+    item.classList.remove('is-active', 'header-nav-v4__link--active');
+  });
   const activeTab = (sectionId === 'settings-sec-scores') ? $('dash-link-import') : $('dash-link-account');
-  if (activeTab) activeTab.classList.add('is-active');
+  if (activeTab) {
+    activeTab.classList.add('is-active', 'header-nav-v4__link--active');
+  }
+
+  const coverBg = $('settings-cover-bg');
+  if (coverBg) {
+    const bgUrl = state.profile?.cover_url || '/site/static/vendor/generic@2x.ef7ea3b5.jpg';
+    coverBg.style.backgroundImage = `url('${bgUrl}')`;
+  }
 
   if (navigate) {
     const targetUrl = '/settings' + (sectionId ? '#' + sectionId : '');
@@ -1185,6 +1196,12 @@ async function loadSettingsData(){
     const currentMode=['osu','taiko','fruits','mania'].includes(state.mode)?state.mode:'osu';
     const modeRadio=document.querySelector(`input[name="playmode"][value="${currentMode}"]`);
     if(modeRadio)modeRadio.checked=true;
+
+    ['settings-location', 'settings-interests', 'settings-occupation', 'settings-twitter', 'settings-discord', 'settings-website'].forEach(id => {
+      const el = $(id);
+      if (el) el._lastSavedValue = el.value;
+    });
+    if ($('settings-country')) $('settings-country')._lastSavedValue = $('settings-country').value;
   }catch(error){
     showSettingsStatus(error.message,'error');
   }
@@ -1281,6 +1298,11 @@ $('import-official-btn').addEventListener('click',async()=>{
 $('import-official-query').addEventListener('keydown',e=>{
   if(e.key==='Enter'){e.preventDefault();$('import-official-btn').click();}
 });
+if($('import-scores-query')){
+  $('import-scores-query').addEventListener('keydown',e=>{
+    if(e.key==='Enter'){e.preventDefault();$('import-scores-btn').click();}
+  });
+}
 $('import-scores-btn').addEventListener('click',async()=>{
   const query=$('import-scores-query').value.trim();
   if(!query){
@@ -1375,7 +1397,7 @@ async function saveSettingsSection(patch, pillId, successMsg = 'Updated!'){
       twitter: $('settings-twitter')?.value || '',
       discord: $('settings-discord')?.value || '',
       website: $('settings-website')?.value || '',
-      about: $('settings-about')?.value || '',
+      about: $('settings-about') ? $('settings-about').value : (curDetails.about || ''),
       devices: [...document.querySelectorAll('input[name=device]:checked')].map(i => i.value),
       section_order: state.sectionOrder || defaultSectionOrder,
       ...patch,
@@ -1406,60 +1428,87 @@ async function saveSettingsSection(patch, pillId, successMsg = 'Updated!'){
 
 const on = (id, event, handler) => { const el = $(id); if (el) el.addEventListener(event, handler); };
 
-// Rename profile handlers
-on('btn-toggle-rename', 'click', () => {
-  if ($('settings-username-view')) $('settings-username-view').hidden = true;
-  if ($('settings-username-edit')) $('settings-username-edit').hidden = false;
+// Rename profile modal handlers
+function openRenameDialog() {
+  const dlg = $('rename-dialog');
+  if (!dlg) return;
+  const currentName = state.session?.user || state.name || '';
+  if ($('rename-current-user')) $('rename-current-user').textContent = currentName;
+  if ($('settings-username')) $('settings-username').value = currentName;
+  if ($('rename-error')) $('rename-error').hidden = true;
+  dlg.showModal();
   if ($('settings-username')) {
-    $('settings-username').value = state.session.user || '';
-    $('settings-username').focus();
-    $('settings-username').select();
+    setTimeout(() => {
+      $('settings-username').focus();
+      $('settings-username').select();
+    }, 50);
   }
-});
+}
 
-on('btn-cancel-rename', 'click', () => {
-  if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
-  if ($('settings-username-view')) $('settings-username-view').hidden = false;
-});
+function closeRenameDialog() {
+  const dlg = $('rename-dialog');
+  if (dlg && dlg.open) dlg.close();
+}
 
-on('btn-submit-rename', 'click', async () => {
-  const newName = ($('settings-username')?.value || '').trim();
-  if (!newName) {
-    showSettingsStatus('Please enter a username.', 'error');
-    return;
-  }
-  if (newName === state.session.user) {
-    if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
-    if ($('settings-username-view')) $('settings-username-view').hidden = false;
-    return;
-  }
-  const btn = $('btn-submit-rename');
-  if (btn) btn.disabled = true;
-  try {
-    const curDetails = (state.profile && state.profile.name === state.session.user) ? (state.profile.details || {}) : {};
-    const res = await api('/site/settings', {
-      username: newName,
-      reset_avatar: false,
-      details: curDetails,
-    });
-    state.session = await api('/site/session');
-    state.name = res.name;
-    renderSession();
-    if ($('settings-username-display')) $('settings-username-display').textContent = res.name;
-    if ($('settings-username-edit')) $('settings-username-edit').hidden = true;
-    if ($('settings-username-view')) $('settings-username-view').hidden = false;
-    showSettingsStatus(`Username changed to ${res.name}`, 'info');
-  } catch (err) {
-    showSettingsStatus(err.message, 'error');
-  } finally {
-    if (btn) btn.disabled = false;
-  }
-});
+on('btn-toggle-rename', 'click', openRenameDialog);
+on('close-rename', 'click', closeRenameDialog);
+on('btn-cancel-rename', 'click', closeRenameDialog);
 
-on('settings-username', 'keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); $('btn-submit-rename')?.click(); }
-  else if (e.key === 'Escape') { e.preventDefault(); $('btn-cancel-rename')?.click(); }
-});
+const renameDlg = $('rename-dialog');
+if (renameDlg) {
+  renameDlg.addEventListener('click', event => {
+    if (event.target === renameDlg) {
+      const r = renameDlg.getBoundingClientRect();
+      if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) {
+        closeRenameDialog();
+      }
+    }
+  });
+}
+
+const renameForm = $('rename-form');
+if (renameForm) {
+  renameForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const newName = ($('settings-username')?.value || '').trim();
+    const errEl = $('rename-error');
+    if (errEl) errEl.hidden = true;
+
+    if (!newName) {
+      if (errEl) { errEl.textContent = 'Please enter a username.'; errEl.hidden = false; }
+      return;
+    }
+    if (newName === state.session?.user) {
+      closeRenameDialog();
+      return;
+    }
+
+    const btn = $('btn-submit-rename');
+    if (btn) btn.disabled = true;
+
+    try {
+      const curDetails = (state.profile && state.profile.name === state.session.user) ? (state.profile.details || {}) : {};
+      const res = await api('/site/settings', {
+        username: newName,
+        reset_avatar: false,
+        details: curDetails,
+      });
+      state.session = await api('/site/session');
+      state.name = res.name;
+      renderSession();
+      if ($('settings-username-display')) $('settings-username-display').textContent = res.name;
+      closeRenameDialog();
+      showSettingsStatus(`Username changed to ${res.name}`, 'info');
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = err.message;
+        errEl.hidden = false;
+      }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  });
+}
 
 // Avatar management
 async function handleAvatarFile(file) {
@@ -1665,6 +1714,154 @@ on('account-import-scores', 'click', () => {
   closeAccount();
   showSettingsPage('settings-sec-scores', true);
 });
+
+function initAutoSubmitFields() {
+  const textFields = [
+    { id: 'settings-location', field: 'location' },
+    { id: 'settings-interests', field: 'interests' },
+    { id: 'settings-occupation', field: 'occupation' },
+    { id: 'settings-twitter', field: 'twitter' },
+    { id: 'settings-discord', field: 'discord' },
+    { id: 'settings-website', field: 'website' },
+  ];
+
+  textFields.forEach(({ id, field }) => {
+    const input = $(id);
+    if (!input) return;
+    const entry = input.closest('.account-edit-entry');
+
+    const handleSave = async () => {
+      const val = input.value.trim();
+      if (input._lastSavedValue === val) return;
+      input._lastSavedValue = val;
+      if (entry) entry.setAttribute('data-account-edit-state', 'saving');
+      try {
+        await saveSettingsSection({ [field]: val });
+        if (entry) {
+          entry.setAttribute('data-account-edit-state', 'saved');
+          setTimeout(() => {
+            if (entry.getAttribute('data-account-edit-state') === 'saved') {
+              entry.removeAttribute('data-account-edit-state');
+            }
+          }, 2500);
+        }
+      } catch (err) {
+        if (entry) entry.removeAttribute('data-account-edit-state');
+      }
+    };
+
+    input.addEventListener('blur', handleSave);
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      }
+    });
+  });
+
+  const countrySel = $('settings-country');
+  if (countrySel) {
+    const entry = countrySel.closest('.account-edit-entry');
+    countrySel.addEventListener('change', async () => {
+      const val = countrySel.value;
+      updateSettingsCountryFlag();
+      if (countrySel._lastSavedValue === val) return;
+      countrySel._lastSavedValue = val;
+      if (entry) entry.setAttribute('data-account-edit-state', 'saving');
+      try {
+        await saveSettingsSection({ country: val });
+        if (entry) {
+          entry.setAttribute('data-account-edit-state', 'saved');
+          setTimeout(() => {
+            if (entry.getAttribute('data-account-edit-state') === 'saved') {
+              entry.removeAttribute('data-account-edit-state');
+            }
+          }, 2500);
+        }
+      } catch (err) {
+        if (entry) entry.removeAttribute('data-account-edit-state');
+      }
+    });
+  }
+
+  // Playstyle devices checkboxes auto-submit
+  document.querySelectorAll('input[name=device]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const entry = $('entry-devices') || cb.closest('.account-edit-entry');
+      if (entry) entry.setAttribute('data-account-edit-state', 'saving');
+      try {
+        const devices = [...document.querySelectorAll('input[name=device]:checked')].map(i => i.value);
+        await saveSettingsSection({ devices });
+        if (entry) {
+          entry.setAttribute('data-account-edit-state', 'saved');
+          setTimeout(() => {
+            if (entry.getAttribute('data-account-edit-state') === 'saved') {
+              entry.removeAttribute('data-account-edit-state');
+            }
+          }, 2500);
+        }
+      } catch (err) {
+        if (entry) entry.removeAttribute('data-account-edit-state');
+      }
+    });
+  });
+
+  // Default mode radio auto-submit
+  document.querySelectorAll('input[name=playmode]').forEach(rb => {
+    rb.addEventListener('change', async () => {
+      const entry = $('entry-playmode') || rb.closest('.account-edit-entry');
+      if (entry) entry.setAttribute('data-account-edit-state', 'saving');
+      try {
+        state.mode = rb.value;
+        updateModeSelector();
+        await saveSettingsSection({ playmode: rb.value });
+        if (entry) {
+          entry.setAttribute('data-account-edit-state', 'saved');
+          setTimeout(() => {
+            if (entry.getAttribute('data-account-edit-state') === 'saved') {
+              entry.removeAttribute('data-account-edit-state');
+            }
+          }, 2500);
+        }
+      } catch (err) {
+        if (entry) entry.removeAttribute('data-account-edit-state');
+      }
+    });
+  });
+
+  // Privacy toggles auto-submit simulation
+  ['pref-pm-friends', 'pref-chat-filter', 'pref-share-city'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const entry = $('entry-privacy') || el.closest('.account-edit-entry');
+      if (entry) {
+        entry.setAttribute('data-account-edit-state', 'saving');
+        setTimeout(() => {
+          entry.setAttribute('data-account-edit-state', 'saved');
+          setTimeout(() => entry.removeAttribute('data-account-edit-state'), 2500);
+        }, 200);
+      }
+    });
+  });
+
+  // API Key copy button
+  const copyBtn = $('btn-copy-api-key');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      const keyInput = $('settings-api-key');
+      if (keyInput) {
+        navigator.clipboard?.writeText(keyInput.value);
+        const textEl = $('btn-copy-api-text');
+        if (textEl) {
+          textEl.textContent = 'copied!';
+          setTimeout(() => { textEl.textContent = 'copy'; }, 2000);
+        }
+      }
+    });
+  }
+}
+initAutoSubmitFields();
 
 function formatHighestDate(dateStr){
   if(!dateStr)return'';

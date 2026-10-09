@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>player info · Local osu!</title>
 <link rel="stylesheet" href="/site/static/vendor/osu-web.css">
-<link rel="stylesheet" href="/site/static/profile.css?v=los30">
-<script src="/site/static/profile.js?v=los30" defer></script>
+<link rel="stylesheet" href="/site/static/profile.css?v=los39">
+<script src="/site/static/profile.js?v=los39" defer></script>
 </head>
 <body class="t-user">
 <header class="local-header">
@@ -79,23 +79,47 @@
 </main>
 
 <div id="settings-page" class="settings-page" hidden>
-  <!-- Subheader: Official osu! Dashboard Banner -->
-  <div class="dashboard-banner">
-    <div class="dashboard-banner__container">
-      <div class="dashboard-banner__header">
-        <svg class="dashboard-banner__icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/>
-          <circle cx="12" cy="12" r="3"/>
-        </svg>
-        <span class="dashboard-banner__title">dashboard</span>
+  <!-- Authentic osu!web Dashboard Header -->
+  <div class="header-v4 header-v4--settings">
+    <div class="header-v4__bg-container">
+      <div class="header-v4__bg u-current-user-cover local-cover" id="settings-cover-bg"></div>
+    </div>
+    <div class="header-v4__container header-v4__container--main">
+      <div class="header-v4__content">
+        <div class="header-v4__row header-v4__row--title">
+          <div class="header-v4__icon"></div>
+          <div class="header-v4__title">dashboard</div>
+        </div>
       </div>
-      <nav class="dashboard-subnav" aria-label="Dashboard subnavigation">
-        <a href="#profile" class="dashboard-subnav__item" id="dash-link-dashboard">dashboard</a>
-        <span class="dashboard-subnav__item is-disabled">friends</span>
-        <span class="dashboard-subnav__item is-disabled">watchlists</span>
-        <a href="#settings" class="dashboard-subnav__item is-active" id="dash-link-account">account settings</a>
-        <a href="#settings-sec-scores" class="dashboard-subnav__item" id="dash-link-import">import scores</a>
-      </nav>
+    </div>
+    <div class="header-v4__container header-v4__container--nav">
+      <div class="header-v4__content">
+        <div class="header-v4__row header-v4__row--bar">
+          <ul class="header-nav-v4 header-nav-v4--list">
+            <li class="header-nav-v4__item">
+              <a class="header-nav-v4__link" href="#profile" id="dash-link-dashboard">
+                <span class="fake-bold" data-content="dashboard">dashboard</span>
+              </a>
+            </li>
+            <li class="header-nav-v4__item">
+              <span class="header-nav-v4__text" style="opacity:0.4;">friends</span>
+            </li>
+            <li class="header-nav-v4__item">
+              <span class="header-nav-v4__text" style="opacity:0.4;">watchlists</span>
+            </li>
+            <li class="header-nav-v4__item">
+              <a class="header-nav-v4__link header-nav-v4__link--active" href="#settings" id="dash-link-account">
+                <span class="fake-bold" data-content="account settings">account settings</span>
+              </a>
+            </li>
+            <li class="header-nav-v4__item">
+              <a class="header-nav-v4__link" href="#settings-sec-scores" id="dash-link-import">
+                <span class="fake-bold" data-content="import scores">import scores</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -110,95 +134,92 @@
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--read-only">
-              <div class="account-edit-entry__label">username</div>
+            <div class="account-edit-entry account-edit-entry--read-only" id="entry-username">
               <div class="account-edit-entry__input account-edit-entry__input--username">
                 <div class="settings-username-view" id="settings-username-view">
                   <span class="settings-username-val" id="settings-username-display">—</span>
-                </div>
-                <div class="settings-username-edit" id="settings-username-edit" hidden>
-                  <div class="settings-input-group">
-                    <input id="settings-username" class="account-edit-entry__input" autocomplete="off" maxlength="64" placeholder="New username">
-                    <button type="button" id="btn-submit-rename" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--account-edit-small">
+                  <div class="account-edit-entry__button">
+                    <button type="button" id="btn-toggle-rename" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--account-edit-small">
                       <span class="btn-osu-big__content">
-                        <span class="btn-osu-big__left">save</span>
-                        <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
-                      </span>
-                    </button>
-                    <button type="button" id="btn-cancel-rename" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--account-edit-small btn-osu-big--secondary">
-                      <span class="btn-osu-big__content">
-                        <span class="btn-osu-big__left">cancel</span>
+                        <span class="btn-osu-big__left">change</span>
+                        <span class="btn-osu-big__icon"><i class="fas fa-pencil-alt" aria-hidden="true"></i></span>
                       </span>
                     </button>
                   </div>
-                  <p class="settings-hint">Your scores stay with this profile when you rename it. Use the new name when signing in to the game.</p>
                 </div>
               </div>
-              <div class="account-edit-entry__button">
-                <button type="button" id="btn-toggle-rename" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--account-edit-small">
-                  <span class="btn-osu-big__content">
-                    <span class="btn-osu-big__left">change</span>
-                    <span class="btn-osu-big__icon"><i class="fas fa-pencil-alt" aria-hidden="true"></i></span>
-                  </span>
-                </button>
-              </div>
+              <label class="account-edit-entry__label">username</label>
             </div>
 
-            <div class="account-edit-entry">
-              <label for="settings-country" class="account-edit-entry__label account-edit-entry__label--top-pinned">country</label>
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-country">
               <div class="account-edit-entry__group settings-country-picker">
                 <span id="settings-country-flag" class="flag-country flag-country--medium" aria-hidden="true" style="display:none"></span>
                 <select id="settings-country" class="account-edit-entry__input osu-select">
                   <option value="">Not specified</option>
                 </select>
+                <div class="account-edit-status">
+                  <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                  <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+                </div>
+              </div>
+              <label for="settings-country" class="account-edit-entry__label account-edit-entry__label--top-pinned">country</label>
+            </div>
+          </div>
+
+          <div class="account-edit__input-group">
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-location">
+              <input id="settings-location" class="account-edit-entry__input js-account-edit__input" maxlength="100">
+              <label for="settings-location" class="account-edit-entry__label">current location</label>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+              </div>
+            </div>
+
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-interests">
+              <input id="settings-interests" class="account-edit-entry__input js-account-edit__input" maxlength="200">
+              <label for="settings-interests" class="account-edit-entry__label">interests</label>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+              </div>
+            </div>
+
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-occupation">
+              <input id="settings-occupation" class="account-edit-entry__input js-account-edit__input" maxlength="200">
+              <label for="settings-occupation" class="account-edit-entry__label">occupation</label>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
               </div>
             </div>
           </div>
 
           <div class="account-edit__input-group">
-            <div class="account-edit-entry">
-              <label for="settings-location" class="account-edit-entry__label">current location</label>
-              <input id="settings-location" class="account-edit-entry__input" maxlength="100">
-            </div>
-
-            <div class="account-edit-entry">
-              <label for="settings-interests" class="account-edit-entry__label">interests</label>
-              <input id="settings-interests" class="account-edit-entry__input" maxlength="200">
-            </div>
-
-            <div class="account-edit-entry">
-              <label for="settings-occupation" class="account-edit-entry__label">occupation</label>
-              <input id="settings-occupation" class="account-edit-entry__input" maxlength="200">
-            </div>
-          </div>
-
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry">
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-twitter">
+              <input id="settings-twitter" class="account-edit-entry__input js-account-edit__input" maxlength="100">
               <label for="settings-twitter" class="account-edit-entry__label">twitter</label>
-              <input id="settings-twitter" class="account-edit-entry__input" maxlength="100">
-            </div>
-
-            <div class="account-edit-entry">
-              <label for="settings-discord" class="account-edit-entry__label">discord</label>
-              <input id="settings-discord" class="account-edit-entry__input" maxlength="100">
-            </div>
-
-            <div class="account-edit-entry">
-              <label for="settings-website" class="account-edit-entry__label">website</label>
-              <input id="settings-website" class="account-edit-entry__input" maxlength="200">
-            </div>
-          </div>
-
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <button type="button" id="btn-save-profile" class="btn-osu-big btn-osu-big--account-edit">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">update</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
-                </span>
-              </button>
               <div class="account-edit-status">
-                <span id="save-status-profile" class="account-edit-status__content account-edit-status__content--saved" hidden>Profile updated!</span>
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+              </div>
+            </div>
+
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-discord">
+              <input id="settings-discord" class="account-edit-entry__input js-account-edit__input" maxlength="100">
+              <label for="settings-discord" class="account-edit-entry__label">discord</label>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+              </div>
+            </div>
+
+            <div class="account-edit-entry js-account-edit js-account-edit-auto-submit" id="entry-website">
+              <input id="settings-website" class="account-edit-entry__input js-account-edit__input" maxlength="200">
+              <label for="settings-website" class="account-edit-entry__label">website</label>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
               </div>
             </div>
           </div>
@@ -206,29 +227,29 @@
       </div>
 
       <!-- Section 2: Avatar -->
-      <div class="account-edit" id="settings-sec-avatar">
+      <div class="account-edit" id="avatar">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Avatar</h2>
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--block js-account-edit-avatar">
+            <div class="account-edit-entry account-edit-entry--block js-account-edit-avatar" id="avatar-entry">
               <div class="account-edit-entry__avatar" id="avatar-drop-zone">
-                <img id="settings-avatar" class="avatar avatar--full-rounded u-current-user-avatar" alt="Current avatar" style="width:100%;height:100%;object-fit:cover;">
+                <img id="settings-avatar" class="avatar u-current-user-avatar" alt="Current avatar" src="/site/static/vendor/avatar-guest@2x.01495bc4.png" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">
                 <div class="account-edit-entry__drop-overlay">
-                  <span>Drop an image here to upload</span>
+                  <span>Drop here to upload</span>
                 </div>
                 <div class="account-edit-entry__overlay-spinner">
                   <i class="fas fa-spinner fa-spin" aria-hidden="true"></i>
                 </div>
               </div>
               <p style="margin: 0 0 10px 0;">
-                <label class="btn-osu-big btn-osu-big--account-edit" style="cursor:pointer;">
+                <label class="btn-osu-big btn-osu-big--account-edit" style="cursor:pointer;" id="btn-upload-avatar">
                   <span class="btn-osu-big__content">
                     <span class="btn-osu-big__left">upload image</span>
                     <span class="btn-osu-big__icon"><i class="far fa-arrow-alt-circle-up" aria-hidden="true"></i></span>
                   </span>
-                  <input id="avatar-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+                  <input id="avatar-file" class="js-account-edit-avatar__button fileupload" type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
                 </label>
               </p>
               <p style="margin: 0 0 10px 0;">
@@ -251,69 +272,14 @@
         </div>
       </div>
 
-      <!-- Section 3: Signature / me! -->
-      <div class="account-edit" id="settings-sec-signature">
-        <div class="account-edit__section">
-          <h2 class="account-edit__section-title">Signature</h2>
-        </div>
-        <div class="account-edit__input-groups">
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
-              <div class="account-edit-entry__misc-info account-edit-entry__misc-info--signature-preview js-post-preview--preview bbcode-rendered" id="settings-signature-preview">
-              </div>
-            </div>
-            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
-              <textarea id="settings-about" class="account-edit-entry__input js-bbcode-body" rows="6" maxlength="5000" placeholder="Write your signature or me! userpage here (BBCode supported)..."></textarea>
-            </div>
-            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
-              <div class="bbcode-toolbar" id="settings-bbcode-toolbar">
-                <button type="button" class="bbcode-toolbar__btn" data-tag="b" title="Bold"><strong>B</strong></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="i" title="Italic"><em>I</em></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="s" title="Strikethrough"><del>S</del></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="heading" title="Heading"><strong>H</strong></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="url" title="Link"><i class="fas fa-link" aria-hidden="true"></i></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="quote" title="Quote"><i class="fas fa-quote-right" aria-hidden="true"></i></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="list" title="Bullet List"><i class="fas fa-list-ul" aria-hidden="true"></i></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="list-ol" title="Numbered List"><i class="fas fa-list-ol" aria-hidden="true"></i></button>
-                <button type="button" class="bbcode-toolbar__btn" data-tag="img" title="Image"><i class="fas fa-image" aria-hidden="true"></i></button>
-                <div class="bbcode-toolbar__dropdown">
-                  <select id="bbcode-font-size" class="bbcode-select" aria-label="Font size">
-                    <option value="">Font Size</option>
-                    <option value="50">Tiny (50%)</option>
-                    <option value="85">Small (85%)</option>
-                    <option value="100">Normal (100%)</option>
-                    <option value="150">Large (150%)</option>
-                    <option value="200">Huge (200%)</option>
-                  </select>
-                </div>
-                <a href="https://osu.ppy.sh/wiki/en/BBCode" target="_blank" rel="noreferrer" class="bbcode-toolbar__help">Help</a>
-              </div>
-            </div>
-          </div>
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <button type="button" id="btn-save-signature" class="btn-osu-big btn-osu-big--account-edit">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">update</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
-                </span>
-              </button>
-              <div class="account-edit-status">
-                <span id="save-status-signature" class="account-edit-status__content account-edit-status__content--saved" hidden>Signature updated!</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Section 4: Playstyles -->
-      <div class="account-edit" id="settings-sec-playstyles">
+      <!-- Section 3: Playstyles -->
+      <div class="account-edit" id="playstyles">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Playstyles</h2>
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
+            <div class="account-edit-entry js-account-edit" id="entry-devices">
               <div class="account-edit-entry__checkboxes">
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
@@ -351,12 +317,16 @@
                   <span class="account-edit-entry__checkbox-label">controller</span>
                 </label>
               </div>
+              <div class="account-edit-entry__label">input devices</div>
+              <div class="account-edit-status">
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
+              </div>
             </div>
           </div>
 
           <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <div class="account-edit-entry__checkboxes-label">default game mode</div>
+            <div class="account-edit-entry js-account-edit" id="entry-playmode">
               <div class="account-edit-entry__checkboxes">
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
@@ -387,191 +357,188 @@
                   <span class="account-edit-entry__checkbox-label">osu!mania</span>
                 </label>
               </div>
-            </div>
-          </div>
-
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <button type="button" id="btn-save-playstyles" class="btn-osu-big btn-osu-big--account-edit">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">update</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
-                </span>
-              </button>
+              <div class="account-edit-entry__label">default game mode</div>
               <div class="account-edit-status">
-                <span id="save-status-playstyles" class="account-edit-status__content account-edit-status__content--saved" hidden>Playstyles updated!</span>
+                <div class="account-edit-status__content account-edit-status__content--saving"><i class="fas fa-spinner fa-spin"></i></div>
+                <div class="account-edit-status__content account-edit-status__content--saved">Saved</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Section 5: Profile Section Order -->
+      <!-- Section 4: Profile Section Order -->
       <div class="account-edit" id="settings-sec-order">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Sections</h2>
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <p class="settings-hint" style="margin: 0 0 10px 0;">Customize the display order of sections on your public profile page.</p>
-            <div class="section-order-list" id="section-order-list"></div>
-          </div>
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <button type="button" id="btn-save-order" class="btn-osu-big btn-osu-big--account-edit">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">update</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
-                </span>
-              </button>
-              <div class="account-edit-status">
-                <span id="save-status-order" class="account-edit-status__content account-edit-status__content--saved" hidden>Order updated!</span>
+            <div class="account-edit-entry account-edit-entry--wide" style="align-items: flex-start;">
+              <div style="flex: 1; max-width: 440px;">
+                <p class="settings-hint" style="margin: 0 0 10px 0;">Customize the display order of sections on your public profile page.</p>
+                <div class="section-order-list" id="section-order-list"></div>
+                <div style="display:flex; align-items:center; gap:10px; margin-top:12px;">
+                  <button type="button" id="btn-save-order" class="btn-osu-big btn-osu-big--account-edit">
+                    <span class="btn-osu-big__content">
+                      <span class="btn-osu-big__left">update</span>
+                      <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
+                    </span>
+                  </button>
+                  <div class="account-edit-status">
+                    <span id="save-status-order" class="account-edit-status__content account-edit-status__content--saved" hidden>Order updated!</span>
+                  </div>
+                </div>
               </div>
+              <label class="account-edit-entry__label account-edit-entry__label--top-pinned">profile sections</label>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Section 6: Official osu! Profile Sync -->
+      <!-- Section 5: Official osu! Profile Sync -->
       <div class="account-edit" id="settings-sec-official">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Official osu!</h2>
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <p class="settings-hint" style="margin: 0 0 12px 0;">Sync profile metadata (location, plays with, me! section, etc.) from your official osu.ppy.sh account.</p>
-            <div class="settings-inline-action">
-              <input id="import-official-query" class="account-edit-entry__input" autocomplete="off" placeholder="osu! username or user ID (e.g. peppy or 2)">
-              <button id="import-official-btn" class="btn-osu-big btn-osu-big--account-edit" type="button">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">import profile</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i></span>
-                </span>
-              </button>
+            <div class="account-edit-entry account-edit-entry--wide" style="align-items: flex-start;">
+              <div style="flex: 1; max-width: 440px; display: flex; flex-direction: column; gap: 8px;">
+                <div class="settings-inline-action">
+                  <input id="import-official-query" class="account-edit-entry__input" autocomplete="off" placeholder="osu! username or user ID (e.g. peppy or 2)">
+                  <button id="import-official-btn" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--action" type="button">
+                    <span class="btn-osu-big__content">
+                      <span class="btn-osu-big__left">import</span>
+                      <span class="btn-osu-big__icon"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i></span>
+                    </span>
+                  </button>
+                </div>
+                <p class="settings-hint" style="margin: 0;">Sync profile metadata (location, plays with, etc.) from your official osu.ppy.sh account.</p>
+                <p id="import-official-status" class="import-status" hidden></p>
+              </div>
+              <label for="import-official-query" class="account-edit-entry__label account-edit-entry__label--top-pinned">sync profile</label>
             </div>
-            <p id="import-official-status" class="import-status" hidden></p>
           </div>
         </div>
       </div>
 
-      <!-- Section 7: Bancho Score Import -->
+      <!-- Section 6: Bancho Score Import -->
       <div class="account-edit" id="settings-sec-scores">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Score Import</h2>
         </div>
         <div class="account-edit__input-groups">
           <div class="account-edit__input-group">
-            <p class="settings-hint" style="margin: 0 0 12px 0;">Import official top plays, first places, replays (.osr), and beatmaps from osu.ppy.sh into Local osu!.</p>
-
-            <div class="account-edit-entry">
-              <label for="import-scores-query" class="account-edit-entry__label">osu! username or ID</label>
-              <input id="import-scores-query" class="account-edit-entry__input" autocomplete="off" placeholder="e.g. peppy, Cookiezi, or 2">
+            <div class="account-edit-entry account-edit-entry--wide">
+              <input id="import-scores-query" class="account-edit-entry__input" autocomplete="off" placeholder="osu! username or user ID (e.g. mrekk or 2)">
+              <label for="import-scores-query" class="account-edit-entry__label">username or ID</label>
             </div>
 
-            <div class="account-edit-entry">
-              <span class="account-edit-entry__label">game mode</span>
+            <div class="account-edit-entry account-edit-entry--wide">
               <div class="import-mode-toggles" id="import-mode-toggles">
                 <button type="button" class="mode-toggle-btn active" data-mode="osu"><span class="fa-extra-mode-osu"></span> osu!</button>
-                <button type="button" class="mode-toggle-btn" data-mode="taiko"><span class="fa-extra-mode-taiko"></span> Taiko</button>
-                <button type="button" class="mode-toggle-btn" data-mode="fruits"><span class="fa-extra-mode-fruits"></span> Catch</button>
-                <button type="button" class="mode-toggle-btn" data-mode="mania"><span class="fa-extra-mode-mania"></span> Mania</button>
+                <button type="button" class="mode-toggle-btn" data-mode="taiko"><span class="fa-extra-mode-taiko"></span> osu!taiko</button>
+                <button type="button" class="mode-toggle-btn" data-mode="fruits"><span class="fa-extra-mode-fruits"></span> osu!catch</button>
+                <button type="button" class="mode-toggle-btn" data-mode="mania"><span class="fa-extra-mode-mania"></span> osu!mania</button>
               </div>
+              <span class="account-edit-entry__label">game modes</span>
             </div>
 
-            <div class="account-edit-entry">
-              <span class="account-edit-entry__label account-edit-entry__label--top-pinned">categories</span>
-              <div class="account-edit-entry__checkboxes">
+            <div class="account-edit-entry account-edit-entry--wide">
+              <div class="account-edit-entry__checkboxes score-import-categories">
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" name="import-type" value="top" class="osu-switch-v2__input" checked>
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">Top Ranks (Best Plays)</span>
+                  <span class="account-edit-entry__checkbox-label">top ranks</span>
                 </label>
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" name="import-type" value="firsts" class="osu-switch-v2__input">
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">First Places (#1)</span>
+                  <span class="account-edit-entry__checkbox-label">first places</span>
                 </label>
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" name="import-type" value="pinned" class="osu-switch-v2__input">
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">Pinned Scores</span>
+                  <span class="account-edit-entry__checkbox-label">pinned</span>
                 </label>
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" name="import-type" value="recent" class="osu-switch-v2__input">
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">Recent Plays</span>
+                  <span class="account-edit-entry__checkbox-label">recent</span>
                 </label>
               </div>
+              <span class="account-edit-entry__label account-edit-entry__label--top-pinned">categories</span>
             </div>
 
-            <div class="account-edit-entry">
-              <label for="import-scores-policy" class="account-edit-entry__label">duplicate policy</label>
+            <div class="account-edit-entry account-edit-entry--wide">
               <select id="import-scores-policy" class="account-edit-entry__input osu-select">
                 <option value="replace_better" selected>Replace if higher PP or score</option>
                 <option value="skip">Skip existing plays</option>
                 <option value="overwrite">Overwrite existing plays</option>
               </select>
+              <label for="import-scores-policy" class="account-edit-entry__label">duplicates</label>
             </div>
 
-            <div class="account-edit-entry">
-              <span class="account-edit-entry__label account-edit-entry__label--top-pinned">options</span>
+            <div class="account-edit-entry account-edit-entry--wide">
               <div class="account-edit-entry__checkboxes">
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" id="import-scores-replays" class="osu-switch-v2__input" checked>
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">Download replays (.osr)</span>
+                  <span class="account-edit-entry__checkbox-label">download replays (.osr)</span>
                 </label>
                 <label class="account-edit-entry__checkbox">
                   <div class="osu-switch-v2">
                     <input type="checkbox" id="import-scores-playcount" class="osu-switch-v2__input" checked>
                     <span class="osu-switch-v2__content"></span>
                   </div>
-                  <span class="account-edit-entry__checkbox-label">Sync total playcount</span>
+                  <span class="account-edit-entry__checkbox-label">sync total playcount</span>
                 </label>
               </div>
+              <span class="account-edit-entry__label account-edit-entry__label--top-pinned">options</span>
             </div>
 
-            <details class="import-advanced-details" style="margin-top:10px;">
-              <summary><i class="fas fa-key"></i> Bancho Session Cookie (Optional for Replays)</summary>
-              <div class="advanced-cookie-box">
-                <p class="login-help" style="margin:6px 0 8px;font-size:12px">Required by osu.ppy.sh to download replays outside the top 50. Inspect browser cookies on osu.ppy.sh to copy <code>osu_session</code>.</p>
-                <input id="import-scores-session" type="password" class="account-edit-entry__input" placeholder="osu_session cookie value" autocomplete="off" style="max-width:100%;">
+            <div class="account-edit-entry account-edit-entry--wide" style="align-items: flex-start;">
+              <div style="flex: 1; max-width: 440px; display: flex; flex-direction: column; gap: 4px;">
+                <input id="import-scores-session" type="password" class="account-edit-entry__input" placeholder="osu_session (optional, for non-top 50 replays)" autocomplete="off">
+                <span class="settings-hint">Required by osu.ppy.sh only to download replays outside the top 50. Inspect browser cookies to copy value.</span>
               </div>
-            </details>
-
-            <div id="import-scores-progress-box" class="import-progress-box" hidden>
-              <div class="import-spinner-row">
-                <div class="import-spinner" id="import-scores-spinner"></div>
-                <span id="import-scores-status" class="import-status loading">Fetching scores from osu.ppy.sh...</span>
-              </div>
-              <div class="import-progress-bar-wrap" id="import-progress-bar-wrap">
-                <div class="import-progress-bar-fill" id="import-progress-bar-fill" style="width: 0%"></div>
-              </div>
-              <div class="import-progress-meta" id="import-progress-meta">
-                <span id="import-progress-counter">Ready</span>
-                <span id="import-progress-percent">0%</span>
-              </div>
+              <label for="import-scores-session" class="account-edit-entry__label account-edit-entry__label--top-pinned">session cookie</label>
             </div>
-          </div>
 
-          <div class="account-edit__input-group">
-            <div class="account-edit-entry account-edit-entry--no-label">
-              <button id="import-scores-btn" type="button" class="btn-osu-big btn-osu-big--account-edit">
-                <span class="btn-osu-big__content">
-                  <span class="btn-osu-big__left">import bancho scores</span>
-                  <span class="btn-osu-big__icon"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i></span>
-                </span>
-              </button>
+            <div class="account-edit-entry account-edit-entry--no-label" style="padding-top: 14px;">
+              <div style="display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 440px;">
+                <button id="import-scores-btn" type="button" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--action" style="align-self: flex-start;">
+                  <span class="btn-osu-big__content">
+                    <span class="btn-osu-big__left">import bancho scores</span>
+                    <span class="btn-osu-big__icon"><i class="fas fa-cloud-download-alt" aria-hidden="true"></i></span>
+                  </span>
+                </button>
+
+                <div id="import-scores-progress-box" class="import-progress-box" hidden>
+                  <div class="import-spinner-row">
+                    <div class="import-spinner" id="import-scores-spinner"></div>
+                    <span id="import-scores-status" class="import-status loading">Fetching scores from osu.ppy.sh...</span>
+                  </div>
+                  <div class="import-progress-bar-wrap" id="import-progress-bar-wrap">
+                    <div class="import-progress-bar-fill" id="import-progress-bar-fill" style="width: 0%"></div>
+                  </div>
+                  <div class="import-progress-meta" id="import-progress-meta">
+                    <span id="import-progress-counter">Ready</span>
+                    <span id="import-progress-percent">0%</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -580,11 +547,71 @@
   </div>
 </div>
 <footer class="local-footer">Local osu! server · <a href="https://github.com/ppy/osu-web" target="_blank" rel="noreferrer">osu!web design by ppy</a> · <a href="/site/static/vendor/NOTICE.txt">Credits</a> · <a href="/site/static/vendor/LICENCE.txt">AGPL-3.0</a><span>Independent local server. Navigation links open the official osu! website.</span></footer>
-<dialog id="login-dialog" class="login-dialog" aria-labelledby="login-title">
-  <button id="close-login" class="close-dialog" type="button" aria-label="Close sign in">×</button>
-  <h2 id="login-title">Sign in</h2>
-  <form id="login-form"><label for="login-username">username</label><input id="login-username" name="username" autocomplete="username" required maxlength="64" placeholder="Your local profile name" list="profile-names"><datalist id="profile-names"></datalist><p class="login-help">Use your in-game username. New names create a profile; existing names switch the server to that profile. No password is needed.</p><p id="login-error" role="alert" hidden></p><button id="login-submit" class="pink-button" type="submit">Sign in</button></form>
-  <div id="signed-in-actions" hidden><p id="signed-in-as"></p><button id="manage-profile" class="subtle-button" type="button">Edit profile</button><button id="logout" class="subtle-button" type="button">Sign out of website</button></div>
+<dialog id="rename-dialog" class="osu-modal-dialog" aria-labelledby="rename-title">
+  <div class="osu-modal-dialog__container">
+    <div class="osu-modal-dialog__header">
+      <h2 id="rename-title" class="osu-modal-dialog__title">Change username</h2>
+      <button id="close-rename" class="osu-modal-dialog__close" type="button" aria-label="Close dialog">×</button>
+    </div>
+    <form id="rename-form" class="osu-modal-dialog__body">
+      <div class="osu-modal-dialog__current">
+        <span class="osu-modal-dialog__label">Current username</span>
+        <span class="osu-modal-dialog__value" id="rename-current-user">—</span>
+      </div>
+      <div class="osu-modal-dialog__field">
+        <label for="settings-username" class="osu-modal-dialog__label">New username</label>
+        <input id="settings-username" class="osu-modal-dialog__input" autocomplete="off" required maxlength="64" placeholder="Enter new username">
+      </div>
+      <p class="osu-modal-dialog__help">Your scores stay with this profile when you rename it. Use the new name when signing in to the game.</p>
+      <p id="rename-error" class="osu-modal-dialog__error" role="alert" hidden></p>
+      <div class="osu-modal-dialog__footer">
+        <button type="button" id="btn-cancel-rename" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--secondary">
+          <span class="btn-osu-big__content">
+            <span class="btn-osu-big__left">cancel</span>
+          </span>
+        </button>
+        <button type="submit" id="btn-submit-rename" class="btn-osu-big btn-osu-big--account-edit">
+          <span class="btn-osu-big__content">
+            <span class="btn-osu-big__left">save</span>
+            <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
+          </span>
+        </button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
+<dialog id="login-dialog" class="osu-modal-dialog" aria-labelledby="login-title">
+  <div class="osu-modal-dialog__container">
+    <div class="osu-modal-dialog__header">
+      <h2 id="login-title" class="osu-modal-dialog__title">Sign in</h2>
+      <button id="close-login" class="osu-modal-dialog__close" type="button" aria-label="Close dialog">×</button>
+    </div>
+    <form id="login-form" class="osu-modal-dialog__body">
+      <div class="osu-modal-dialog__field">
+        <label for="login-username" class="osu-modal-dialog__label">Username</label>
+        <input id="login-username" class="osu-modal-dialog__input" name="username" autocomplete="username" required maxlength="64" placeholder="Your local profile name" list="profile-names">
+        <datalist id="profile-names"></datalist>
+      </div>
+      <p class="osu-modal-dialog__help">Use your in-game username. New names create a profile; existing names switch the server to that profile. No password is needed.</p>
+      <p id="login-error" class="osu-modal-dialog__error" role="alert" hidden></p>
+      <div class="osu-modal-dialog__footer">
+        <button id="login-submit" class="btn-osu-big btn-osu-big--account-edit btn-osu-big--action" type="submit" style="width:100%;">
+          <span class="btn-osu-big__content">
+            <span class="btn-osu-big__left">Sign in</span>
+            <span class="btn-osu-big__icon"><i class="fas fa-arrow-right" aria-hidden="true"></i></span>
+          </span>
+        </button>
+      </div>
+    </form>
+    <div id="signed-in-actions" class="osu-modal-dialog__signed-in" hidden>
+      <p id="signed-in-as" style="margin: 0 0 8px 0; font-size: 13px; color: hsl(var(--hsl-f1));"></p>
+      <div style="display:flex; gap:10px;">
+        <button id="manage-profile" class="subtle-button" type="button">Edit profile</button>
+        <button id="logout" class="subtle-button" type="button">Sign out of website</button>
+      </div>
+    </div>
+  </div>
 </dialog>
 <noscript><p class="noscript">Enable JavaScript to view local profiles and sign in.</p></noscript>
 </body></html>
