@@ -724,7 +724,7 @@ async fn fetch_country_placement(
 
     let mut low = 1;
     let mut high = (total + size - 1) / size;
-    let mut candidate: Option<Vec<serde_json::Value>> = None;
+    let mut candidate: Option<(i64, Vec<serde_json::Value>)> = None;
 
     for _ in 0..16 {
         if low > high {
@@ -738,25 +738,35 @@ async fn fetch_country_placement(
         };
         let entries = match data.as_ref().and_then(|d| d.get("ranking")).and_then(|r| r.as_array()) {
             Some(e) if !e.is_empty() => e,
-            _ => return None,
+            _ => break,
         };
 
         let last_pp = entries.last().and_then(|e| e.get("pp")).and_then(|v| v.as_f64()).unwrap_or(0.0);
         if last_pp <= pp_f {
-            candidate = Some(entries.clone());
+            candidate = Some((mid, entries.clone()));
             high = mid - 1;
         } else {
             low = mid + 1;
         }
     }
 
-    if let Some(entries) = candidate {
-        for entry in entries {
+    if let Some((candidate_page, entries)) = candidate {
+        for (idx, entry) in entries.iter().enumerate() {
             let entry_pp = entry.get("pp").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if entry_pp <= pp_f {
-                return entry.get("country_rank").and_then(|v| v.as_i64()).map(|r| r as i32);
+                let calculated_rank = ((candidate_page - 1) * size + idx as i64 + 1) as i32;
+                let rank = entry
+                    .get("country_rank")
+                    .and_then(|v| v.as_i64())
+                    .map(|r| r as i32)
+                    .unwrap_or(calculated_rank);
+                return Some(rank);
             }
         }
+    }
+
+    if total > 0 && total < 10000 {
+        return Some((total + 1) as i32);
     }
 
     None
@@ -768,30 +778,38 @@ pub async fn get_country_rank(
     pp: i32,
     creds: Option<(u64, &str)>,
 ) -> Option<i32> {
-    if country.is_empty() || pp <= 0 {
+    let country_trimmed = country.trim();
+    if country_trimmed.is_empty() || pp <= 0 {
         return None;
     }
 
     let (client_id, client_secret) = if let Some((id, sec)) = creds {
-        (id, sec.to_string())
+        (id, sec.trim().trim_matches('"').trim_matches('\'').to_string())
     } else {
         let client_id_str = std::env::var("OSU_CLIENT_ID").ok()?;
-        let client_id: u64 = client_id_str.trim().parse().ok()?;
+        let client_id: u64 = client_id_str
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .parse()
+            .ok()?;
         let client_secret = std::env::var("OSU_CLIENT_SECRET").ok()?;
+        let client_secret = client_secret.trim().trim_matches('"').trim_matches('\'').to_string();
         (client_id, client_secret)
     };
     if client_secret.trim().is_empty() {
         return None;
     }
 
-    let country_upper = country.to_uppercase();
+    let country_upper = country_trimmed.to_uppercase();
     let cache_key = (country_upper.clone(), pp);
 
     {
         let mut guard = COUNTRY_RANK_CACHE.lock().await;
         let cache = guard.get_or_insert_with(HashMap::new);
         if let Some((cached_time, rank)) = cache.get(&cache_key) {
-            if cached_time.elapsed().as_secs() < 900 {
+            let ttl = if rank.is_some() { 900 } else { 10 };
+            if cached_time.elapsed().as_secs() < ttl {
                 return *rank;
             }
         }
@@ -926,7 +944,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         );
     }
 
-    let details = db::get_profile_details(&conn, name).unwrap_or_default();
+    let mut details = db::get_profile_details(&conn, name).unwrap_or_default();
     let scores = db::get_player_scores_with_beatmaps(&conn, name).unwrap_or_default();
 
     let mode_str = params.get("mode").map(|s| s.as_str()).unwrap_or("osu");
@@ -941,9 +959,33 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         &state_guard.config.osu_client_id,
         &state_guard.config.osu_client_secret,
     ) {
-        (Some(cid), Some(sec)) => cid.trim().parse::<u64>().ok().map(|id| (id, sec.clone())),
+        (Some(cid), Some(sec)) => cid
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .parse::<u64>()
+            .ok()
+            .map(|id| (id, sec.trim().trim_matches('"').trim_matches('\'').to_string())),
         _ => None,
     };
+
+    let effective_country = if !details.country.trim().is_empty() {
+        details.country.trim().to_uppercase()
+    } else if let Some(ref c) = state_guard.config.country {
+        c.trim().to_uppercase()
+    } else if let Ok(byte) = db::get_profile_country(&conn, name) {
+        if byte != 0 {
+            crate::utils::country_byte_to_code(byte).to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    if details.country.is_empty() && !effective_country.is_empty() {
+        details.country = effective_country.clone();
+    }
 
     drop(conn);
     drop(state_guard);
@@ -1130,10 +1172,10 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     };
 
     let global_rank = get_daily_rank(&http_client, daily_key.as_deref(), calculated_pp).await;
-    let country_rank = if (mode_str == "vn" || mode_str == "osu") && !details.country.is_empty() && calculated_pp > 0 {
+    let country_rank = if (mode_str == "vn" || mode_str == "osu" || mode_str == "0") && !effective_country.is_empty() && calculated_pp > 0 {
         get_country_rank(
             &http_client,
-            &details.country,
+            &effective_country,
             calculated_pp,
             oauth_creds.as_ref().map(|(id, sec)| (*id, sec.as_str())),
         )
@@ -2958,8 +3000,11 @@ mod tests {
     async fn test_get_country_rank_empty_and_fallback() {
         let http = reqwest::Client::new();
         assert_eq!(get_country_rank(&http, "", 1000, None).await, None);
+        assert_eq!(get_country_rank(&http, "   ", 1000, None).await, None);
         assert_eq!(get_country_rank(&http, "DE", 0, None).await, None);
         assert_eq!(get_country_rank(&http, "DE", -50, None).await, None);
+        assert_eq!(get_country_rank(&http, "DE", 1000, Some((123, ""))).await, None);
+        assert_eq!(get_country_rank(&http, "DE", 1000, Some((123, "   "))).await, None);
     }
 
     #[tokio::test]
@@ -3093,6 +3138,27 @@ mod tests {
         }).to_string();
         let resp_empty_query = handle_import_scores(shared_state.clone(), &login_headers, empty_query_payload.as_bytes()).await;
         assert_eq!(resp_empty_query.status, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_profile_effective_country_fallback() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::ensure_profile(&conn, "CountryFallbackUser").unwrap();
+
+        let mut config = crate::types::config::Config::default();
+        config.country = Some("DE".to_string());
+        let app_state = AppState::new(conn, config);
+        let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("name".to_string(), "CountryFallbackUser".to_string());
+        params.insert("mode".to_string(), "osu".to_string());
+
+        let resp = handle_profile(shared_state, &params).await;
+        assert_eq!(resp.status, StatusCode::OK);
+        let data: ProfileResponse = serde_json::from_slice(&resp.body).unwrap();
+        assert_eq!(data.details.country, "DE");
     }
 }
 

@@ -743,6 +743,15 @@ function renderProfile() {
     $('global-rank').textContent='—';
     $('global-rank').title='osu!daily rank unavailable. Check the configured API key or try again later.';
   }
+  if($('country-rank')){
+    if(p.country_rank){
+      $('country-rank').textContent=`#${num(p.country_rank)}`;
+      $('country-rank').removeAttribute('title');
+    }else{
+      $('country-rank').textContent='—';
+      $('country-rank').title='Country rank unavailable. Requires valid osu! API OAuth credentials, configured country, and ranked plays.';
+    }
+  }
   $('pp').textContent = num(p.pp);
   const stats = [['Ranked Score',num(p.ranked_score)],['Hit Accuracy',`${num(p.acc,2)}%`],['Play Count',num(p.playcount)],['Total Score',num(p.total_score)],['Total Hits',num(p.total_hits)],['Hits per Play',num(p.playcount ? Math.floor(p.total_hits/p.playcount) : 0)],['Maximum Combo',`${num(p.max_combo)}x`],['Replays Watched by Others','—']];
   $('statistics').innerHTML = stats.map(([key,value])=>`<dl class="profile-stats__entry"><dt class="profile-stats__key">${key}</dt><dd class="profile-stats__value">${value}</dd></dl>`).join('');
