@@ -670,6 +670,12 @@ async fn fetch_oauth_token(
         .ok()?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        crate::logger::warn(&format!(
+            "osu! OAuth token request failed (HTTP {}): {}",
+            status, body
+        ));
         return None;
     }
 
@@ -689,21 +695,25 @@ async fn fetch_country_placement(
     pp: i32,
 ) -> Option<i32> {
     let fetch_page = |page: i64| {
-        let url = format!(
-            "https://osu.ppy.sh/api/v2/rankings/osu/performance?country={}&page={}",
-            country, page
-        );
         let http = http.clone();
         let auth = format!("Bearer {}", token);
+        let country = country.to_string();
         async move {
             let resp = http
-                .get(&url)
+                .get("https://osu.ppy.sh/api/v2/rankings/osu/performance")
+                .query(&[("country", &country), ("cursor[page]", &page.to_string())])
                 .header("Authorization", auth)
                 .timeout(std::time::Duration::from_secs(10))
                 .send()
                 .await
                 .ok()?;
             if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                crate::logger::warn(&format!(
+                    "osu! API rankings request failed (HTTP {}): {}",
+                    status, text
+                ));
                 return None;
             }
             resp.json::<serde_json::Value>().await.ok()
