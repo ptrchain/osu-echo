@@ -820,24 +820,14 @@ mod tests {
             name: "Alice".to_string(),
             score: 1000000,
             max_combo: 500,
-            mods: 0,
             n300: 300,
-            n100: 0,
-            n50: 0,
             ngeki: 50,
-            nkatu: 0,
-            nmiss: 0,
             time: 123456,
             perfect: true,
             pp: Some(150.0),
             acc: Some(100.0),
-            mode: 0,
             mods_str: Some("NM".to_string()),
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
 
         let before = ProfileStats { rank: 100, pp: 1000.0, acc: 98.5, ranked_score: 5000000, total_score: 10000000, max_combo: 450 };
@@ -897,24 +887,11 @@ mod tests {
             name: name.to_string(),
             score: score_val,
             max_combo: 100,
-            mods: 0,
             n300: 100,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
-            time: 0,
             perfect: true,
             pp: Some(pp_val),
             acc: Some(100.0),
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
 
         // 1. Solo play, no competitors in DB, no API key -> rank 1
@@ -1065,29 +1042,14 @@ mod tests {
         let shared_state = Arc::new(RwLock::new(app_state));
 
         let sub_score = Score {
-            scoreid: None,
             md5: "abc".to_string(),
             name: "TestPlayer".to_string(),
             score: 1000,
             max_combo: 10,
-            mods: 0,
             n300: 10,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
             nmiss: 1,
             time: 12345,
-            perfect: false,
-            pp: None,
-            acc: None,
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let sub = DecodedSubmission {
             score: sub_score,
@@ -1143,29 +1105,15 @@ mod tests {
         let shared_state = Arc::new(RwLock::new(app_state));
 
         let sub_score = Score {
-            scoreid: None,
             md5: "e10adc3949ba59abbe56e057f20f883e".to_string(),
             name: "MyAngelKyrie".to_string(),
             score: 100000,
             max_combo: 1,
-            mods: 0,
             n300: 1,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             time: 12345,
             perfect: true,
-            pp: None,
             acc: Some(100.0),
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let sub = DecodedSubmission {
             score: sub_score,
@@ -1196,29 +1144,15 @@ mod tests {
         let shared_state = Arc::new(RwLock::new(app_state));
 
         let sub_score = Score {
-            scoreid: None,
             md5: "dummy_md5".to_string(),
             name: "OtherPlayer".to_string(),
             score: 1000,
             max_combo: 10,
-            mods: 0,
             n300: 10,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             time: 12345,
             perfect: true,
-            pp: None,
             acc: Some(100.0),
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let sub = DecodedSubmission {
             score: sub_score,
@@ -1270,29 +1204,15 @@ mod tests {
         let shared_state = Arc::new(RwLock::new(app_state));
 
         let sub_score = Score {
-            scoreid: None,
             md5: "altered_custom_diff_md5".to_string(),
             name: "TestPlayer".to_string(),
             score: 100000,
             max_combo: 100,
-            mods: 0,
             n300: 50,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             time: 12345,
             perfect: true,
-            pp: None,
             acc: Some(100.0),
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let sub = DecodedSubmission {
             score: sub_score,
@@ -1334,29 +1254,17 @@ mod tests {
         let shared_state = Arc::new(RwLock::new(app_state));
 
         let sub_score = Score {
-            scoreid: None,
             md5: "medals_test_md5".to_string(),
             name: "Kyrie".to_string(),
             score: 5_000_000,
             max_combo: 500,
-            mods: 0,
             n300: 450,
             n100: 50,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             time: 12345,
             perfect: true,
             pp: Some(150.0),
             acc: Some(98.5),
-            mode: 0,
-            mods_str: None,
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let sub = DecodedSubmission {
             score: sub_score,

@@ -1111,6 +1111,27 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
     }
 }
 
+pub(crate) fn parse_friend_sync_lines(lines: &str) -> (Vec<i32>, bool, bool) {
+    let mut regular_ids = Vec::new();
+    let mut has_tillerino = false;
+    let mut has_banchobot = false;
+    for line in lines.lines() {
+        if let Ok(id) = line.trim().parse::<i32>() {
+            if id <= 2 {
+                // ID <= 2 collides with local player ID 2
+                continue;
+            } else if tillerino::is_tillerino_id(id) {
+                has_tillerino = true;
+            } else if id == BOT_ID {
+                has_banchobot = true;
+            } else {
+                regular_ids.push(id);
+            }
+        }
+    }
+    (regular_ids, has_tillerino, has_banchobot)
+}
+
 pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     if args.is_empty() {
         reply(state, target, "Usage: !friend <add/remove/list/sync> [user]").await;
@@ -1352,23 +1373,7 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 }
             };
 
-            let mut regular_ids = Vec::new();
-            let mut has_tillerino = false;
-            let mut has_banchobot = false;
-            for line in resp.lines() {
-                if let Ok(id) = line.trim().parse::<i32>() {
-                    if id <= 2 {
-                        // ID <= 2 collides with local player ID 2
-                        continue;
-                    } else if tillerino::is_tillerino_id(id) {
-                        has_tillerino = true;
-                    } else if id == BOT_ID {
-                        has_banchobot = true;
-                    } else {
-                        regular_ids.push(id);
-                    }
-                }
-            }
+            let (regular_ids, has_tillerino, has_banchobot) = parse_friend_sync_lines(&resp);
 
             reply(state, target, &format!("Syncing {} friends from official Bancho... Fetching profiles...", regular_ids.len())).await;
 
@@ -2240,35 +2245,62 @@ pub async fn handle_mode(state: &Arc<RwLock<AppState>>, player_name: &str, targe
 mod tests {
     use super::*;
     use crate::types::beatmap::Beatmap;
+    use crate::types::score::Score;
     use rusqlite::Connection;
+
+    async fn setup_test_app(player_name: &str) -> Arc<RwLock<AppState>> {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, player_name).unwrap();
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new(player_name.to_string()));
+        Arc::new(RwLock::new(app_state))
+    }
+
+    async fn drain_sent_messages(state: &Arc<RwLock<AppState>>) -> Vec<(String, String)> {
+        let mut s = state.write().await;
+        let Some(ref mut p) = s.player else { return Vec::new(); };
+        let queue = p.clear_queue();
+        drop(s);
+        let pkts = packets::split_packets(&queue);
+        let mut msgs = Vec::new();
+        for pkt in pkts {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                msgs.push((sender, msg));
+            }
+        }
+        msgs
+    }
 
     #[tokio::test]
     async fn test_friend_sync_mapping_and_presence_safety() {
         let conn = Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();
-
         db::add_friend(&conn, "SyncPlayer", 2070907, "LegacyTillerino").unwrap();
 
         let resp_lines = "2070907\n3\n5555\n";
+        let (regular_ids, has_tillerino, has_banchobot) = parse_friend_sync_lines(resp_lines);
 
-        let mut synced_count = 0;
-        let mut friend_ids = {
-            let _ = db::remove_friend(&conn, "SyncPlayer", tillerino::OFFICIAL_BOT_ID);
+        assert_eq!(regular_ids, vec![5555]);
+        assert!(has_tillerino);
+        assert!(has_banchobot);
 
-            for line in resp_lines.lines() {
-                if let Ok(id) = line.trim().parse::<i32>() {
-                    if tillerino::is_tillerino_id(id) {
-                        let _ = db::add_friend(&conn, "SyncPlayer", tillerino::BOT_ID, tillerino::BOT_NAME);
-                    } else if id == BOT_ID {
-                        let _ = db::add_friend(&conn, "SyncPlayer", BOT_ID, BOT_NAME);
-                    } else {
-                        let _ = db::add_friend(&conn, "SyncPlayer", id, "");
-                    }
-                    synced_count += 1;
-                }
-            }
-            db::get_friend_ids(&conn, "SyncPlayer").unwrap_or_default()
-        };
+        let _ = db::remove_friend(&conn, "SyncPlayer", tillerino::OFFICIAL_BOT_ID);
+        if has_tillerino {
+            let _ = db::add_friend(&conn, "SyncPlayer", tillerino::BOT_ID, tillerino::BOT_NAME);
+        }
+        if has_banchobot {
+            let _ = db::add_friend(&conn, "SyncPlayer", BOT_ID, BOT_NAME);
+        }
+        for id in &regular_ids {
+            let _ = db::add_friend(&conn, "SyncPlayer", *id, "");
+        }
+
+        let mut friend_ids = db::get_friend_ids(&conn, "SyncPlayer").unwrap_or_default();
         if !friend_ids.contains(&BOT_ID) {
             friend_ids.push(BOT_ID);
         }
@@ -2276,7 +2308,6 @@ mod tests {
             friend_ids.push(tillerino::BOT_ID);
         }
 
-        assert_eq!(synced_count, 3);
         assert!(friend_ids.contains(&3), "Must include BanchoBot");
         assert!(friend_ids.contains(&4), "Must include Tillerino");
         assert!(friend_ids.contains(&5555), "Must include synced friend 5555");
@@ -2304,27 +2335,10 @@ mod tests {
     async fn test_friend_sync_filters_out_peppy_and_local_player_id() {
         let conn = Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();
-
         db::add_friend(&conn, "Hero", 2, "CorruptPeppy").unwrap();
 
         let resp_lines = "2\n2070907\n3\n12345\n";
-
-        let mut regular_ids = Vec::new();
-        let mut has_tillerino = false;
-        let mut has_banchobot = false;
-        for line in resp_lines.lines() {
-            if let Ok(id) = line.trim().parse::<i32>() {
-                if id <= 2 {
-                    continue;
-                } else if tillerino::is_tillerino_id(id) {
-                    has_tillerino = true;
-                } else if id == BOT_ID {
-                    has_banchobot = true;
-                } else {
-                    regular_ids.push(id);
-                }
-            }
-        }
+        let (regular_ids, has_tillerino, has_banchobot) = parse_friend_sync_lines(resp_lines);
 
         assert_eq!(regular_ids, vec![12345]);
         assert!(has_tillerino);
@@ -2474,30 +2488,17 @@ mod tests {
         bmap.file_content = Some(osu_content.to_string());
         db::insert_beatmap(&conn, &bmap).unwrap();
 
-        let mut score = crate::types::score::Score {
-            mode: 0,
+        let mut score = Score {
             md5: "recalc_map_md5".to_string(),
             name: "Alice".to_string(),
             n300: 4,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 1000000,
             max_combo: 4,
             perfect: true,
-            mods: 0,
             time: 1234567,
             acc: Some(100.0),
             pp: Some(9999.0), // Old inflated PP from previous bug
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let score_id = db::insert_score(&conn, &score, "ranked").unwrap();
         score.scoreid = Some(score_id);
@@ -2530,19 +2531,9 @@ mod tests {
         drop(s);
 
         // Check that BanchoBot sent confirmation packet
-        let mut s_write = state.write().await;
-        let queue = s_write.player.as_mut().unwrap().clear_queue();
-        drop(s_write);
-        let packets = packets::split_packets(&queue);
-        let has_recalc_msg = packets.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Profile recalculation complete! Processed 1 score(s).")
-            } else {
-                false
-            }
+        let msgs = drain_sent_messages(&state).await;
+        let has_recalc_msg = msgs.iter().any(|(sender, msg)| {
+            sender == "BanchoBot" && msg.contains("Profile recalculation complete! Processed 1 score(s).")
         });
         assert!(has_recalc_msg, "BanchoBot must send confirmation message with score count");
 
@@ -2669,19 +2660,9 @@ mod tests {
         drop(s);
 
         // BanchoBot reply should confirm set ranking with difficulty count
-        let mut s_write = state.write().await;
-        let queue = s_write.player.as_mut().unwrap().clear_queue();
-        drop(s_write);
-        let packets = packets::split_packets(&queue);
-        let reply_found = packets.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Beatmapset Xi - Blue Zenith (Set ID: 5555) (3 difficulties) is now Ranked!")
-            } else {
-                false
-            }
+        let msgs = drain_sent_messages(&state).await;
+        let reply_found = msgs.iter().any(|(sender, msg)| {
+            sender == "BanchoBot" && msg.contains("Beatmapset Xi - Blue Zenith (Set ID: 5555) (3 difficulties) is now Ranked!")
         });
         assert!(reply_found, "Reply must confirm set ranking for all 3 difficulties");
 
@@ -2715,19 +2696,9 @@ mod tests {
 
         // 4. Test "!status set" reporting mixed statuses
         handle_status(&state, "Player1", &["set"]).await;
-        let mut s_write = state.write().await;
-        let queue = s_write.player.as_mut().unwrap().clear_queue();
-        drop(s_write);
-        let packets = packets::split_packets(&queue);
-        let status_found = packets.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("1 Ranked, 2 Unranked")
-            } else {
-                false
-            }
+        let msgs_status = drain_sent_messages(&state).await;
+        let status_found = msgs_status.iter().any(|(sender, msg)| {
+            sender == "BanchoBot" && msg.contains("1 Ranked, 2 Unranked")
         });
         assert!(status_found, "Status set message must report mixed diff counts");
     }
@@ -2978,9 +2949,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear_scores_while_on_map() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "Player1").unwrap();
+        let state = setup_test_app("Player1").await;
 
         let mut b1 = Beatmap::blank();
         b1.beatmap_id = 9001;
@@ -2990,7 +2959,6 @@ mod tests {
         b1.title = "Test Song".to_string();
         b1.version = "Hard".to_string();
         b1.approved = 1;
-        db::insert_beatmap(&conn, &b1).unwrap();
 
         let mut b2 = Beatmap::blank();
         b2.beatmap_id = 9002;
@@ -2999,46 +2967,37 @@ mod tests {
         b2.title = "Other Song".to_string();
         b2.version = "Insane".to_string();
         b2.approved = 1;
-        db::insert_beatmap(&conn, &b2).unwrap();
 
-        let make_score = |md5: &str, pp: f64, score_val: i64| crate::types::score::Score {
-            mode: 0,
+        let make_score = |md5: &str, pp: f64, score_val: i64| Score {
             md5: md5.to_string(),
             name: "Player1".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: score_val,
             max_combo: 400,
             perfect: true,
-            mods: 0,
             time: 1000,
             acc: Some(100.0),
             pp: Some(pp),
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
 
-        db::insert_score(&conn, &make_score("map_md5_to_clear", 150.0, 500000), "ranked").unwrap();
-        db::insert_score(&conn, &make_score("map_md5_to_clear", 120.0, 400000), "ranked").unwrap();
-        db::insert_score(&conn, &make_score("other_map_md5", 200.0, 800000), "ranked").unwrap();
+        {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            db::insert_beatmap(&db_conn, &b1).unwrap();
+            db::insert_beatmap(&db_conn, &b2).unwrap();
+            db::insert_score(&db_conn, &make_score("map_md5_to_clear", 150.0, 500000), "ranked").unwrap();
+            db::insert_score(&db_conn, &make_score("map_md5_to_clear", 120.0, 400000), "ranked").unwrap();
+            db::insert_score(&db_conn, &make_score("other_map_md5", 200.0, 800000), "ranked").unwrap();
+        }
 
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        let mut player = crate::types::player::Player::new("Player1".to_string());
-        player.map_md5 = "map_md5_to_clear".to_string();
-        player.info_text = "Test Artist - Test Song [Hard]".to_string();
-        player.pp = 300;
-        app_state.player = Some(player);
-        let state = Arc::new(RwLock::new(app_state));
+        {
+            let mut s = state.write().await;
+            let p = s.player.as_mut().unwrap();
+            p.map_md5 = "map_md5_to_clear".to_string();
+            p.info_text = "Test Artist - Test Song [Hard]".to_string();
+            p.pp = 300;
+        }
 
         // Execute "!clearscores" while on the map
         handle_command(&state, "Player1", "#osu", "clearscores", &[]).await;
@@ -3058,7 +3017,6 @@ mod tests {
         let p = s.player.as_ref().unwrap();
         assert_eq!(p.pp, 200, "Player PP must update to 200pp after score deletion");
 
-        // Packets in queue must include ChoUserStats and BanchoBot message
         let queue = p.queue.clone();
         drop(db_conn);
         drop(s);
@@ -3067,24 +3025,13 @@ mod tests {
         let has_user_stats = pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16);
         assert!(has_user_stats, "Must send ChoUserStats packet to update in-game HUD immediately");
 
-        let bot_msg = pkts.iter().find(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Cleared 2 scores on Test Artist - Test Song [Hard]!")
-            } else {
-                false
-            }
-        });
-        assert!(bot_msg.is_some(), "BanchoBot message must confirm 2 scores were cleared on that map");
+        let msgs = drain_sent_messages(&state).await;
+        assert!(msgs.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Cleared 2 scores on Test Artist - Test Song [Hard]!")));
     }
 
     #[tokio::test]
     async fn test_clear_scores_after_np() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "Player1").unwrap();
+        let state = setup_test_app("Player1").await;
 
         let mut b1 = Beatmap::blank();
         b1.beatmap_id = 9005;
@@ -3093,40 +3040,26 @@ mod tests {
         b1.title = "NP Title".to_string();
         b1.version = "Expert".to_string();
         b1.approved = 1;
-        db::insert_beatmap(&conn, &b1).unwrap();
 
-        let make_score = |md5: &str, pp: f64| crate::types::score::Score {
-            mode: 0,
-            md5: md5.to_string(),
+        let score = Score {
+            md5: "np_map_md5".to_string(),
             name: "Player1".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 750000,
             max_combo: 300,
             perfect: true,
-            mods: 0,
             time: 1000,
             acc: Some(100.0),
-            pp: Some(pp),
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            pp: Some(250.0),
+            ..Score::blank()
         };
-        db::insert_score(&conn, &make_score("np_map_md5", 250.0), "ranked").unwrap();
 
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        let player = crate::types::player::Player::new("Player1".to_string());
-        app_state.player = Some(player);
-        let state = Arc::new(RwLock::new(app_state));
+        {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            db::insert_beatmap(&db_conn, &b1).unwrap();
+            db::insert_score(&db_conn, &score, "ranked").unwrap();
+        }
 
         // Simulate /np to select the map
         let np_info = crate::handlers::tillerino::NpInfo {
@@ -3148,155 +3081,47 @@ mod tests {
 
     #[tokio::test]
     async fn test_clear_scores_no_map_selected() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "Player1").unwrap();
-
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        let player = crate::types::player::Player::new("Player1".to_string());
-        app_state.player = Some(player);
-        let state = Arc::new(RwLock::new(app_state));
+        let state = setup_test_app("Player1").await;
 
         handle_command(&state, "Player1", "#osu", "clearscores", &[]).await;
 
-        let s = state.read().await;
-        let p = s.player.as_ref().unwrap();
-        let pkts = packets::split_packets(&p.queue);
-        let msg_found = pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("No beatmap selected! Use /np or select a map first.")
-            } else {
-                false
-            }
-        });
-        assert!(msg_found, "Must notify user that no map is selected");
+        let msgs = drain_sent_messages(&state).await;
+        assert!(msgs.iter().any(|(s, m)| s == "BanchoBot" && m.contains("No beatmap selected! Use /np or select a map first.")));
     }
 
     #[tokio::test]
     async fn test_banchobot_medals_command() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "MedalBotTester").unwrap();
-
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        let player = crate::types::player::Player::new("MedalBotTester".to_string());
-        app_state.player = Some(player);
-        let state = Arc::new(RwLock::new(app_state));
+        let state = setup_test_app("MedalBotTester").await;
 
         // Test !medals info command
         handle_command(&state, "MedalBotTester", "MedalBotTester", "medals", &[]).await;
-
-        let s = state.read().await;
-        let p = s.player.as_ref().unwrap();
-        let pkts = packets::split_packets(&p.queue);
-        let msg_found = pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Medals for MedalBotTester") && msg.contains("352")
-            } else {
-                false
-            }
-        });
-        assert!(msg_found, "Must return medal summary in response to !medals");
-        drop(s);
+        let msgs = drain_sent_messages(&state).await;
+        assert!(msgs.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Medals for MedalBotTester") && m.contains("352")));
 
         // Test !medals sync command
         handle_command(&state, "MedalBotTester", "MedalBotTester", "medals", &["sync"]).await;
-        let s = state.read().await;
-        let p = s.player.as_ref().unwrap();
-        let pkts = packets::split_packets(&p.queue);
-        let sync_msg_found = pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Medals are up to date") || msg.contains("sync complete")
-            } else {
-                false
-            }
-        });
-        assert!(sync_msg_found, "Must return sync status in response to !medals sync");
-        drop(s);
+        let sync_msgs = drain_sent_messages(&state).await;
+        assert!(sync_msgs.iter().any(|(s, m)| s == "BanchoBot" && (m.contains("Medals are up to date") || m.contains("sync complete"))));
 
         // Test !medal <name> lookup command
         handle_command(&state, "MedalBotTester", "MedalBotTester", "medal", &["500", "Combo"]).await;
-        let s = state.read().await;
-        let p = s.player.as_ref().unwrap();
-        let pkts = packets::split_packets(&p.queue);
-        let lookup_found = pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Medal: 500 Combo") && msg.contains("Skill & Dedication")
-            } else {
-                false
-            }
-        });
-        assert!(lookup_found, "Must return medal details for !medal 500 Combo");
+        let lookup_msgs = drain_sent_messages(&state).await;
+        assert!(lookup_msgs.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Medal: 500 Combo") && m.contains("Skill & Dedication")));
     }
 
     #[tokio::test]
     async fn test_banchobot_importscores_command() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "ScoreBotTester").unwrap();
-
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        let player = crate::types::player::Player::new("ScoreBotTester".to_string());
-        app_state.player = Some(player);
-        let state = Arc::new(RwLock::new(app_state));
+        let state = setup_test_app("ScoreBotTester").await;
 
         // 1. With explicit args: user mode type
         handle_command(&state, "ScoreBotTester", "ScoreBotTester", "importscores", &["peppy", "osu", "top"]).await;
-
-        let s = state.read().await;
-        let p = s.player.as_ref().unwrap();
-        let pkts = packets::split_packets(&p.queue);
-        let ack_found = pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Fetching top scores for 'peppy' (mode: osu)")
-            } else {
-                false
-            }
-        });
-        assert!(ack_found, "Must acknowledge score import request for peppy");
-        drop(s);
-
-        // Clear queue
-        {
-            let mut sw = state.write().await;
-            sw.player.as_mut().unwrap().queue.clear();
-        }
+        let msgs = drain_sent_messages(&state).await;
+        assert!(msgs.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Fetching top scores for 'peppy' (mode: osu)")));
 
         // 2. Default args with alias syncbancho
         handle_command(&state, "ScoreBotTester", "ScoreBotTester", "syncbancho", &[]).await;
-
-        let s2 = state.read().await;
-        let p2 = s2.player.as_ref().unwrap();
-        let pkts2 = packets::split_packets(&p2.queue);
-        let default_ack_found = pkts2.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let _sender = r.read_string().unwrap_or_default();
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("Fetching top scores for 'ScoreBotTester' (mode: osu)")
-            } else {
-                false
-            }
-        });
-        assert!(default_ack_found, "Must acknowledge default score import for current player");
+        let msgs2 = drain_sent_messages(&state).await;
+        assert!(msgs2.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Fetching top scores for 'ScoreBotTester' (mode: osu)")));
     }
 }
 

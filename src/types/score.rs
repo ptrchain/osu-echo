@@ -57,6 +57,34 @@ pub struct Score {
 }
 
 impl Score {
+    pub fn blank() -> Self {
+        Self {
+            mode: 0,
+            md5: String::new(),
+            name: String::new(),
+            n300: 0,
+            n100: 0,
+            n50: 0,
+            ngeki: 0,
+            nkatu: 0,
+            nmiss: 0,
+            score: 0,
+            max_combo: 0,
+            perfect: false,
+            mods: 0,
+            time: 0,
+            acc: None,
+            pp: None,
+            replay_md5: None,
+            scoreid: None,
+            replay_frames: None,
+            mods_str: None,
+            additional_mods: None,
+            submission_checksum: None,
+            submission_identity: None,
+        }
+    }
+
     pub fn from_replay(replay: &Replay) -> Self {
         let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
 
@@ -153,6 +181,12 @@ impl Score {
             time: self.time,
             replay_available: if sid != 0 { 1 } else { 0 },
         }
+    }
+}
+
+impl Default for Score {
+    fn default() -> Self {
+        Self::blank()
     }
 }
 
@@ -358,5 +392,22 @@ mod tests {
         assert_eq!(s2.score_id, "9999");
         assert_eq!(s2.username, "Mrekk");
         assert_eq!(s2.score, "1000000");
+    }
+
+    #[test]
+    fn test_score_blank_defaults() {
+        let blank = Score::blank();
+        assert_eq!(blank.score, 0);
+        assert_eq!(blank.max_combo, 0);
+        assert_eq!(blank.mode, 0);
+        assert!(blank.md5.is_empty());
+        assert!(blank.name.is_empty());
+        assert!(!blank.perfect);
+        assert!(blank.acc.is_none());
+        assert!(blank.pp.is_none());
+        assert!(blank.scoreid.is_none());
+
+        let def: Score = Default::default();
+        assert_eq!(def.score, 0);
     }
 }

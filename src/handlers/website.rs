@@ -2249,6 +2249,7 @@ async fn handle_import_scores(
 mod tests {
     use super::*;
     use crate::state::AppState;
+    use crate::types::score::Score;
     use hyper::header::HeaderValue;
     use hyper::HeaderMap;
 
@@ -2455,44 +2456,27 @@ mod tests {
         crate::db::insert_beatmap(&conn, &bmap2).unwrap();
 
         // 1. Standard ranked score on map_1 (300pp, SS / X)
-        let s1 = crate::types::score::Score {
+        let s1 = Score {
             mode: 0,
             md5: "map_1".to_string(),
             name: "Alice".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 1000000,
             max_combo: 500,
             perfect: true,
-            mods: 0, // NM
             time: 1700000000,
             acc: Some(100.0),
             pp: Some(300.0),
-            replay_md5: None,
-            replay_frames: None,
-            mods_str: None,
-            scoreid: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         crate::db::insert_score(&conn, &s1, "ranked").unwrap();
 
         // 2. Standard ranked score on map_2 with HD (200pp, SSH / XH)
-        let s2 = crate::types::score::Score {
+        let s2 = Score {
             mode: 0,
             md5: "map_2".to_string(),
             name: "Alice".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 1050000,
             max_combo: 500,
             perfect: true,
@@ -2500,41 +2484,26 @@ mod tests {
             time: 1700086400,
             acc: Some(100.0),
             pp: Some(200.0),
-            replay_md5: None,
-            replay_frames: None,
             mods_str: Some("HD".to_string()),
-            scoreid: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         crate::db::insert_score(&conn, &s2, "ranked").unwrap();
 
         // 3. Relax score (should only show in rx mode)
-        let s_rx = crate::types::score::Score {
+        let s_rx = Score {
             mode: 0,
             md5: "map_1".to_string(),
             name: "Alice".to_string(),
             n300: 290,
             n100: 10,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 950000,
             max_combo: 480,
-            perfect: false,
             mods: 128, // RX
             time: 1700172800,
             acc: Some(98.5),
             pp: Some(400.0),
-            replay_md5: None,
-            replay_frames: None,
             mods_str: Some("RX".to_string()),
-            scoreid: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         crate::db::insert_score(&conn, &s_rx, "ranked").unwrap();
         crate::db::add_user_medal(&conn, "Alice", 1, 1700000000).unwrap();
@@ -2817,30 +2786,18 @@ mod tests {
         bmap.beatmapset_id = 9992;
         crate::db::insert_beatmap(&conn, &bmap).unwrap();
 
-        let s1 = crate::types::score::Score {
+        let s1 = Score {
             mode: 0,
             md5: "map_del_1".to_string(),
             name: "ScoreUser".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 1000000,
             max_combo: 500,
             perfect: true,
-            mods: 0,
             time: 1700000000,
             acc: Some(100.0),
             pp: Some(250.0),
-            replay_md5: None,
-            replay_frames: None,
-            mods_str: None,
-            scoreid: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let s1_id = crate::db::insert_score(&conn, &s1, "ranked").unwrap();
         crate::db::increment_playcount(&conn, "ScoreUser").unwrap();
@@ -3023,30 +2980,22 @@ mod tests {
         crate::db::init_db(&conn).unwrap();
         crate::db::ensure_profile(&conn, "ReplayUser").unwrap();
 
-        let s1 = crate::types::Score {
+        let s1 = Score {
             mode: 0,
             md5: "map_replay_md5".to_string(),
             name: "ReplayUser".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
             ngeki: 50,
-            nkatu: 0,
-            nmiss: 0,
             score: 1000000,
             max_combo: 500,
             perfect: true,
-            mods: 0,
             time: 1700000000,
             acc: Some(100.0),
             pp: Some(300.0),
             replay_md5: Some("rep_md5_123".to_string()),
             replay_frames: Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"test_frames_data")),
             mods_str: Some("NM".to_string()),
-            scoreid: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         let s1_id = crate::db::insert_score(&conn, &s1, "ranked").unwrap();
 
@@ -3156,8 +3105,10 @@ mod tests {
         crate::db::init_db(&conn).unwrap();
         crate::db::ensure_profile(&conn, "CountryFallbackUser").unwrap();
 
-        let mut config = crate::types::config::Config::default();
-        config.country = Some("DE".to_string());
+        let config = crate::types::config::Config {
+            country: Some("DE".to_string()),
+            ..Default::default()
+        };
         let app_state = AppState::new(conn, config);
         let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
 

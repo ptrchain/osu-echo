@@ -113,7 +113,58 @@ mod tests {
     use crate::packets;
     use crate::types::beatmap::Beatmap;
     use crate::types::mods::Mods;
+    use crate::types::score::Score;
     use crate::utils;
+
+    async fn setup_test_app(player_name: &str) -> Arc<RwLock<AppState>> {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, player_name).unwrap();
+        let config = crate::types::config::Config::default();
+        let mut app_state = AppState::new(conn, config);
+        app_state.player = Some(crate::types::player::Player::new(player_name.to_string()));
+        Arc::new(RwLock::new(app_state))
+    }
+
+    async fn drain_sent_messages(state: &Arc<RwLock<AppState>>) -> Vec<(String, String)> {
+        let mut s = state.write().await;
+        let Some(ref mut p) = s.player else { return Vec::new(); };
+        let q = p.clear_queue();
+        drop(s);
+        let pkts = packets::split_packets(&q);
+        let mut messages = Vec::new();
+        for pkt in pkts {
+            if pkt.id == packets::PacketId::ChoSendMessage as u16 {
+                let mut r = packets::PacketReader::new(pkt.payload);
+                let sender = r.read_string().unwrap_or_default();
+                let msg = r.read_string().unwrap_or_default();
+                messages.push((sender, msg));
+            }
+        }
+        messages
+    }
+
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "{}_{}_{}",
+                prefix,
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
 
     #[test]
     fn test_parse_np_message_variants() {
@@ -205,34 +256,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_message_help_and_mode_and_status() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        db::init_db(&conn).unwrap();
-        db::ensure_profile(&conn, "PlayerTest").unwrap();
+        let shared_state = setup_test_app("PlayerTest").await;
 
         let mut bmap = Beatmap::blank();
         bmap.file_md5 = "map_md5_test".to_string();
         bmap.beatmap_id = 5555;
         bmap.approved = 0;
-        db::insert_beatmap(&conn, &bmap).unwrap();
-
-        let config = crate::types::config::Config::default();
-        let mut app_state = AppState::new(conn, config);
-        app_state.player = Some(crate::types::player::Player::new("PlayerTest".to_string()));
-        let shared_state = Arc::new(RwLock::new(app_state));
+        {
+            let s = shared_state.read().await;
+            let db_conn = s.db.lock().await;
+            db::insert_beatmap(&db_conn, &bmap).unwrap();
+        }
 
         handle_chat_message(shared_state.clone(), "PlayerTest", "!help", "#osu").await;
         {
-            let mut s = shared_state.write().await;
-            let p = s.player.as_mut().unwrap();
-            let q = p.clear_queue();
-            let packets = packets::split_packets(&q);
-            assert!(!packets.is_empty());
-            assert_eq!(packets[0].id, packets::PacketId::ChoSendMessage as u16);
-            let mut r = packets::PacketReader::new(packets[0].payload);
-            let _sender = r.read_string().unwrap();
-            let msg = r.read_string().unwrap();
-            assert!(!msg.contains("/np : Tillerino PP calculations for current song"));
-            assert!(msg.contains("BanchoBot Commands:"));
+            let msgs = drain_sent_messages(&shared_state).await;
+            assert!(!msgs.is_empty());
+            assert!(!msgs[0].1.contains("/np : Tillerino PP calculations for current song"));
+            assert!(msgs[0].1.contains("BanchoBot Commands:"));
         }
 
         handle_chat_message(shared_state.clone(), "PlayerTest", "!mode rx", "#osu").await;
@@ -329,10 +370,9 @@ mod tests {
         db::insert_beatmap(&conn, &bmap).unwrap();
         db::update_beatmap_file_content(&conn, &bmap.file_md5, osu_content).unwrap();
 
-        let temp_dir = std::env::temp_dir().join("test_empty_songs_dir");
-        let _ = std::fs::create_dir_all(&temp_dir);
+        let temp_dir = TempDir::new("test_empty_songs_dir");
         let mut config = crate::types::config::Config::default();
-        config.paths.songs = Some(temp_dir.to_str().unwrap().to_string());
+        config.paths.songs = Some(temp_dir.path().to_str().unwrap().to_string());
         let mut app_state = AppState::new(conn, config);
         app_state.player = Some(crate::types::player::Player::new("PlayerTest".to_string()));
         let shared_state = Arc::new(RwLock::new(app_state));
@@ -697,8 +737,8 @@ mod tests {
 
     #[test]
     fn test_scan_dir_multidiff_matches_exact_difficulty() {
-        let temp_dir = std::env::temp_dir().join(format!("osu_test_multidiff_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        let set_dir = temp_dir.join("555 Composer - Multi Song");
+        let temp_dir = TempDir::new("osu_test_multidiff");
+        let set_dir = temp_dir.path().join("555 Composer - Multi Song");
         std::fs::create_dir_all(&set_dir).unwrap();
 
         for (diff, id) in &[("Easy", 101), ("Normal", 102), ("Hard", 103), ("Insane", 104)] {
@@ -711,20 +751,18 @@ mod tests {
         }
 
         // Querying for "Hard" must return Hard, NOT Easy (first in dir)
-        let res_hard = utils::find_and_parse_local_osu_file(&temp_dir, Some(555), None, None, Some("Composer - Multi Song [Hard]"));
+        let res_hard = utils::find_and_parse_local_osu_file(temp_dir.path(), Some(555), None, None, Some("Composer - Multi Song [Hard]"));
         assert!(res_hard.is_some());
         let (bmap_hard, _) = res_hard.unwrap();
         assert_eq!(bmap_hard.version, "Hard", "Must pick Hard difficulty, not the first file in dir");
         assert_eq!(bmap_hard.beatmap_id, 103);
 
         // Querying for "Insane" must return Insane
-        let res_insane = utils::find_and_parse_local_osu_file(&temp_dir, Some(555), None, None, Some("Composer - Multi Song [Insane]"));
+        let res_insane = utils::find_and_parse_local_osu_file(temp_dir.path(), Some(555), None, None, Some("Composer - Multi Song [Insane]"));
         assert!(res_insane.is_some());
         let (bmap_insane, _) = res_insane.unwrap();
         assert_eq!(bmap_insane.version, "Insane");
         assert_eq!(bmap_insane.beatmap_id, 104);
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
@@ -798,30 +836,17 @@ mod tests {
         bmap.approved = 1;
         db::insert_beatmap(&conn, &bmap).unwrap();
 
-        let sc = crate::types::score::Score {
-            mode: 0,
+        let sc = Score {
             md5: "clear_user_md5".to_string(),
             name: "ClearUser".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: 500000,
             max_combo: 300,
             perfect: true,
-            mods: 0,
             time: 12345,
             acc: Some(100.0),
             pp: Some(150.0),
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
         db::insert_score(&conn, &sc, "ranked").unwrap();
 

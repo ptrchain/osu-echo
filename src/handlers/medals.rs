@@ -744,14 +744,9 @@ mod tests {
 
     fn make_test_score(max_combo: i32, nmiss: i32, perfect: bool, mods: u32, score_val: i64) -> Score {
         Score {
-            mode: 0,
             md5: "test_md5".to_string(),
             name: "Alice".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
             nmiss,
             score: score_val,
             max_combo,
@@ -760,13 +755,7 @@ mod tests {
             time: 1700000000,
             acc: Some(100.0),
             pp: Some(100.0),
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         }
     }
 

@@ -124,25 +124,13 @@ mod tests {
             md5: md5.to_string(),
             name: "TestPlayer".to_string(),
             n300: 300,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
             score: score_val,
             max_combo: 500,
             perfect: true,
-            mods: 0,
             time: 1000,
             acc: Some(acc),
             pp: Some(pp),
-            replay_md5: None,
-            scoreid: None,
-            replay_frames: None,
-            mods_str: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         }
     }
 

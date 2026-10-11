@@ -221,24 +221,12 @@ mod tests {
             name: "Player1".to_string(),
             score: 12345678,
             max_combo: 1000,
-            mods: 0,
             n300: 500,
-            n100: 0,
-            n50: 0,
-            ngeki: 0,
-            nkatu: 0,
-            nmiss: 0,
-            time: 0,
             perfect: true,
             pp: Some(300.5),
             acc: Some(100.0),
-            mode: 0,
             mods_str: Some("NM".to_string()),
-            replay_md5: None,
-            replay_frames: None,
-            additional_mods: None,
-            submission_checksum: None,
-            submission_identity: None,
+            ..Score::blank()
         };
 
         let payload = build_score_webhook_payload("Player1", &score, &bmap, Some(1), 100, 5000.0);

@@ -1225,11 +1225,32 @@ mod tests {
         assert_eq!(bmap.file_content, Some(content.to_string()));
     }
 
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "{}_{}_{}",
+                prefix,
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn test_scan_dir_does_not_false_match_unrelated_map() {
-        let temp_dir = std::env::temp_dir().join(format!("osu_test_songs_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let map_path = temp_dir.join("test.osu");
+        let temp_dir = TempDir::new("osu_test_songs");
+        let map_path = temp_dir.path().join("test.osu");
         let content = "osu file format v3\n\
             [General]\nMode: 0\n\
             [Metadata]\n\
@@ -1247,14 +1268,12 @@ mod tests {
         std::fs::write(&map_path, content).unwrap();
 
         // When scanning without matching set_id or title or md5 or map_id, it must NOT return a candidate match
-        let res = scan_dir_for_osu_file(&temp_dir, Some(999999), None, None, None);
+        let res = scan_dir_for_osu_file(temp_dir.path(), Some(999999), None, None, None);
         assert!(res.is_none(), "Must not return unrelated file as match");
 
         // When scanning with matching title hint, it should match
-        let res_title = scan_dir_for_osu_file(&temp_dir, None, None, Some("DISCO PRINCE"), None);
+        let res_title = scan_dir_for_osu_file(temp_dir.path(), None, None, Some("DISCO PRINCE"), None);
         assert!(res_title.is_some(), "Must match by title hint");
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -1320,8 +1339,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_dir_and_content_strict_md5_isolation() {
-        let temp_dir = std::env::temp_dir().join(format!("osu_test_md5_iso_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
+        let temp_dir = TempDir::new("osu_test_md5_iso");
 
         let official_content = "osu file format v14\n\n\
             [Metadata]\n\
@@ -1338,7 +1356,7 @@ mod tests {
             ApproachRate:9\n\
             [HitObjects]\n\
             256,192,1000,1,0,0:0:0:0:\n";
-        let official_path = temp_dir.join("xi - Freedom Dive (Mapper) [Top Diff].osu");
+        let official_path = temp_dir.path().join("xi - Freedom Dive (Mapper) [Top Diff].osu");
         std::fs::write(&official_path, official_content).unwrap();
         let official_bmap = parse_osu_file_to_beatmap(official_content, None, None).unwrap();
 
@@ -1358,30 +1376,28 @@ mod tests {
             [HitObjects]\n\
             256,192,1000,1,0,0:0:0:0:\n\
             300,200,2000,1,0,0:0:0:0:\n";
-        let practice_path = temp_dir.join("xi - Freedom Dive (Mapper) [Top Diff Practice].osu");
+        let practice_path = temp_dir.path().join("xi - Freedom Dive (Mapper) [Top Diff Practice].osu");
         std::fs::write(&practice_path, practice_content).unwrap();
         let practice_bmap = parse_osu_file_to_beatmap(practice_content, None, None).unwrap();
 
         assert_ne!(official_bmap.file_md5, practice_bmap.file_md5);
 
         // 1. Querying scan_dir_for_osu_file by practice MD5 must ONLY return practice diff
-        let res_practice = scan_dir_for_osu_file(&temp_dir, Some(55555), Some(&practice_bmap.file_md5), None, Some(33333));
+        let res_practice = scan_dir_for_osu_file(temp_dir.path(), Some(55555), Some(&practice_bmap.file_md5), None, Some(33333));
         assert!(res_practice.is_some());
         let (found_p, _) = res_practice.unwrap();
         assert_eq!(found_p.file_md5, practice_bmap.file_md5);
         assert_eq!(found_p.version, "Top Diff [Practice]");
 
         // 2. Querying scan_dir_for_osu_file by official MD5 must ONLY return official diff
-        let res_official = scan_dir_for_osu_file(&temp_dir, Some(55555), Some(&official_bmap.file_md5), None, Some(33333));
+        let res_official = scan_dir_for_osu_file(temp_dir.path(), Some(55555), Some(&official_bmap.file_md5), None, Some(33333));
         assert!(res_official.is_some());
         let (found_o, _) = res_official.unwrap();
         assert_eq!(found_o.file_md5, official_bmap.file_md5);
         assert_eq!(found_o.version, "Top Diff");
 
         // 3. Querying with a newer MD5 not present locally must return None (not fall back to old file)
-        let res_newer = scan_dir_for_osu_file(&temp_dir, Some(55555), Some("newer_updated_md5_12345"), Some("Top Diff"), Some(33333));
+        let res_newer = scan_dir_for_osu_file(temp_dir.path(), Some(55555), Some("newer_updated_md5_12345"), Some("Top Diff"), Some(33333));
         assert!(res_newer.is_none(), "Must NOT return older file when querying for a newer MD5");
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
