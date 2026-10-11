@@ -2,38 +2,33 @@
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/Jpdq6sS3Kn)
 
-A local osu! server written in Rust. It lets you run your own private server on your computer for score saving, performance points (PP) calculation, local leaderboards, and beatmap downloads.
+A local osu! server written in Rust. Run a private server on your machine for score saving, PP calculation, local leaderboards, medals, and beatmap downloads.
 
 ## Features
 
-### New in v1.1
-- **osu!web Userpage**: A pixel-perfect, authentic osu!web profile running locally in your browser (`http://localhost:5000/users/<username>`). Track real-time weighted PP, global and country ranks, hit accuracy, level progress, play history charts, top performance plays, first places, most played beatmaps, and customizable "Me" userpage sections (BBCode/Markdown support, badges, and peripheral gear).
-- **352 Achievement Medals**: Complete offline emulation of all 352 official osu! medals across Skill & Dedication, Hush-Hush (secret riddle achievements), Mod Introduction, and Beatmap Packs. Features real-time unlock notification toasts on score submission, in-game lookup (`!medal <name>`), and retroactive scanning (`!medals sync`).
-- **Official Bancho Score Importer**: Migrate your plays and top scores from official osu! (`osu.ppy.sh`). Import Top plays, Pinned scores, First places (#1s), and Recent plays across all 4 rulesets (Standard, Taiko, Catch, Mania). Automatically downloads `.osr` replays, computes local PP with `rosu-pp`, syncs play counts, and retroactively evaluates medals.
-- **Web Settings & Management Dashboard**: Built-in configuration and profile customizer at `http://localhost:5000/settings`. Configure server ports, folder paths, API keys (osu! v1/v2, osudaily), Discord webhooks, and customize your avatar, banner cover, and profile details without editing files manually.
-
-### Core Features
-- **Score & Replay Tracking**: Automatically saves your plays, scores, and `.osr` replay files locally in a self-contained SQLite database.
-- **Real-Time PP Calculation**: Computes live PP for all plays using `rosu-pp` across all game modes (Standard, Taiko, Catch, Mania).
-- **Custom & Unranked Maps**: Full support for unranked maps, practice diffs, custom speed rates, and osu!trainer modifications.
-- **Built-in osu!direct Mirror**: In-game beatmap search and 1-click downloads powered by the Catboy (Mino) mirror (no osu! supporter or external accounts required).
-- **In-Game Bot Companions**:
-  - **BanchoBot**: Manages leaderboard statuses, personal bests, score announcements, profile statistics, medals, and score imports.
-  - **Tillerino**: Send `/np` in chat or PM to get instant difficulty breakdowns and PP calculations for Nomod, HD, HR, DT, etc.
-- **Local Leaderboards & Profiles**: Track personal bests, total score, hit accuracy, play count, and global rank estimates.
-- **Discord Webhook Integration**: Automatically post submitted plays with Rich Embeds and configurable minimum PP thresholds directly to a Discord channel.
-- **Streamlined Setup**: Quick interactive setup with auto-detection. External API keys (osu! v1 and osudaily) power online leaderboards and global rank calculations.
+- **Score & Replay Tracking**: Stores scores, stats, and `.osr` replays in a local SQLite database.
+- **Real-Time PP Calculation**: Computes live PP using `rosu-pp` across Standard, Taiko, Catch, and Mania.
+- **Web Profile**: Local osu!web player page (`http://localhost:5000/users/<username>`) with PP curves, top plays, play history, and customizable bio.
+- **352 Achievement Medals**: Offline medal tracking with in-game unlock notifications and commands.
+- **Official Score Importer**: Import your official osu! top plays, pinned scores, replays, and medals into your local profile.
+- **In-Game Beatmap Mirror**: In-game beatmap search and 1-click downloads via the Mino mirror (no supporter needed).
+- **In-Game Bots**:
+  - **BanchoBot**: Leaderboard management, personal bests, score announcements, and stats lookup.
+  - **Tillerino**: `/np` difficulty breakdown and PP calculation for any mod combination.
+- **Web Dashboard**: Edit settings, paths, API keys, and profile customization at `http://localhost:5000/settings`.
+- **Discord Webhook**: Automatically post submitted plays with embeds to Discord.
+- **Custom Maps & Rates**: Full support for unranked maps, practice diffs, and custom speed rates (osu!trainer).
 
 ## Requirements
 
 - **osu! client (Stable)**
-- *Optional (only needed if compiling from source)*: **Rust (Cargo)**
+- *Optional*: **Rust toolchain** (only needed if building from source)
 
 ## Getting Started
 
-### 1. Get the Server
+### 1. Download or Build
 
-#### Option A: Download Pre-built Release (Recommended)
+#### Option A: Pre-built Release (Recommended)
 1. Download the latest `osu-echo-vX.X.X-windows-x86_64.zip` from [Releases](https://github.com/ptrchain/local-bancho-rust/releases).
 2. Extract the zip into a folder.
 3. Run `osu-echo.exe`.
@@ -45,82 +40,75 @@ cd local-bancho-rust
 cargo run --release
 ```
 
-### 2. First Launch & Setup
+### 2. Initial Setup
 
-When you start `osu-echo` for the first time, an interactive **Configuration Wizard** runs automatically in the terminal, asking which setup experience you prefer:
+On first launch, an interactive setup wizard runs in your terminal:
 
-- **[1] Quick Setup (Recommended)**: Auto-detects your osu! installation, prompts for essential API keys (osu! v1 & osudaily) for online leaderboards and global rank calculation, automatically sets up and trusts the local HTTPS certificate, and applies recommended defaults.
-- **[2] Advanced Setup**: Granular control for power users—customize directory paths (Songs/Replays/Screenshots), server host IP and port settings, essential API keys (osu! v1 API & osudaily ranking), leaderboard scoring modes, profile country flag, and official Bancho account sync.
+- **Quick Setup (Recommended)**: Auto-detects your osu! folder, installs the local TLS certificate, and applies default settings.
+- **Advanced Setup**: Configures directory paths, ports, external API keys (osu! v1/v2 and osudaily for global ranks), and Bancho sync.
 
 > [!NOTE]
-> **Privacy & Local Storage**: All API keys and account credentials entered during setup or configured in `.env` are stored strictly locally on your machine and are never transmitted to any third-party or remote server. Passwords for account sync are MD5-hashed before saving.
+> All credentials and API keys are stored locally in `.env` and are never sent to external servers.
 
-> [!TIP]
-> In **Quick Setup**, default values (such as detected osu! path and recommended settings) can be accepted instantly by pressing **Enter**.
-
-On future launches, the server will start immediately using your saved configuration. If you ever want to re-run the setup wizard later, pass the `--setup` (or `-s`) flag:
+To re-run setup at any time:
 ```bash
 osu-echo.exe --setup
 ```
-Alternatively, you can manually edit `.env` at any time.
 
 ### 3. Connect from osu!
 
-To connect your osu! client to the local server:
-
 1. Right-click your `osu!.exe` shortcut and select **Properties**.
-2. In the **Target** field, add `-devserver localhost` to the end.
-   Example:
+2. Add `-devserver localhost` to the end of the **Target** field:
    ```text
    "C:\Games\osu!\osu!.exe" -devserver localhost
    ```
-3. Launch osu! using the shortcut.
-4. Log in with any username and password. The server will create your profile automatically.
+3. Launch osu! through the shortcut.
+4. Log in with any username and password (accounts are created automatically).
 
-### 4. Web Interface & Userpage
+### 4. Web Interface
 
-While `osu-echo` is running, open your web browser to access the built-in web portal:
-- **User Profile**: `http://localhost:5000/users/<username>` — View your authentic osu!web player page with live performance calculation, rank graphs, top plays, first places, most played maps, and 352 achievement medals.
-- **Settings & Management**: `http://localhost:5000/settings` — Web-based configuration editor, profile appearance customizer (avatar, banner, bio, hardware gear), and interactive Bancho Score Importer.
+While `osu-echo` is running, open your browser to access:
+- **User Profile**: `http://localhost:5000/users/<username>`
+- **Settings & Dashboard**: `http://localhost:5000/settings`
 
 ## In-Game Commands
 
-You can send commands in chat channels or via private message to **BanchoBot** or **Tillerino**.
+Send commands in chat channels or via private message to **BanchoBot** or **Tillerino**.
 
 ### BanchoBot Commands
 
 | Command | Description |
 |---|---|
 | `!help` | List available commands |
-| `!stats` / `!profile` | Show your performance stats, rank, and play count |
-| `!recent` / `!r` | Show your most recent play with PP and accuracy |
-| `!tops` / `!t` | Show your top 5 highest PP plays |
-| `!mybest` / `!pb` | Show your best score on the current beatmap |
-| `!leaderboard` / `!lb` | Show top local scores on the current beatmap |
-| `!medals` / `!medal <name>` | Show medal progress summary, look up medal details by name, or sync retroactively (`!medals sync`) |
-| `!importscores [username]` | Import official osu! scores, replay files, and medals (`top`, `pinned`, `firsts`, `recent`) |
+| `!stats` / `!profile` | Show profile stats and rank |
+| `!recent` / `!r` | Show most recent score |
+| `!tops` / `!t` | Show top 5 PP plays |
+| `!mybest` / `!pb` | Show personal best on the current map |
+| `!leaderboard` / `!lb` | Show local leaderboard for the current map |
+| `!medals` / `!medal <name>` | Show medal progress or search medal details (`!medals sync` to recalculate) |
+| `!importscores [username]` | Import official osu! scores, replays, and medals |
 | `!mode <std/taiko/ctb/mania>` | Switch active game mode |
-| `!country <code>` | Set country flag on your profile (e.g. `!country US`, `!country DE`) |
-| `!status <ranked/unranked/loved>` | Change the status of the current beatmap |
-| `!friend <add/remove/list/sync>` | Manage friends or sync with official Bancho |
-| `!recentfeed <on/off>` | Toggle live score announcements in the `#recent` channel |
-| `!recalc` / `!recalculate` | Recalculate profile PP and stats from stored scores |
-| `!restrictself [reason]` / `!unrestrict` | Simulate official Bancho ban / account restriction |
-| `!avatar <url or path>` | Change your in-game profile avatar |
-| `!config` | Show server settings and active configuration |
-| `!roll [max]` | Roll a random number (default 1-100) |
-| `!wipe` | Wipe profile stats and play count |
-| `!clearscores` / `!clearmap` | Clear your scores on the current beatmap or /np selection |
+| `!country <code>` | Set profile country flag (e.g. `!country US`) |
+| `!status <ranked/unranked/loved>` | Change beatmap leaderboard status |
+| `!friend <add/remove/list/sync>` | Manage friends or sync from Bancho |
+| `!recentfeed <on/off>` | Toggle score announcements in `#recent` |
+| `!recalc` | Recalculate profile PP from saved scores |
+| `!restrictself [reason]` / `!unrestrict` | Toggle account restriction state |
+| `!avatar <url or path>` | Change profile avatar |
+| `!config` | Show current server configuration |
+| `!roll [max]` | Roll a random number (1–100 default) |
+| `!wipe` | Reset profile stats and play count |
+| `!clearscores` | Clear scores on the current beatmap |
 
 ### Tillerino Commands
 
-Send commands via PM to **Tillerino** or type `/np` in any channel:
+Send via PM to **Tillerino** or type `/np` in any channel:
 
 | Command | Description |
 |---|---|
-| `/np` | Show current song info, star rating, and 95%–100% PP breakdown |
+| `/np` | Show song info, star rating, and PP values (95%–100%) |
 | `!with <mods>` | Calculate PP with specific mods (e.g. `!with HDHR`, `!with DT`) |
-| `!acc <value>` | Calculate exact PP for a custom accuracy (e.g. `!acc 98.5`) |
+| `!acc <value>` | Calculate PP for custom accuracy (e.g. `!acc 98.5`) |
 | `!r` / `!recommend` | Recommend a beatmap to play |
 
 ## Command-Line Options
@@ -131,31 +119,29 @@ Usage: osu-echo [OPTIONS]
 Options:
   -h, --help           Print help information
   -v, --version        Print version information
-  -d, --debug          Enable verbose debug logging (or hold Shift when starting)
+  -d, --debug          Enable verbose debug logging
   -s, --setup          Run or re-run the interactive setup wizard
-      --reconfigure    Alias for --setup
       --trust-cert     Install and trust the local TLS certificate in Windows Root store
 ```
 
 ## Data & Backups
 
-All server data is stored locally in the `.data/` directory next to the executable:
-- `server.db`: SQLite database holding user profiles, scores, beatmap cache, and stats.
-- `replays/`: Saved `.osr` replay files.
-- `avatars/`: User avatars.
+All server data is stored locally in the `.data/` directory:
+- `server.db`: SQLite database (user profiles, scores, beatmap cache)
+- `replays/`: Saved `.osr` replay files
+- `avatars/`: Custom user avatars
 
-To back up your progress or move to another machine, simply copy the `.data/` folder.
+To back up your data or move it to another PC, copy the `.data/` folder.
 
 ## Community & Support
 
-Have questions, suggestions, or need help? Join our [Discord Server](https://discord.gg/Jpdq6sS3Kn)!
+Need help or want to suggest a feature? Join our [Discord Server](https://discord.gg/Jpdq6sS3Kn).
 
-## Credits & Acknowledgements
+## Credits
 
-Special thanks to:
-- [local-osu-server](https://github.com/jeevanjohnson/local-osu-server) by [Jeevan Johnson](https://github.com/jeevanjohnson) and its contributors for the original inspiration and foundational work that helped make this project possible.
+- Inspired by [local-osu-server](https://github.com/jeevanjohnson/local-osu-server) by [Jeevan Johnson](https://github.com/jeevanjohnson).
 
 ## License
 
-This project is licensed under the MIT License.
-unofficial / not affiliated with ppy
+MIT License. Unofficial project; not affiliated with osu! or ppy.
+
