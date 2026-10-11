@@ -8,14 +8,14 @@ A local osu! server written in Rust. Run a private server on your machine for sc
 
 - **Score & Replay Tracking**: Stores scores, stats, and `.osr` replays in a local SQLite database.
 - **Real-Time PP Calculation**: Computes live PP using `rosu-pp` across Standard, Taiko, Catch, and Mania.
-- **Web Profile**: Local osu!web player page (`http://localhost:5000/users/<username>`) with PP curves, top plays, play history, and customizable bio.
+- **Web Profile**: Local osu!web player page (`https://osu.localhost/users/<username>`) with PP curves, top plays, play history, and customizable bio.
 - **352 Achievement Medals**: Offline medal tracking with in-game unlock notifications and commands.
 - **Official Score Importer**: Import your official osu! top plays, pinned scores, replays, and medals into your local profile.
 - **In-Game Beatmap Mirror**: In-game beatmap search and 1-click downloads via the Mino mirror (no supporter needed).
 - **In-Game Bots**:
   - **BanchoBot**: Leaderboard management, personal bests, score announcements, and stats lookup.
   - **Tillerino**: `/np` difficulty breakdown and PP calculation for any mod combination.
-- **Web Dashboard**: Edit settings, paths, API keys, and profile customization at `http://localhost:5000/settings`.
+- **Web Dashboard**: Edit settings, paths, API keys, and profile customization at `https://osu.localhost/settings`.
 - **Discord Webhook**: Automatically post submitted plays with embeds to Discord.
 - **Custom Maps & Rates**: Full support for unranked maps, practice diffs, and custom speed rates (osu!trainer).
 
@@ -68,8 +68,8 @@ osu-echo.exe --setup
 ### 4. Web Interface
 
 While `osu-echo` is running, open your browser to access:
-- **User Profile**: `http://localhost:5000/users/<username>`
-- **Settings & Dashboard**: `http://localhost:5000/settings`
+- **User Profile**: `https://osu.localhost/users/<username>`
+- **Settings & Dashboard**: `https://osu.localhost/settings`
 
 ## In-Game Commands
 
@@ -79,26 +79,18 @@ Send commands in chat channels or via private message to **BanchoBot** or **Till
 
 | Command | Description |
 |---|---|
-| `!help` | List available commands |
-| `!stats` / `!profile` | Show profile stats and rank |
-| `!recent` / `!r` | Show most recent score |
+| `!recent` / `!r` | Show most recent score and PP |
 | `!tops` / `!t` | Show top 5 PP plays |
-| `!mybest` / `!pb` | Show personal best on the current map |
-| `!leaderboard` / `!lb` | Show local leaderboard for the current map |
-| `!medals` / `!medal <name>` | Show medal progress or search medal details (`!medals sync` to recalculate) |
-| `!importscores [username]` | Import official osu! scores, replays, and medals |
+| `!mybest` / `!pb` | Show personal best on current beatmap |
+| `!leaderboard` / `!lb` | Show local leaderboard for current beatmap |
+| `!status <ranked/unranked>` | Toggle beatmap leaderboard status |
 | `!mode <std/taiko/ctb/mania>` | Switch active game mode |
-| `!country <code>` | Set profile country flag (e.g. `!country US`) |
-| `!status <ranked/unranked/loved>` | Change beatmap leaderboard status |
-| `!friend <add/remove/list/sync>` | Manage friends or sync from Bancho |
-| `!recentfeed <on/off>` | Toggle score announcements in `#recent` |
-| `!recalc` | Recalculate profile PP from saved scores |
-| `!restrictself [reason]` / `!unrestrict` | Toggle account restriction state |
-| `!avatar <url or path>` | Change profile avatar |
-| `!config` | Show current server configuration |
+| `!medals` / `!medal <name>` | Check medal progress and look up medal requirements |
 | `!roll [max]` | Roll a random number (1–100 default) |
-| `!wipe` | Reset profile stats and play count |
-| `!clearscores` | Clear scores on the current beatmap |
+| `!help` | List all available in-game commands |
+
+> [!TIP]
+> Profile settings (avatar, banner, country, bio), score imports, and server configuration are managed directly in the [Web Dashboard](https://osu.localhost/settings).
 
 ### Tillerino Commands
 

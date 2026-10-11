@@ -297,8 +297,15 @@ mod tests {
 
         handle_chat_message(shared_state.clone(), "PlayerTest", "!country DE", "#osu").await;
         {
-            let s = shared_state.read().await;
-            assert_eq!(s.player.as_ref().unwrap().country, 56);
+            let mut s = shared_state.write().await;
+            let p = s.player.as_mut().unwrap();
+            let q = p.clear_queue();
+            let pkts = packets::split_packets(&q);
+            assert!(!pkts.is_empty());
+            let mut r = packets::PacketReader::new(pkts.last().unwrap().payload);
+            let _sender = r.read_string().unwrap();
+            let msg = r.read_string().unwrap();
+            assert!(msg.contains("osu.localhost"));
         }
     }
 

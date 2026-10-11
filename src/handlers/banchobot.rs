@@ -38,24 +38,34 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "rank" => handle_set_status(state, reply_target, args, 1, "Ranked").await,
         "love" => handle_set_status(state, reply_target, args, 4, "Loved").await,
         "unrank" => handle_set_status(state, reply_target, args, 0, "Unranked").await,
-        "friend" => handle_friend(state, player_name, reply_target, args).await,
         "medals" | "medal" => handle_medals(state, player_name, reply_target, args).await,
-        "recalc" | "recalculate" => handle_recalc(state, player_name, reply_target).await,
-        "wipe" => handle_wipe(state, player_name, reply_target).await,
-        "avatar" => handle_avatar(state, player_name, reply_target, args).await,
-        "recentfeed" | "recentchannel" => handle_recent_channel_toggle(state, reply_target, args).await,
-        "config" => handle_config(state, reply_target).await,
-        "roll" => handle_roll(state, player_name, reply_target, args).await,
         "mode" => handle_mode(state, player_name, reply_target, args).await,
-        "country" | "flag" => handle_country(state, player_name, reply_target, args).await,
         "mybest" | "pb" => handle_mybest(state, player_name, reply_target).await,
         "leaderboard" | "lb" => handle_leaderboard(state, player_name, reply_target).await,
+        "roll" => handle_roll(state, player_name, reply_target, args).await,
+        "recalc" | "recalculate" => handle_recalc(state, player_name, reply_target).await,
         "clearscores" | "clearmap" | "removescores" | "deletescores" | "clearscore" | "removemap" | "clear" => {
             handle_clear_scores(state, player_name, reply_target, args).await
         }
         "importscores" | "importscore" | "fetchscores" | "syncbancho" => {
             handle_import_scores(state, player_name, reply_target, args).await
         }
+        "avatar" => {
+            reply(state, reply_target, "Avatar customization is now managed at https://osu.localhost/settings").await;
+        }
+        "country" | "flag" => {
+            reply(state, reply_target, "Country settings are now managed at https://osu.localhost/settings").await;
+        }
+        "config" => {
+            reply(state, reply_target, "Server settings can now be viewed at https://osu.localhost/settings").await;
+        }
+        "wipe" => {
+            reply(state, reply_target, "Profile stats and score management are now available at https://osu.localhost/settings").await;
+        }
+        "recentfeed" | "recentchannel" => {
+            reply(state, reply_target, "Channel settings can now be configured at https://osu.localhost/settings").await;
+        }
+        "friend" => handle_friend(state, player_name, reply_target, args).await,
         "restrictself" | "restrict" => handle_restrictself(state, player_name, reply_target, args).await,
         "unrestrictself" | "unrestrict" => handle_unrestrictself(state, player_name, reply_target).await,
         _ => {
@@ -72,30 +82,21 @@ pub async fn handle_help(state: &Arc<RwLock<AppState>>, target: &str) {
 
     let msg = format!(
         "BanchoBot Commands:\n\
-        {p}status / {p}rank / {p}love / {p}unrank [set/diff] [id] : Manage beatmap status (set or diff)\n\
         {p}recent / {p}r : Show your recent play\n\
         {p}tops / {p}t : Show top 5 plays\n\
-        {p}stats / {p}profile : Show player stats\n\
-        {p}importscores [user] [mode] [type] : Import official osu! scores (top/pinned/firsts/recent)\n\
-        {p}medals / {p}medal [name/sync] : Show medal progress, lookup medal by name, or sync retroactively\n\
         {p}mybest / {p}pb : Show your best score on the current map\n\
         {p}leaderboard / {p}lb : Show top scores on current map\n\
-        {p}clearscores / {p}clearmap [set] : Clear your scores on the current beatmap (or set)\n\
-        {p}friend <add/remove/list/sync> : Manage friends\n\
-        {p}mode <vn/rx/ap> : Switch game mode\n\
-        {p}recentfeed [on/off] : Toggle #recent score channel feed\n\
-        {p}country / {p}flag <code> : Set country flag (e.g. {p}country DE, {p}country US, {p}country AU)\n\
+        {p}status / {p}rank / {p}love / {p}unrank [set/diff] : Manage beatmap status\n\
+        {p}mode <vn/rx/ap> : Switch active game mode\n\
+        {p}medals / {p}medal [name/sync] : Medal progress and lookup\n\
         {p}roll [max] : Roll a random number (default 100)\n\
-        {p}recalc / {p}recalculate : Recalculate all profile stats & scores\n\
-        {p}wipe : Wipe profile stats\n\
-        {p}restrictself [reason] / {p}unrestrict : Mimic being banned on official osu! (toggle on/off)\n\
-        {p}avatar <url or path> : Change avatar\n\
-        {p}config : Server settings summary\n\n\
-        Tillerino Commands (PM Tillerino or in chat):\n\
+        {p}help : List available commands\n\n\
+        Tillerino Commands:\n\
         /np : Beatmap info and PP breakdown\n\
-        {p}r / {p}recommend : Recommend a beatmap\n\
-        {p}with <mods> : PP with mods (e.g. {p}with HDHR)\n\
-        {p}acc <val> : PP for accuracy (e.g. {p}acc 98.5)"
+        {p}r : Recommend a beatmap\n\
+        {p}with <mods> : Calculate PP with mods\n\
+        {p}acc <val> : Calculate PP for accuracy\n\n\
+        Web Dashboard: https://osu.localhost/settings"
     );
 
     reply(state, target, &msg).await;
@@ -1820,27 +1821,6 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
     }
 }
 
-pub async fn handle_wipe(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str) {
-    {
-        let s = state.read().await;
-        let db_conn = s.db.lock().await;
-        let _ = db::wipe_profile(&db_conn, player_name);
-    }
-
-    {
-        let mut s = state.write().await;
-        if let Some(ref mut p) = s.player {
-            p.pp = 0;
-            p.acc = 0.0;
-            p.ranked_score = 0;
-            p.total_score = 0;
-            p.playcount = 0;
-            p.enqueue_stats();
-        }
-    }
-
-    reply(state, target, "Profile stats and scores have been wiped!").await;
-}
 
 pub async fn refresh_player_stats(state: &Arc<RwLock<AppState>>, player_name: &str) {
     let (db, http, config) = {
@@ -2088,71 +2068,6 @@ pub async fn handle_clear_scores(state: &Arc<RwLock<AppState>>, player_name: &st
     }
 }
 
-pub async fn handle_avatar(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
-    if args.is_empty() {
-        reply(state, target, "Usage: !avatar <image_url_or_path>").await;
-        return;
-    }
-
-    let url = args.join(" ");
-    {
-        let s = state.read().await;
-        let db_conn = s.db.lock().await;
-        let _ = db::set_avatar(&db_conn, player_name, &url);
-    }
-
-    reply(state, target, &format!("Avatar updated to: {}\nRestart your osu! client for the changes to show!", url)).await;
-}
-
-pub async fn handle_recent_channel_toggle(state: &Arc<RwLock<AppState>>, target: &str, args: &[&str]) {
-    let new_val = if let Some(arg) = args.first() {
-        match arg.to_lowercase().as_str() {
-            "on" | "true" | "1" | "enable" => true,
-            "off" | "false" | "0" | "disable" => false,
-            _ => {
-                reply(state, target, "Usage: !recentfeed <on / off / toggle>").await;
-                return;
-            }
-        }
-    } else {
-        let current = state.read().await.config.enable_recent_channel;
-        !current
-    };
-
-    {
-        let mut s = state.write().await;
-        s.config.enable_recent_channel = new_val;
-        let db_conn = s.db.lock().await;
-        let _ = db::save_config(&db_conn, &s.config);
-    }
-
-    if new_val {
-        reply(state, target, "Recent score feed (#recent) is now enabled.").await;
-    } else {
-        reply(state, target, "Recent score feed (#recent) is now disabled.").await;
-    }
-}
-
-pub async fn handle_config(state: &Arc<RwLock<AppState>>, target: &str) {
-    let msg = {
-        let s = state.read().await;
-        format!(
-            "Server Config Summary:\n\
-            Version: {} | PP Leaderboard: {}\n\
-            Leaderboard Size: {} | Show PP for PB: {}\n\
-            Recent Feed (#recent): {} | Auto Update: {}\n\
-            osu! Legacy API Key Configured: {}",
-            crate::VERSION,
-            s.config.pp_leaderboard,
-            s.config.amount_of_scores_on_lb,
-            s.config.show_pp_for_personal_best,
-            s.config.enable_recent_channel,
-            s.config.auto_update,
-            s.config.osu_api_key.is_some()
-        )
-    };
-    reply(state, target, &msg).await;
-}
 
 pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &str, reply_target: &str, args: &[&str]) {
     if let Some(&sub) = args.first() {
@@ -2320,58 +2235,6 @@ pub async fn handle_mode(state: &Arc<RwLock<AppState>>, player_name: &str, targe
     reply(state, target, &format!("Game mode switched to {}!", sub)).await;
 }
 
-pub async fn handle_country(state: &Arc<RwLock<AppState>>, _player_name: &str, target: &str, args: &[&str]) {
-    let p_prefix = {
-        let s = state.read().await;
-        s.config.command_prefix.clone()
-    };
-
-    let Some(code_input) = args.first() else {
-        let current = {
-            let s = state.read().await;
-            s.player.as_ref().map(|p| p.country).unwrap_or(0)
-        };
-        let code_str = utils::country_byte_to_code(current);
-        reply(
-            state,
-            target,
-            &format!(
-                "Current country: {} (code: {}). Usage: {}country <2-letter ISO code> (e.g. {}country DE, {}country US, {}country AU)",
-                code_str, current, p_prefix, p_prefix, p_prefix, p_prefix
-            ),
-        )
-        .await;
-        return;
-    };
-
-    let trimmed = code_input.trim().to_uppercase();
-    let byte = utils::country_code_to_byte(&trimmed);
-    if byte == 0 {
-        reply(
-            state,
-            target,
-            &format!("Unknown country code '{}'. Please use a standard 2-letter ISO 3166-1 alpha-2 code (e.g. US, DE, AU, JP, GB, FR).", trimmed),
-        )
-        .await;
-        return;
-    }
-
-    {
-        let mut s = state.write().await;
-        s.config.country = Some(trimmed.clone());
-        if let Some(ref mut p) = s.player {
-            p.country = byte;
-            p.queue.extend_from_slice(&packets::user_presence(p));
-            p.queue.extend_from_slice(&packets::user_stats(p));
-        }
-        let db = s.db.lock().await;
-        let _ = db::save_profile_country(&db, _player_name, byte);
-    }
-
-    let _ = crate::types::config::write_dotenv_country(&trimmed);
-
-    reply(state, target, &format!("Country flag set to {}! Your user panel flag in osu! is updated.", trimmed)).await;
-}
 
 #[cfg(test)]
 mod tests {
