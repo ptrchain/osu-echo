@@ -1284,18 +1284,21 @@ $('import-official-btn').addEventListener('click',async()=>{
   try{
     const res=await api('/site/import_official',{query,apply:false,import_avatar:true,import_bio:true,import_details:true});
     const details=res.details||{};
-    if(details.about!==undefined)$('settings-about').value=details.about;
-    if(details.location!==undefined)$('settings-location').value=details.location;
-    if(details.country!==undefined){$('settings-country').value=details.country;updateSettingsCountryFlag();}
-    if(details.interests!==undefined)$('settings-interests').value=details.interests;
-    if(details.occupation!==undefined)$('settings-occupation').value=details.occupation;
-    if(details.twitter!==undefined)$('settings-twitter').value=details.twitter;
-    if(details.discord!==undefined)$('settings-discord').value=details.discord;
-    if(details.website!==undefined)$('settings-website').value=details.website;
+    if(details.about!==undefined && $('settings-about')){
+      $('settings-about').value=details.about;
+      if(typeof updateSignaturePreview==='function') updateSignaturePreview();
+    }
+    if(details.location!==undefined && $('settings-location'))$('settings-location').value=details.location;
+    if(details.country!==undefined && $('settings-country')){$('settings-country').value=details.country;updateSettingsCountryFlag();}
+    if(details.interests!==undefined && $('settings-interests'))$('settings-interests').value=details.interests;
+    if(details.occupation!==undefined && $('settings-occupation'))$('settings-occupation').value=details.occupation;
+    if(details.twitter!==undefined && $('settings-twitter'))$('settings-twitter').value=details.twitter;
+    if(details.discord!==undefined && $('settings-discord'))$('settings-discord').value=details.discord;
+    if(details.website!==undefined && $('settings-website'))$('settings-website').value=details.website;
     if(Array.isArray(details.devices)){
       document.querySelectorAll('input[name=device]').forEach(input=>{input.checked=details.devices.includes(input.value);});
     }
-    if(res.avatar_data_url){
+    if(res.avatar_data_url && $('settings-avatar')){
       $('settings-avatar').src=res.avatar_data_url;
       state.avatarUpload=res.avatar_data_url;
       state.resetAvatar=false;

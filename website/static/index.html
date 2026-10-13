@@ -272,7 +272,62 @@
         </div>
       </div>
 
-      <!-- Section 3: Playstyles -->
+      <!-- Section 3: Signature / me! -->
+      <div class="account-edit" id="settings-sec-signature">
+        <div class="account-edit__section">
+          <h2 class="account-edit__section-title">Signature</h2>
+        </div>
+        <div class="account-edit__input-groups">
+          <div class="account-edit__input-group">
+            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
+              <div class="account-edit-entry__misc-info account-edit-entry__misc-info--signature-preview js-post-preview--preview bbcode-rendered" id="settings-signature-preview">
+              </div>
+            </div>
+            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
+              <textarea id="settings-about" class="account-edit-entry__input js-bbcode-body" rows="6" maxlength="5000" placeholder="Write your signature or me! userpage here (BBCode supported)..."></textarea>
+            </div>
+            <div class="account-edit-entry account-edit-entry--wide account-edit-entry--no-label">
+              <div class="bbcode-toolbar" id="settings-bbcode-toolbar">
+                <button type="button" class="bbcode-toolbar__btn" data-tag="b" title="Bold"><strong>B</strong></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="i" title="Italic"><em>I</em></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="s" title="Strikethrough"><del>S</del></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="heading" title="Heading"><strong>H</strong></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="url" title="Link"><i class="fas fa-link" aria-hidden="true"></i></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="quote" title="Quote"><i class="fas fa-quote-right" aria-hidden="true"></i></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="list" title="Bullet List"><i class="fas fa-list-ul" aria-hidden="true"></i></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="list-ol" title="Numbered List"><i class="fas fa-list-ol" aria-hidden="true"></i></button>
+                <button type="button" class="bbcode-toolbar__btn" data-tag="img" title="Image"><i class="fas fa-image" aria-hidden="true"></i></button>
+                <div class="bbcode-toolbar__dropdown">
+                  <select id="bbcode-font-size" class="bbcode-select" aria-label="Font size">
+                    <option value="">Font Size</option>
+                    <option value="50">Tiny (50%)</option>
+                    <option value="85">Small (85%)</option>
+                    <option value="100">Normal (100%)</option>
+                    <option value="150">Large (150%)</option>
+                    <option value="200">Huge (200%)</option>
+                  </select>
+                </div>
+                <a href="https://osu.ppy.sh/wiki/en/BBCode" target="_blank" rel="noreferrer" class="bbcode-toolbar__help">Help</a>
+              </div>
+            </div>
+          </div>
+          <div class="account-edit__input-group">
+            <div class="account-edit-entry account-edit-entry--no-label">
+              <button type="button" id="btn-save-signature" class="btn-osu-big btn-osu-big--account-edit">
+                <span class="btn-osu-big__content">
+                  <span class="btn-osu-big__left">update</span>
+                  <span class="btn-osu-big__icon"><i class="fas fa-check" aria-hidden="true"></i></span>
+                </span>
+              </button>
+              <div class="account-edit-status">
+                <span id="save-status-signature" class="account-edit-status__content account-edit-status__content--saved" hidden>Signature updated!</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section 4: Playstyles -->
       <div class="account-edit" id="playstyles">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Playstyles</h2>
@@ -367,7 +422,7 @@
         </div>
       </div>
 
-      <!-- Section 4: Profile Section Order -->
+      <!-- Section 5: Profile Section Order -->
       <div class="account-edit" id="settings-sec-order">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Sections</h2>
@@ -396,7 +451,7 @@
         </div>
       </div>
 
-      <!-- Section 5: Official osu! Profile Sync -->
+      <!-- Section 6: Official osu! Profile Sync -->
       <div class="account-edit" id="settings-sec-official">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Official osu!</h2>
@@ -423,7 +478,7 @@
         </div>
       </div>
 
-      <!-- Section 6: Bancho Score Import -->
+      <!-- Section 7: Bancho Score Import -->
       <div class="account-edit" id="settings-sec-scores">
         <div class="account-edit__section">
           <h2 class="account-edit__section-title">Score Import</h2>

@@ -36,6 +36,7 @@ desktop.ini
 .idea/
 *.sublime-project
 *.sublime-workspace
+*.code-workspace
 
 # Local release packaging scripts
 package.ps1
