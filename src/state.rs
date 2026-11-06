@@ -38,10 +38,7 @@ pub type BanchoScoreCacheKey = (i64, i32, Option<u32>, i32);
 
 impl AppState {
     pub fn new(db: Connection, config: Config) -> Self {
-        let http = HttpClient::builder()
-            .user_agent("osu!")
-            .build()
-            .unwrap_or_else(|_| HttpClient::new());
+        let http = HttpClient::builder().user_agent("osu!").build().unwrap_or_else(|_| HttpClient::new());
 
         Self {
             db: Arc::new(Mutex::new(db)),

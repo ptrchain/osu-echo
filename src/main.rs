@@ -211,9 +211,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let state_avatar = shared_state.clone();
     tokio::spawn(async move {
-        let req = avatar_http
-            .get("https://a.ppy.sh/")
-            .timeout(std::time::Duration::from_secs(2));
+        let req = avatar_http.get("https://a.ppy.sh/").timeout(std::time::Duration::from_secs(2));
         if let Ok(resp) = req.send().await {
             if resp.status() == 200 {
                 if let Ok(bytes) = resp.bytes().await {
@@ -484,12 +482,8 @@ async fn handle_request(state: state::SharedState, req: hyper::Request<hyper::bo
     let resp = match route {
         RouteMatch::UserProfileWeb => server::assets::serve_index(),
         RouteMatch::WebStatic(sub_path) => server::assets::serve_asset(&sub_path),
-        RouteMatch::WebApi(action) => {
-            handlers::website::handle(state, &action, &params, &method, &headers, &body_bytes).await
-        }
-        RouteMatch::Status => {
-            server::assets::serve_index()
-        }
+        RouteMatch::WebApi(action) => handlers::website::handle(state, &action, &params, &method, &headers, &body_bytes).await,
+        RouteMatch::Status => server::assets::serve_index(),
         RouteMatch::Favicon => Response::no_content().with_header("Content-Type", "image/x-icon"),
         RouteMatch::Cho => handlers::cho::handle(state, osu_token.as_deref(), &body_bytes).await,
         RouteMatch::Web(sub_path) => handlers::web::handle(state, &sub_path, &params, &method, &headers, &body_bytes).await,

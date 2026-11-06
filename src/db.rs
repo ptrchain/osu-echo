@@ -2,8 +2,8 @@ use crate::types::beatmap::Beatmap;
 use crate::types::config::Config;
 use crate::types::medal::UserMedalRecord;
 pub use crate::types::profile::default_section_order;
-pub use crate::types::ProfileDetails;
 use crate::types::score::Score;
+pub use crate::types::ProfileDetails;
 use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 
@@ -321,10 +321,7 @@ pub fn increment_playcount(conn: &Connection, name: &str) -> SqlResult<()> {
 }
 
 pub fn decrement_playcount(conn: &Connection, name: &str) -> SqlResult<()> {
-    conn.execute(
-        "UPDATE profiles SET playcount = CASE WHEN playcount > 0 THEN playcount - 1 ELSE 0 END WHERE name = ?1",
-        params![name],
-    )?;
+    conn.execute("UPDATE profiles SET playcount = CASE WHEN playcount > 0 THEN playcount - 1 ELSE 0 END WHERE name = ?1", params![name])?;
     Ok(())
 }
 
@@ -334,10 +331,7 @@ pub fn update_profile_stats(conn: &Connection, name: &str, pp: f64, acc: f64) ->
 }
 
 pub fn update_score_pp_and_acc(conn: &Connection, score_id: i64, pp: f64, acc: f64) -> SqlResult<()> {
-    conn.execute(
-        "UPDATE scores SET pp = ?1, acc = ?2 WHERE id = ?3",
-        params![pp, acc, score_id],
-    )?;
+    conn.execute("UPDATE scores SET pp = ?1, acc = ?2 WHERE id = ?3", params![pp, acc, score_id])?;
     Ok(())
 }
 
@@ -395,9 +389,8 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
             Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, interests, occupation, twitter, discord, website))
         }),
         Err(_) => {
-            let mut fallback_stmt = conn.prepare(
-                "SELECT about, location, devices, section_order, country, playmode, pinned_scores FROM profile_details WHERE player_name = ?1",
-            )?;
+            let mut fallback_stmt =
+                conn.prepare("SELECT about, location, devices, section_order, country, playmode, pinned_scores FROM profile_details WHERE player_name = ?1")?;
             fallback_stmt.query_row(params![player_name], |row| {
                 let about: String = row.get(0)?;
                 let location: String = row.get(1)?;
@@ -406,7 +399,20 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 let country: String = row.get(4)?;
                 let playmode: String = row.get(5).unwrap_or_else(|_| "osu".to_string());
                 let pinned_scores_json: String = row.get(6).unwrap_or_else(|_| "[]".to_string());
-                Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, String::new(), String::new(), String::new(), String::new(), String::new()))
+                Ok((
+                    about,
+                    location,
+                    devices_json,
+                    section_order_json,
+                    country,
+                    playmode,
+                    pinned_scores_json,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ))
             })
         }
     };
@@ -414,8 +420,7 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
     match result {
         Ok((about, location, devices_json, section_order_json, country, playmode, pinned_scores_json, interests, occupation, twitter, discord, website)) => {
             let devices: Vec<String> = serde_json::from_str(&devices_json).unwrap_or_default();
-            let section_order: Vec<String> = serde_json::from_str(&section_order_json)
-                .unwrap_or_else(|_| default_section_order());
+            let section_order: Vec<String> = serde_json::from_str(&section_order_json).unwrap_or_else(|_| default_section_order());
             let pinned_scores: Vec<String> = serde_json::from_str(&pinned_scores_json).unwrap_or_default();
 
             let country = if country.is_empty() {
@@ -434,20 +439,7 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
 
             let playmode = if playmode.is_empty() { "osu".to_string() } else { playmode };
 
-            Ok(ProfileDetails {
-                about,
-                location,
-                interests,
-                occupation,
-                twitter,
-                discord,
-                website,
-                devices,
-                section_order,
-                country,
-                playmode,
-                pinned_scores,
-            })
+            Ok(ProfileDetails { about, location, interests, occupation, twitter, discord, website, devices, section_order, country, playmode, pinned_scores })
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             let country = if let Ok(c_byte) = get_profile_country(conn, player_name) {
@@ -460,10 +452,7 @@ pub fn get_profile_details(conn: &Connection, player_name: &str) -> SqlResult<Pr
                 String::new()
             };
 
-            let details = ProfileDetails {
-                country,
-                ..Default::default()
-            };
+            let details = ProfileDetails { country, ..Default::default() };
             Ok(details)
         }
         Err(e) => Err(e),
@@ -474,8 +463,7 @@ pub fn save_profile_details(conn: &Connection, player_name: &str, details: &Prof
     ensure_profile(conn, player_name)?;
 
     let devices_json = serde_json::to_string(&details.devices).unwrap_or_else(|_| "[]".to_string());
-    let section_order_json = serde_json::to_string(&details.section_order)
-        .unwrap_or_else(|_| serde_json::to_string(&default_section_order()).unwrap());
+    let section_order_json = serde_json::to_string(&details.section_order).unwrap_or_else(|_| serde_json::to_string(&default_section_order()).unwrap());
     let pinned_scores_json = serde_json::to_string(&details.pinned_scores).unwrap_or_else(|_| "[]".to_string());
 
     conn.execute(
@@ -647,18 +635,12 @@ pub fn delete_score_by_id(conn: &Connection, player_name: &str, score_id: i64) -
         params![now, score_id, player_name],
     );
 
-    let rows = conn.execute(
-        "DELETE FROM scores WHERE id = ?1 AND player_name = ?2",
-        params![score_id, player_name],
-    )?;
+    let rows = conn.execute("DELETE FROM scores WHERE id = ?1 AND player_name = ?2", params![score_id, player_name])?;
     Ok(rows > 0)
 }
 
 pub fn delete_scores_on_map(conn: &Connection, player_name: &str, md5: &str) -> SqlResult<usize> {
-    conn.execute(
-        "DELETE FROM scores WHERE player_name = ?1 AND md5 = ?2",
-        params![player_name, md5],
-    )
+    conn.execute("DELETE FROM scores WHERE player_name = ?1 AND md5 = ?2", params![player_name, md5])
 }
 
 pub fn delete_all_scores_on_map(conn: &Connection, md5: &str) -> SqlResult<usize> {
@@ -666,17 +648,11 @@ pub fn delete_all_scores_on_map(conn: &Connection, md5: &str) -> SqlResult<usize
 }
 
 pub fn delete_scores_on_set(conn: &Connection, player_name: &str, set_id: i64) -> SqlResult<usize> {
-    conn.execute(
-        "DELETE FROM scores WHERE player_name = ?1 AND md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?2)",
-        params![player_name, set_id],
-    )
+    conn.execute("DELETE FROM scores WHERE player_name = ?1 AND md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?2)", params![player_name, set_id])
 }
 
 pub fn delete_all_scores_on_set(conn: &Connection, set_id: i64) -> SqlResult<usize> {
-    conn.execute(
-        "DELETE FROM scores WHERE md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?1)",
-        params![set_id],
-    )
+    conn.execute("DELETE FROM scores WHERE md5 IN (SELECT file_md5 FROM beatmaps WHERE beatmapset_id = ?1)", params![set_id])
 }
 
 pub fn insert_score(conn: &Connection, score: &Score, bmap_status: &str) -> SqlResult<i64> {
@@ -775,8 +751,8 @@ pub fn ensure_beatmap_registered(conn: &Connection, bmap: &Beatmap) -> SqlResult
         }
         Some(curr) => {
             let needs_metadata_update = curr.title.is_empty() && !bmap.title.is_empty();
-            let needs_content_update = curr.file_content.as_deref().unwrap_or("").is_empty()
-                && bmap.file_content.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+            let needs_content_update =
+                curr.file_content.as_deref().unwrap_or("").is_empty() && bmap.file_content.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
 
             if needs_metadata_update {
                 insert_beatmap(conn, bmap)?;
@@ -796,11 +772,7 @@ pub fn score_exists_by_identity(conn: &Connection, player_name: &str, identity: 
     Ok(count > 0)
 }
 
-pub fn import_scores_batch(
-    conn: &Connection,
-    records: &[ImportScoreRecord],
-    policy: ConflictPolicy,
-) -> SqlResult<(usize, usize)> {
+pub fn import_scores_batch(conn: &Connection, records: &[ImportScoreRecord], policy: ConflictPolicy) -> SqlResult<(usize, usize)> {
     if records.is_empty() {
         return Ok((0, 0));
     }
@@ -842,13 +814,8 @@ pub fn import_scores_batch(
                     }
 
                     if should_insert {
-                        let mut stmt = conn.prepare(
-                            "SELECT id, pp FROM scores WHERE player_name = ?1 AND md5 = ?2 AND mode = ?3 ORDER BY pp DESC LIMIT 1"
-                        )?;
-                        let existing_best: Option<(i64, Option<f64>)> = stmt.query_row(
-                            params![sc.name, sc.md5, sc.mode],
-                            |r| Ok((r.get(0)?, r.get(1)?))
-                        ).ok();
+                        let mut stmt = conn.prepare("SELECT id, pp FROM scores WHERE player_name = ?1 AND md5 = ?2 AND mode = ?3 ORDER BY pp DESC LIMIT 1")?;
+                        let existing_best: Option<(i64, Option<f64>)> = stmt.query_row(params![sc.name, sc.md5, sc.mode], |r| Ok((r.get(0)?, r.get(1)?))).ok();
 
                         if let Some((existing_id, existing_pp)) = existing_best {
                             let new_pp = sc.pp.unwrap_or(0.0);
@@ -864,10 +831,7 @@ pub fn import_scores_batch(
                 ConflictPolicy::OverwriteAll => {
                     if let Some(ref identity) = sc.submission_identity {
                         if !identity.is_empty() {
-                            conn.execute(
-                                "DELETE FROM scores WHERE player_name = ?1 AND submission_identity = ?2",
-                                params![sc.name, identity]
-                            )?;
+                            conn.execute("DELETE FROM scores WHERE player_name = ?1 AND submission_identity = ?2", params![sc.name, identity])?;
                         }
                     }
                 }
@@ -1149,18 +1113,12 @@ pub fn get_beatmap_by_id(conn: &Connection, id: i64) -> SqlResult<Option<Beatmap
 
 pub fn get_candidate_beatmaps(conn: &Connection, mode: i32) -> SqlResult<Vec<Beatmap>> {
     let mut stmt = conn.prepare("SELECT * FROM beatmaps WHERE mode = ?1 ORDER BY playcount DESC, difficultyrating ASC")?;
-    let mut maps: Vec<Beatmap> = stmt
-        .query_map(params![mode], |row| Ok(row_to_beatmap(row)))?
-        .filter_map(|r| r.ok())
-        .collect();
+    let mut maps: Vec<Beatmap> = stmt.query_map(params![mode], |row| Ok(row_to_beatmap(row)))?.filter_map(|r| r.ok()).collect();
 
     // Fallback: if no maps match the specific mode, retrieve any available beatmaps
     if maps.is_empty() {
         let mut fallback_stmt = conn.prepare("SELECT * FROM beatmaps ORDER BY playcount DESC, difficultyrating ASC")?;
-        maps = fallback_stmt
-            .query_map([], |row| Ok(row_to_beatmap(row)))?
-            .filter_map(|r| r.ok())
-            .collect();
+        maps = fallback_stmt.query_map([], |row| Ok(row_to_beatmap(row)))?.filter_map(|r| r.ok()).collect();
     }
 
     Ok(maps)
@@ -1433,10 +1391,7 @@ pub fn set_beatmapset_status(conn: &Connection, beatmapset_id: i64, approved: i3
 
 pub fn get_beatmaps_by_set_id(conn: &Connection, beatmapset_id: i64) -> SqlResult<Vec<Beatmap>> {
     let mut stmt = conn.prepare("SELECT * FROM beatmaps WHERE beatmapset_id = ?1")?;
-    let maps = stmt
-        .query_map(params![beatmapset_id], |row| Ok(row_to_beatmap(row)))?
-        .filter_map(|r| r.ok())
-        .collect();
+    let maps = stmt.query_map(params![beatmapset_id], |row| Ok(row_to_beatmap(row)))?.filter_map(|r| r.ok()).collect();
     Ok(maps)
 }
 
@@ -1521,10 +1476,8 @@ pub fn get_player_scores_with_beatmaps(conn: &Connection, player_name: &str) -> 
 }
 
 pub fn add_user_medal(conn: &Connection, player_name: &str, medal_id: i32, achieved_at: i64) -> SqlResult<bool> {
-    let rows = conn.execute(
-        "INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)",
-        params![player_name, medal_id, achieved_at],
-    )?;
+    let rows = conn
+        .execute("INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)", params![player_name, medal_id, achieved_at])?;
     Ok(rows > 0)
 }
 
@@ -1534,9 +1487,7 @@ pub fn add_user_medals_batch(conn: &Connection, player_name: &str, medals: &[(i3
     }
     conn.execute_batch("BEGIN IMMEDIATE;")?;
     let res: SqlResult<usize> = (|| {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)",
-        )?;
+        let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO user_medals (player_name, medal_id, achieved_at) VALUES (?1, ?2, ?3)")?;
         let mut added = 0;
         for &(medal_id, achieved_at) in medals {
             let rows = stmt.execute(params![player_name, medal_id, achieved_at])?;
@@ -1560,15 +1511,8 @@ pub fn add_user_medals_batch(conn: &Connection, player_name: &str, medals: &[(i3
 }
 
 pub fn get_user_medals(conn: &Connection, player_name: &str) -> SqlResult<Vec<UserMedalRecord>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT medal_id, achieved_at FROM user_medals WHERE player_name = ?1 ORDER BY achieved_at DESC, medal_id ASC",
-    )?;
-    let rows = stmt.query_map(params![player_name], |row| {
-        Ok(UserMedalRecord {
-            medal_id: row.get(0)?,
-            achieved_at: row.get(1)?,
-        })
-    })?;
+    let mut stmt = conn.prepare_cached("SELECT medal_id, achieved_at FROM user_medals WHERE player_name = ?1 ORDER BY achieved_at DESC, medal_id ASC")?;
+    let rows = stmt.query_map(params![player_name], |row| Ok(UserMedalRecord { medal_id: row.get(0)?, achieved_at: row.get(1)? }))?;
     let mut medals = Vec::new();
     for m in rows {
         medals.push(m?);
@@ -1577,20 +1521,13 @@ pub fn get_user_medals(conn: &Connection, player_name: &str) -> SqlResult<Vec<Us
 }
 
 pub fn get_user_medal_count(conn: &Connection, player_name: &str) -> SqlResult<usize> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM user_medals WHERE player_name = ?1",
-        params![player_name],
-        |row| row.get(0),
-    )?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM user_medals WHERE player_name = ?1", params![player_name], |row| row.get(0))?;
     Ok(count as usize)
 }
 
 pub fn has_user_medal(conn: &Connection, player_name: &str, medal_id: i32) -> SqlResult<bool> {
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM user_medals WHERE player_name = ?1 AND medal_id = ?2)",
-        params![player_name, medal_id],
-        |row| row.get(0),
-    )?;
+    let exists: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM user_medals WHERE player_name = ?1 AND medal_id = ?2)", params![player_name, medal_id], |row| row.get(0))?;
     Ok(exists)
 }
 
@@ -2322,9 +2259,7 @@ mod tests {
         sc_better.pp = Some(280.0);
         sc_better.score = 1200000;
 
-        let rec_better = vec![
-            ImportScoreRecord { score: &sc_better, bmap_status: "ranked", beatmap: Some(&bmap) },
-        ];
+        let rec_better = vec![ImportScoreRecord { score: &sc_better, bmap_status: "ranked", beatmap: Some(&bmap) }];
         let (ins1, skip1) = import_scores_batch(&conn, &rec_better, ConflictPolicy::ReplaceIfBetter).unwrap();
         assert_eq!(ins1, 1);
         assert_eq!(skip1, 0);
@@ -2338,9 +2273,7 @@ mod tests {
         sc_worse.submission_identity = Some("bancho:2002".to_string());
         sc_worse.pp = Some(50.0);
 
-        let rec_worse = vec![
-            ImportScoreRecord { score: &sc_worse, bmap_status: "ranked", beatmap: Some(&bmap) },
-        ];
+        let rec_worse = vec![ImportScoreRecord { score: &sc_worse, bmap_status: "ranked", beatmap: Some(&bmap) }];
         let (ins2, skip2) = import_scores_batch(&conn, &rec_worse, ConflictPolicy::ReplaceIfBetter).unwrap();
         assert_eq!(ins2, 0);
         assert_eq!(skip2, 1);
@@ -2373,9 +2306,7 @@ mod tests {
             ..Score::blank()
         };
 
-        let rec1 = vec![
-            ImportScoreRecord { score: &sc1, bmap_status: "ranked", beatmap: Some(&bmap) },
-        ];
+        let rec1 = vec![ImportScoreRecord { score: &sc1, bmap_status: "ranked", beatmap: Some(&bmap) }];
         let (ins1, _) = import_scores_batch(&conn, &rec1, ConflictPolicy::Skip).unwrap();
         assert_eq!(ins1, 1);
 
@@ -2384,9 +2315,7 @@ mod tests {
         sc_updated.score = 2500000;
         sc_updated.pp = Some(300.0);
 
-        let rec_updated = vec![
-            ImportScoreRecord { score: &sc_updated, bmap_status: "ranked", beatmap: Some(&bmap) },
-        ];
+        let rec_updated = vec![ImportScoreRecord { score: &sc_updated, bmap_status: "ranked", beatmap: Some(&bmap) }];
         let (ins2, skip2) = import_scores_batch(&conn, &rec_updated, ConflictPolicy::OverwriteAll).unwrap();
         assert_eq!(ins2, 1);
         assert_eq!(skip2, 0);
@@ -2421,4 +2350,3 @@ mod tests {
         assert_eq!(upgraded.file_content.as_deref(), Some("osu file format v14"));
     }
 }
-

@@ -25,12 +25,7 @@ pub fn evaluate_score_submission(
 
     // 1. Playcount & Hit Dedication Milestones (Passed or failed)
     // 5k (20), 15k (21), 25k (22), 50k (28)
-    let playcount_milestones = [
-        (5_000, 20),
-        (15_000, 21),
-        (25_000, 22),
-        (50_000, 28),
-    ];
+    let playcount_milestones = [(5_000, 20), (15_000, 21), (25_000, 22), (50_000, 28)];
     for &(threshold, medal_id) in &playcount_milestones {
         if playcount >= threshold {
             check_and_award(medal_id);
@@ -39,24 +34,9 @@ pub fn evaluate_score_submission(
 
     // Mode-specific cumulative hit milestones
     let hit_milestones: &[(i64, i32)] = match score.mode {
-        1 => &[
-            (30_000, 31),
-            (300_000, 32),
-            (3_000_000, 33),
-            (30_000_000, 291),
-        ],
-        2 => &[
-            (20_000, 13),
-            (200_000, 23),
-            (2_000_000, 24),
-            (20_000_000, 292),
-        ],
-        3 => &[
-            (40_000, 46),
-            (400_000, 47),
-            (4_000_000, 48),
-            (40_000_000, 293),
-        ],
+        1 => &[(30_000, 31), (300_000, 32), (3_000_000, 33), (30_000_000, 291)],
+        2 => &[(20_000, 13), (200_000, 23), (2_000_000, 24), (20_000_000, 292)],
+        3 => &[(40_000, 46), (400_000, 47), (4_000_000, 48), (40_000_000, 293)],
         _ => &[],
     };
     for &(threshold, medal_id) in hit_milestones {
@@ -87,12 +67,7 @@ pub fn evaluate_score_submission(
     // 2. Combo Milestones (Standard osu! mode 0)
     // 500 (1), 750 (3), 1,000 (4), 2,000 (5)
     if score.mode == 0 {
-        let combo_milestones = [
-            (500, 1),
-            (750, 3),
-            (1000, 4),
-            (2000, 5),
-        ];
+        let combo_milestones = [(500, 1), (750, 3), (1000, 4), (2000, 5)];
         for &(threshold, medal_id) in &combo_milestones {
             if score.max_combo >= threshold {
                 check_and_award(medal_id);
@@ -108,13 +83,7 @@ pub fn evaluate_score_submission(
         _ => rosu_pp::model::mode::GameMode::Osu,
     };
     let stars = if let Some(parsed) = parsed_map {
-        rosu_pp::Performance::new(parsed)
-            .lazer(false)
-            .mode_or_ignore(game_mode)
-            .mods(score.mods)
-            .calculate()
-            .difficulty_attributes()
-            .stars()
+        rosu_pp::Performance::new(parsed).lazer(false).mode_or_ignore(game_mode).mods(score.mods).calculate().difficulty_attributes().stars()
     } else {
         bmap.difficultyrating
     };
@@ -123,21 +92,20 @@ pub fn evaluate_score_submission(
     // In official osu!, medals are awarded strictly within their respective star bracket (e.g. 1.0–1.99* for 1*, 2.0–2.99* for 2*).
     let pass_table: &[(f64, f64, i32)] = match score.mode {
         0 => &[
-            (1.0, 2.0, 55), (2.0, 3.0, 56), (3.0, 4.0, 57), (4.0, 5.0, 58), (5.0, 6.0, 59),
-            (6.0, 7.0, 60), (7.0, 8.0, 61), (8.0, 9.0, 62), (9.0, 10.0, 242), (10.0, f64::MAX, 244),
+            (1.0, 2.0, 55),
+            (2.0, 3.0, 56),
+            (3.0, 4.0, 57),
+            (4.0, 5.0, 58),
+            (5.0, 6.0, 59),
+            (6.0, 7.0, 60),
+            (7.0, 8.0, 61),
+            (8.0, 9.0, 62),
+            (9.0, 10.0, 242),
+            (10.0, f64::MAX, 244),
         ],
-        1 => &[
-            (1.0, 2.0, 71), (2.0, 3.0, 72), (3.0, 4.0, 73), (4.0, 5.0, 74), (5.0, 6.0, 75),
-            (6.0, 7.0, 76), (7.0, 8.0, 77), (8.0, f64::MAX, 78),
-        ],
-        2 => &[
-            (1.0, 2.0, 79), (2.0, 3.0, 80), (3.0, 4.0, 81), (4.0, 5.0, 82), (5.0, 6.0, 83),
-            (6.0, 7.0, 84), (7.0, 8.0, 85), (8.0, f64::MAX, 86),
-        ],
-        3 => &[
-            (1.0, 2.0, 87), (2.0, 3.0, 88), (3.0, 4.0, 89), (4.0, 5.0, 90), (5.0, 6.0, 91),
-            (6.0, 7.0, 92), (7.0, 8.0, 93), (8.0, f64::MAX, 94),
-        ],
+        1 => &[(1.0, 2.0, 71), (2.0, 3.0, 72), (3.0, 4.0, 73), (4.0, 5.0, 74), (5.0, 6.0, 75), (6.0, 7.0, 76), (7.0, 8.0, 77), (8.0, f64::MAX, 78)],
+        2 => &[(1.0, 2.0, 79), (2.0, 3.0, 80), (3.0, 4.0, 81), (4.0, 5.0, 82), (5.0, 6.0, 83), (6.0, 7.0, 84), (7.0, 8.0, 85), (8.0, f64::MAX, 86)],
+        3 => &[(1.0, 2.0, 87), (2.0, 3.0, 88), (3.0, 4.0, 89), (4.0, 5.0, 90), (5.0, 6.0, 91), (6.0, 7.0, 92), (7.0, 8.0, 93), (8.0, f64::MAX, 94)],
         _ => &[],
     };
     for &(min_stars, max_stars, medal_id) in pass_table {
@@ -147,29 +115,29 @@ pub fn evaluate_score_submission(
     }
 
     // FC detection
-    let is_fc = score.nmiss == 0 && match score.mode {
-        1 | 3 => true, // Taiko and Mania don't have sliderbreaks; 0 miss is FC
-        _ => score.perfect || bmap.max_combo == 0 || score.max_combo >= bmap.max_combo - 1,
-    };
+    let is_fc = score.nmiss == 0
+        && match score.mode {
+            1 | 3 => true, // Taiko and Mania don't have sliderbreaks; 0 miss is FC
+            _ => score.perfect || bmap.max_combo == 0 || score.max_combo >= bmap.max_combo - 1,
+        };
 
     if is_fc {
         let fc_table: &[(f64, f64, i32)] = match score.mode {
             0 => &[
-                (1.0, 2.0, 63), (2.0, 3.0, 64), (3.0, 4.0, 65), (4.0, 5.0, 66), (5.0, 6.0, 67),
-                (6.0, 7.0, 68), (7.0, 8.0, 69), (8.0, 9.0, 70), (9.0, 10.0, 243), (10.0, f64::MAX, 245),
+                (1.0, 2.0, 63),
+                (2.0, 3.0, 64),
+                (3.0, 4.0, 65),
+                (4.0, 5.0, 66),
+                (5.0, 6.0, 67),
+                (6.0, 7.0, 68),
+                (7.0, 8.0, 69),
+                (8.0, 9.0, 70),
+                (9.0, 10.0, 243),
+                (10.0, f64::MAX, 245),
             ],
-            1 => &[
-                (1.0, 2.0, 95), (2.0, 3.0, 96), (3.0, 4.0, 97), (4.0, 5.0, 98), (5.0, 6.0, 99),
-                (6.0, 7.0, 100), (7.0, 8.0, 101), (8.0, f64::MAX, 102),
-            ],
-            2 => &[
-                (1.0, 2.0, 103), (2.0, 3.0, 104), (3.0, 4.0, 105), (4.0, 5.0, 106), (5.0, 6.0, 107),
-                (6.0, 7.0, 108), (7.0, 8.0, 109), (8.0, f64::MAX, 110),
-            ],
-            3 => &[
-                (1.0, 2.0, 111), (2.0, 3.0, 112), (3.0, 4.0, 113), (4.0, 5.0, 114), (5.0, 6.0, 115),
-                (6.0, 7.0, 116), (7.0, 8.0, 117), (8.0, f64::MAX, 118),
-            ],
+            1 => &[(1.0, 2.0, 95), (2.0, 3.0, 96), (3.0, 4.0, 97), (4.0, 5.0, 98), (5.0, 6.0, 99), (6.0, 7.0, 100), (7.0, 8.0, 101), (8.0, f64::MAX, 102)],
+            2 => &[(1.0, 2.0, 103), (2.0, 3.0, 104), (3.0, 4.0, 105), (4.0, 5.0, 106), (5.0, 6.0, 107), (6.0, 7.0, 108), (7.0, 8.0, 109), (8.0, f64::MAX, 110)],
+            3 => &[(1.0, 2.0, 111), (2.0, 3.0, 112), (3.0, 4.0, 113), (4.0, 5.0, 114), (5.0, 6.0, 115), (6.0, 7.0, 116), (7.0, 8.0, 117), (8.0, f64::MAX, 118)],
             _ => &[],
         };
         for &(min_stars, max_stars, medal_id) in fc_table {
@@ -235,7 +203,11 @@ pub fn evaluate_score_submission(
     }
 
     // Overconfident (ID 177): Pass with less than 65% accuracy using difficulty-increasing mods (HD, HR, DT, NC, FL)
-    if acc > 0.0 && acc < 65.0 && score_mods.intersects(Mods::HIDDEN | Mods::HARDROCK | Mods::DOUBLETIME | Mods::NIGHTCORE | Mods::FLASHLIGHT) && !score_mods.intersects(Mods::NOFAIL | Mods::EASY) {
+    if acc > 0.0
+        && acc < 65.0
+        && score_mods.intersects(Mods::HIDDEN | Mods::HARDROCK | Mods::DOUBLETIME | Mods::NIGHTCORE | Mods::FLASHLIGHT)
+        && !score_mods.intersects(Mods::NOFAIL | Mods::EASY)
+    {
         check_and_award(177);
     }
 
@@ -320,7 +292,11 @@ pub fn evaluate_score_submission(
     }
 
     // Realtor Extraordinaire (ID 154): FC "House With Legs" with HD + HR + DT/NC
-    if is_fc && map_title_lower.contains("house with legs") && score_mods.contains(Mods::HIDDEN | Mods::HARDROCK) && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) {
+    if is_fc
+        && map_title_lower.contains("house with legs")
+        && score_mods.contains(Mods::HIDDEN | Mods::HARDROCK)
+        && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE)
+    {
         check_and_award(154);
     }
 
@@ -537,7 +513,11 @@ pub fn evaluate_score_submission(
     }
 
     // The Firmament Moves (ID 174): Pass "Moonlight Sonata" by cYsmix with HD + HR + DT/NC
-    if map_title_lower.contains("moonlight sonata") && map_artist_lower.contains("cysmix") && score_mods.contains(Mods::HIDDEN | Mods::HARDROCK) && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE) {
+    if map_title_lower.contains("moonlight sonata")
+        && map_artist_lower.contains("cysmix")
+        && score_mods.contains(Mods::HIDDEN | Mods::HARDROCK)
+        && score_mods.intersects(Mods::DOUBLETIME | Mods::NIGHTCORE)
+    {
         check_and_award(174);
     }
 
@@ -547,7 +527,11 @@ pub fn evaluate_score_submission(
     }
 
     // B-Rave (ID 193): Pass "T&J" by Cranky with acc >= 80.0% without NF or EZ
-    if (map_title_lower.contains("t&j") || map_title_lower.contains("t & j")) && map_artist_lower.contains("cranky") && acc >= 80.0 && !score_mods.intersects(Mods::NOFAIL | Mods::EASY) {
+    if (map_title_lower.contains("t&j") || map_title_lower.contains("t & j"))
+        && map_artist_lower.contains("cranky")
+        && acc >= 80.0
+        && !score_mods.intersects(Mods::NOFAIL | Mods::EASY)
+    {
         check_and_award(193);
     }
 
@@ -557,7 +541,10 @@ pub fn evaluate_score_submission(
     }
 
     // Under The Stars (ID 196): Pass "Phonetic" or "Journey" by Left with HD + FL
-    if (map_title_lower.contains("phonetic") || map_title_lower.contains("journey")) && map_artist_lower.contains("left") && score_mods.contains(Mods::HIDDEN | Mods::FLASHLIGHT) {
+    if (map_title_lower.contains("phonetic") || map_title_lower.contains("journey"))
+        && map_artist_lower.contains("left")
+        && score_mods.contains(Mods::HIDDEN | Mods::FLASHLIGHT)
+    {
         check_and_award(196);
     }
 
@@ -597,7 +584,12 @@ pub fn evaluate_score_submission(
     }
 
     // Dark Familiarity (ID 298): FC "Ghost Assassin" by Veela with HD + SD/PF
-    if is_fc && map_title_lower.contains("ghost assassin") && map_artist_lower.contains("veela") && score_mods.contains(Mods::HIDDEN) && score_mods.intersects(Mods::SUDDENDEATH | Mods::PERFECT) {
+    if is_fc
+        && map_title_lower.contains("ghost assassin")
+        && map_artist_lower.contains("veela")
+        && score_mods.contains(Mods::HIDDEN)
+        && score_mods.intersects(Mods::SUDDENDEATH | Mods::PERFECT)
+    {
         check_and_award(298);
     }
 
@@ -611,10 +603,7 @@ pub fn evaluate_score_submission(
 
 /// Scans existing player scores and profile metrics in SQLite to award all qualifying medals historically.
 pub fn retroactive_eval_profile(conn: &Connection, player_name: &str) -> rusqlite::Result<Vec<i32>> {
-    let existing_medals: HashSet<i32> = db::get_user_medals(conn, player_name)?
-        .into_iter()
-        .map(|m| m.medal_id)
-        .collect();
+    let existing_medals: HashSet<i32> = db::get_user_medals(conn, player_name)?.into_iter().map(|m| m.medal_id).collect();
 
     let playcount = db::get_playcount(conn, player_name).unwrap_or(0);
     let mut newly_earned = Vec::new();
@@ -625,12 +614,7 @@ pub fn retroactive_eval_profile(conn: &Connection, player_name: &str) -> rusqlit
     };
 
     // 1. Playcount dedication
-    let playcount_milestones = [
-        (5_000, 20),
-        (15_000, 21),
-        (25_000, 22),
-        (50_000, 28),
-    ];
+    let playcount_milestones = [(5_000, 20), (15_000, 21), (25_000, 22), (50_000, 28)];
     for &(threshold, medal_id) in &playcount_milestones {
         if playcount >= threshold {
             check_and_award(medal_id);
@@ -658,8 +642,7 @@ pub fn retroactive_eval_profile(conn: &Connection, player_name: &str) -> rusqlit
     // 2. Scan all saved scores
     let all_scores = db::get_all_scores(conn, player_name)?;
     for score in &all_scores {
-        let bmap = db::get_beatmap_by_md5(conn, &score.md5)?
-            .unwrap_or_else(Beatmap::blank);
+        let bmap = db::get_beatmap_by_md5(conn, &score.md5)?.unwrap_or_else(Beatmap::blank);
 
         // Only evaluate ranked or approved beatmaps
         if bmap.approved != 1 && bmap.approved != 2 {
@@ -690,11 +673,7 @@ pub fn retroactive_eval_profile(conn: &Connection, player_name: &str) -> rusqlit
     }
 
     // S-Ranker (ID 15): At least 5 S or SS scores on distinct beatmaps
-    let s_rank_maps: HashSet<&str> = all_scores
-        .iter()
-        .filter(|s| s.nmiss == 0 && s.acc.unwrap_or(0.0) >= 95.0)
-        .map(|s| s.md5.as_str())
-        .collect();
+    let s_rank_maps: HashSet<&str> = all_scores.iter().filter(|s| s.nmiss == 0 && s.acc.unwrap_or(0.0) >= 95.0).map(|s| s.md5.as_str()).collect();
     if s_rank_maps.len() >= 5 {
         check_and_award(15);
     }
@@ -716,7 +695,6 @@ pub fn retroactive_eval_profile(conn: &Connection, player_name: &str) -> rusqlit
 
     Ok(newly_earned)
 }
-
 
 /// Evaluates global rank milestones (ID 50..=53)
 pub fn evaluate_rank_medals(rank: i32, existing: &HashSet<i32>) -> Vec<i32> {
@@ -808,7 +786,7 @@ mod tests {
         let pass_score = make_test_score(350, 1, false, 0, 600000);
         let medals = evaluate_score_submission(&pass_score, &bmap, None, 10, 0, &existing, true);
         assert!(!medals.contains(&55)); // 1★ pass should NOT be awarded on a 5★ map
-        assert!(medals.contains(&59));  // 5★ pass
+        assert!(medals.contains(&59)); // 5★ pass
         assert!(!medals.contains(&60)); // 6★ pass
         assert!(!medals.contains(&63)); // 1★ FC should NOT be awarded
         assert!(!medals.contains(&67)); // 5★ FC should NOT be awarded (miss = 1)
@@ -818,8 +796,8 @@ mod tests {
         let medals = evaluate_score_submission(&fc_score, &bmap, None, 10, 0, &existing, true);
         assert!(!medals.contains(&55)); // 1★ pass
         assert!(!medals.contains(&63)); // 1★ FC
-        assert!(medals.contains(&59));  // 5★ pass
-        assert!(medals.contains(&67));  // 5★ FC
+        assert!(medals.contains(&59)); // 5★ pass
+        assert!(medals.contains(&67)); // 5★ FC
         assert!(!medals.contains(&68)); // 6★ FC
     }
 
@@ -927,9 +905,9 @@ mod tests {
         assert!(new_medals.contains(&20));
         assert!(new_medals.contains(&1));
         assert!(!new_medals.contains(&55)); // 1★ pass NOT awarded for 4.5★
-        assert!(new_medals.contains(&58));  // 4★ pass
+        assert!(new_medals.contains(&58)); // 4★ pass
         assert!(!new_medals.contains(&63)); // 1★ FC NOT awarded for 4.5★
-        assert!(new_medals.contains(&66));  // 4★ FC
+        assert!(new_medals.contains(&66)); // 4★ FC
         assert!(new_medals.contains(&121));
 
         // Re-running retroactive evaluation yields 0 new medals
@@ -951,11 +929,11 @@ mod tests {
         s_taiko.mode = 1;
         let medals_taiko = evaluate_score_submission(&s_taiko, &bmap, None, 10, 35000, &existing, true);
         assert!(!medals_taiko.contains(&71)); // Taiko 1★ pass NOT awarded
-        assert!(medals_taiko.contains(&74));  // Taiko 4★ pass
+        assert!(medals_taiko.contains(&74)); // Taiko 4★ pass
         assert!(!medals_taiko.contains(&75)); // Taiko 5★ pass
         assert!(!medals_taiko.contains(&95)); // Taiko 1★ FC NOT awarded
-        assert!(medals_taiko.contains(&98));  // Taiko 4★ FC
-        assert!(medals_taiko.contains(&31));  // 30,000 Drum Hits
+        assert!(medals_taiko.contains(&98)); // Taiko 4★ FC
+        assert!(medals_taiko.contains(&31)); // 30,000 Drum Hits
 
         // Mania (mode 3) 4.2★ pass with D-rank (Stumbler) and 50,000 keys -> awards 4★ pass
         let mut s_mania = make_test_score(150, 5, false, 0, 200000);
@@ -963,10 +941,10 @@ mod tests {
         s_mania.acc = Some(65.0); // Stumbler (40)
         let medals_mania = evaluate_score_submission(&s_mania, &bmap, None, 10, 50000, &existing, true);
         assert!(!medals_mania.contains(&87)); // Mania 1★ pass NOT awarded
-        assert!(medals_mania.contains(&90));  // Mania 4★ pass
+        assert!(medals_mania.contains(&90)); // Mania 4★ pass
         assert!(!medals_mania.contains(&111)); // No FC
-        assert!(medals_mania.contains(&40));  // Stumbler
-        assert!(medals_mania.contains(&46));  // 40,000 Keys
+        assert!(medals_mania.contains(&40)); // Stumbler
+        assert!(medals_mania.contains(&46)); // 40,000 Keys
 
         // Iconic meme score: 727 PP / combo (When You See It - 287)
         let mut s_wysi = make_test_score(727, 0, true, 0, 727000);
@@ -1096,5 +1074,3 @@ mod tests {
         assert!(m_sonata.contains(&174));
     }
 }
-
-

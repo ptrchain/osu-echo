@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use hyper::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::db;
@@ -191,9 +191,7 @@ pub fn compute_avatar_version(avatar_url: Option<&str>) -> String {
             if let Some(path) = utils::is_path(url) {
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     if let Ok(modified) = metadata.modified() {
-                        let dur = modified
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default();
+                        let dur = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
                         return format!("{}-{}", dur.as_secs(), dur.subsec_nanos());
                     }
                 }
@@ -210,10 +208,7 @@ pub fn compute_avatar_version(avatar_url: Option<&str>) -> String {
 }
 
 pub fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 pub fn generate_token() -> String {
@@ -452,29 +447,20 @@ pub fn parse_official_userpage_html(html: &str) -> Result<OfficialUserParsed, St
 
     let (raw_data, _quote) = if let Some(pos) = html.find(marker_double) {
         let start = pos + marker_double.len();
-        let end = html[start..]
-            .find('"')
-            .ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
+        let end = html[start..].find('"').ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
         (&html[start..start + end], '"')
     } else if let Some(pos) = html.find(marker_single) {
         let start = pos + marker_single.len();
-        let end = html[start..]
-            .find('\'')
-            .ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
+        let end = html[start..].find('\'').ok_or_else(|| "Malformed HTML: unterminated data-initial-data attribute".to_string())?;
         (&html[start..start + end], '\'')
     } else {
         return Err("Could not locate profile initial data in official osu! page".to_string());
     };
 
     let decoded = decode_html_entities(raw_data);
-    let root: serde_json::Value = serde_json::from_str(&decoded)
-        .map_err(|e| format!("Failed to parse profile JSON: {}", e))?;
+    let root: serde_json::Value = serde_json::from_str(&decoded).map_err(|e| format!("Failed to parse profile JSON: {}", e))?;
 
-    let user = if root.get("user").is_some() {
-        &root["user"]
-    } else {
-        &root
-    };
+    let user = if root.get("user").is_some() { &root["user"] } else { &root };
 
     let id = user.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
     let username = user.get("username").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -505,27 +491,12 @@ pub fn parse_official_userpage_html(html: &str) -> Result<OfficialUserParsed, St
         }
     }
 
-    let raw_bio = user
-        .get("page")
-        .and_then(|p| p.get("raw"))
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string());
+    let raw_bio = user.get("page").and_then(|p| p.get("raw")).and_then(|r| r.as_str()).map(|s| s.to_string());
 
-    Ok(OfficialUserParsed {
-        id,
-        username,
-        avatar_url,
-        country_code,
-        location,
-        playstyle,
-        raw_bio,
-    })
+    Ok(OfficialUserParsed { id, username, avatar_url, country_code, location, playstyle, raw_bio })
 }
 
-pub fn can_write(
-    session: Option<&WebSession>,
-    headers: &hyper::HeaderMap,
-) -> bool {
+pub fn can_write(session: Option<&WebSession>, headers: &hyper::HeaderMap) -> bool {
     let session = match session {
         Some(s) => s,
         None => return false,
@@ -589,15 +560,10 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 }
 
 type DailyCacheMap = HashMap<i32, (Instant, Option<i32>)>;
-static DAILY_CACHE: TokioMutex<Option<DailyCacheMap>> =
-    TokioMutex::const_new(None);
+static DAILY_CACHE: TokioMutex<Option<DailyCacheMap>> = TokioMutex::const_new(None);
 static DAILY_LAST_REQUEST: TokioMutex<Option<Instant>> = TokioMutex::const_new(None);
 
-pub async fn get_daily_rank(
-    http: &reqwest::Client,
-    api_key_opt: Option<&str>,
-    pp: i32,
-) -> Option<i32> {
+pub async fn get_daily_rank(http: &reqwest::Client, api_key_opt: Option<&str>, pp: i32) -> Option<i32> {
     let api_key = api_key_opt?;
     if api_key.trim().is_empty() || pp <= 0 {
         return None;
@@ -643,8 +609,7 @@ pub async fn get_daily_rank(
 }
 
 type CountryRankCacheMap = HashMap<(String, i32), (Instant, Option<i32>)>;
-static COUNTRY_RANK_CACHE: TokioMutex<Option<CountryRankCacheMap>> =
-    TokioMutex::const_new(None);
+static COUNTRY_RANK_CACHE: TokioMutex<Option<CountryRankCacheMap>> = TokioMutex::const_new(None);
 static OAUTH_TOKEN: TokioMutex<Option<(String, Instant)>> = TokioMutex::const_new(None);
 
 async fn fetch_oauth_token(
@@ -672,10 +637,7 @@ async fn fetch_oauth_token(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        crate::logger::warn(&format!(
-            "osu! OAuth token request failed (HTTP {}): {}",
-            status, body
-        ));
+        crate::logger::warn(&format!("osu! OAuth token request failed (HTTP {}): {}", status, body));
         return None;
     }
 
@@ -688,12 +650,7 @@ async fn fetch_oauth_token(
     Some(access_token)
 }
 
-async fn fetch_country_placement(
-    http: &reqwest::Client,
-    token: &str,
-    country: &str,
-    pp: i32,
-) -> Option<i32> {
+async fn fetch_country_placement(http: &reqwest::Client, token: &str, country: &str, pp: i32) -> Option<i32> {
     let fetch_page = |page: i64| {
         let http = http.clone();
         let auth = format!("Bearer {}", token);
@@ -710,10 +667,7 @@ async fn fetch_country_placement(
             if !resp.status().is_success() {
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
-                crate::logger::warn(&format!(
-                    "osu! API rankings request failed (HTTP {}): {}",
-                    status, text
-                ));
+                crate::logger::warn(&format!("osu! API rankings request failed (HTTP {}): {}", status, text));
                 return None;
             }
             resp.json::<serde_json::Value>().await.ok()
@@ -741,11 +695,7 @@ async fn fetch_country_placement(
             break;
         }
         let mid = (low + high) / 2;
-        let data = if mid == 1 {
-            Some(first.clone())
-        } else {
-            fetch_page(mid).await
-        };
+        let data = if mid == 1 { Some(first.clone()) } else { fetch_page(mid).await };
         let entries = match data.as_ref().and_then(|d| d.get("ranking")).and_then(|r| r.as_array()) {
             Some(e) if !e.is_empty() => e,
             _ => break,
@@ -765,11 +715,7 @@ async fn fetch_country_placement(
             let entry_pp = entry.get("pp").and_then(|v| v.as_f64()).unwrap_or(0.0);
             if entry_pp <= pp_f {
                 let calculated_rank = ((candidate_page - 1) * size + idx as i64 + 1) as i32;
-                let rank = entry
-                    .get("country_rank")
-                    .and_then(|v| v.as_i64())
-                    .map(|r| r as i32)
-                    .unwrap_or(calculated_rank);
+                let rank = entry.get("country_rank").and_then(|v| v.as_i64()).map(|r| r as i32).unwrap_or(calculated_rank);
                 return Some(rank);
             }
         }
@@ -782,12 +728,7 @@ async fn fetch_country_placement(
     None
 }
 
-pub async fn get_country_rank(
-    http: &reqwest::Client,
-    country: &str,
-    pp: i32,
-    creds: Option<(u64, &str)>,
-) -> Option<i32> {
+pub async fn get_country_rank(http: &reqwest::Client, country: &str, pp: i32, creds: Option<(u64, &str)>) -> Option<i32> {
     let country_trimmed = country.trim();
     if country_trimmed.is_empty() || pp <= 0 {
         return None;
@@ -797,12 +738,7 @@ pub async fn get_country_rank(
         (id, sec.trim().trim_matches('"').trim_matches('\'').to_string())
     } else {
         let client_id_str = std::env::var("OSU_CLIENT_ID").ok()?;
-        let client_id: u64 = client_id_str
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .parse()
-            .ok()?;
+        let client_id: u64 = client_id_str.trim().trim_matches('"').trim_matches('\'').parse().ok()?;
         let client_secret = std::env::var("OSU_CLIENT_SECRET").ok()?;
         let client_secret = client_secret.trim().trim_matches('"').trim_matches('\'').to_string();
         (client_id, client_secret)
@@ -853,17 +789,7 @@ pub async fn get_country_rank(
 }
 
 fn score_grade(s: &db::ScoreWithBeatmap) -> &'static str {
-    let g = crate::utils::get_grade(
-        s.mode as u8,
-        s.n300,
-        s.n100,
-        s.n50,
-        s.ngeki,
-        s.nkatu,
-        s.nmiss,
-        s.mods,
-        s.acc,
-    );
+    let g = crate::utils::get_grade(s.mode as u8, s.n300, s.n100, s.n50, s.ngeki, s.nkatu, s.nmiss, s.mods, s.acc);
     match g {
         "SSH" => "XH",
         "SS" => "X",
@@ -907,14 +833,7 @@ fn to_public_score(s: &db::ScoreWithBeatmap) -> PublicScore {
     }
 }
 
-pub async fn handle(
-    state: SharedState,
-    action: &str,
-    params: &HashMap<String, String>,
-    method: &Method,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+pub async fn handle(state: SharedState, action: &str, params: &HashMap<String, String>, method: &Method, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     match (method, action) {
         (&Method::GET, "session") => handle_session(state, headers).await,
         (&Method::GET, "profile") => handle_profile(state, params).await,
@@ -934,8 +853,7 @@ pub async fn handle(
 }
 
 async fn handle_medals_catalog() -> Response {
-    json_ok(crate::types::medal::get_all_medals())
-        .with_header("Cache-Control", "public, max-age=86400")
+    json_ok(crate::types::medal::get_all_medals()).with_header("Cache-Control", "public, max-age=86400")
 }
 
 async fn handle_profile(state: SharedState, params: &HashMap<String, String>) -> Response {
@@ -948,10 +866,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let conn = state_guard.db.lock().await;
 
     if !db::profile_exists(&conn, name).unwrap_or(false) {
-        return json_error(
-            StatusCode::NOT_FOUND,
-            "This local profile does not exist. Sign in with its username to create it.",
-        );
+        return json_error(StatusCode::NOT_FOUND, "This local profile does not exist. Sign in with its username to create it.");
     }
 
     let mut details = db::get_profile_details(&conn, name).unwrap_or_default();
@@ -965,17 +880,10 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let is_active = state_guard.player.as_ref().is_some_and(|p| p.name == name);
     let http_client = state_guard.http.clone();
     let daily_key = state_guard.config.osu_daily_api_key.clone();
-    let oauth_creds = match (
-        &state_guard.config.osu_client_id,
-        &state_guard.config.osu_client_secret,
-    ) {
-        (Some(cid), Some(sec)) => cid
-            .trim()
-            .trim_matches('"')
-            .trim_matches('\'')
-            .parse::<u64>()
-            .ok()
-            .map(|id| (id, sec.trim().trim_matches('"').trim_matches('\'').to_string())),
+    let oauth_creds = match (&state_guard.config.osu_client_id, &state_guard.config.osu_client_secret) {
+        (Some(cid), Some(sec)) => {
+            cid.trim().trim_matches('"').trim_matches('\'').parse::<u64>().ok().map(|id| (id, sec.trim().trim_matches('"').trim_matches('\'').to_string()))
+        }
         _ => None,
     };
 
@@ -1001,10 +909,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     drop(state_guard);
 
     // Filter scores by mode:
-    let (rx_bit, ap_bit) = (
-        Mods::RELAX.bits(),
-        Mods::AUTOPILOT.bits(),
-    );
+    let (rx_bit, ap_bit) = (Mods::RELAX.bits(), Mods::AUTOPILOT.bits());
 
     let target_ruleset: Option<i32> = match mode_str {
         "taiko" | "1" => Some(1),
@@ -1031,10 +936,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         .collect();
 
     // Ranked plays for PP, accuracy, and grades
-    let mut ranked: Vec<&&db::ScoreWithBeatmap> = mode_scores
-        .iter()
-        .filter(|s| s.bmap_status == "ranked" || s.bmap_status == "approved")
-        .collect();
+    let mut ranked: Vec<&&db::ScoreWithBeatmap> = mode_scores.iter().filter(|s| s.bmap_status == "ranked" || s.bmap_status == "approved").collect();
     ranked.sort_by(|a, b| b.pp.partial_cmp(&a.pp).unwrap_or(std::cmp::Ordering::Equal));
 
     // Deduplicate top plays by md5 taking best PP per map
@@ -1065,13 +967,8 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     let calculated_acc = if weight_sum > 0.0 { weighted_acc / weight_sum } else { 0.0 };
 
     // Grade tallies across deduplicated ranked plays
-    let mut grade_counts: HashMap<String, i32> = [
-        ("XH".to_string(), 0),
-        ("X".to_string(), 0),
-        ("SH".to_string(), 0),
-        ("S".to_string(), 0),
-        ("A".to_string(), 0),
-    ].into_iter().collect();
+    let mut grade_counts: HashMap<String, i32> =
+        [("XH".to_string(), 0), ("X".to_string(), 0), ("SH".to_string(), 0), ("S".to_string(), 0), ("A".to_string(), 0)].into_iter().collect();
 
     let mut seen_for_grades = std::collections::HashSet::new();
     for s in &ranked {
@@ -1113,12 +1010,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
     };
 
     let now_ts = now_secs() as i64;
-    let recent_24h_public: Vec<PublicScore> = mode_scores
-        .iter()
-        .filter(|s| s.time >= now_ts - 86400)
-        .take(100)
-        .map(|s| to_public_score(s))
-        .collect();
+    let recent_24h_public: Vec<PublicScore> = mode_scores.iter().filter(|s| s.time >= now_ts - 86400).take(100).map(|s| to_public_score(s)).collect();
 
     let last_play = mode_scores.first().map(|s| s.time);
     let first_play = scores.iter().map(|s| s.time).filter(|&t| t > 0).min();
@@ -1129,13 +1021,8 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
         let entry = map_counts.entry(&s.md5).or_insert((0, s));
         entry.0 += 1;
     }
-    let mut most_played: Vec<MostPlayedEntry> = map_counts
-        .into_iter()
-        .map(|(_, (count, rep))| MostPlayedEntry {
-            count,
-            beatmap: to_public_score(rep).beatmap,
-        })
-        .collect();
+    let mut most_played: Vec<MostPlayedEntry> =
+        map_counts.into_iter().map(|(_, (count, rep))| MostPlayedEntry { count, beatmap: to_public_score(rep).beatmap }).collect();
     most_played.sort_by_key(|a| std::cmp::Reverse(a.count));
     most_played.truncate(100);
 
@@ -1183,13 +1070,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
 
     let global_rank = get_daily_rank(&http_client, daily_key.as_deref(), calculated_pp).await;
     let country_rank = if (mode_str == "vn" || mode_str == "osu" || mode_str == "0") && !effective_country.is_empty() && calculated_pp > 0 {
-        get_country_rank(
-            &http_client,
-            &effective_country,
-            calculated_pp,
-            oauth_creds.as_ref().map(|(id, sec)| (*id, sec.as_str())),
-        )
-        .await
+        get_country_rank(&http_client, &effective_country, calculated_pp, oauth_creds.as_ref().map(|(id, sec)| (*id, sec.as_str()))).await
     } else {
         None
     };
@@ -1210,10 +1091,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
                 highest.updated_at = today;
             }
         } else {
-            rank_highest = Some(crate::db::RankHighest {
-                rank: current_rank,
-                updated_at: today,
-            });
+            rank_highest = Some(crate::db::RankHighest { rank: current_rank, updated_at: today });
         }
     }
     let user_medals = db::get_user_medals(&conn, name).unwrap_or_default();
@@ -1268,10 +1146,7 @@ async fn handle_profile(state: SharedState, params: &HashMap<String, String>) ->
 
 async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let mut state_guard = state.write().await;
 
@@ -1283,11 +1158,7 @@ async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Respo
         None => {
             let new_token = generate_token();
             let new_csrf = generate_token();
-            let new_session = WebSession {
-                csrf_token: new_csrf.clone(),
-                username: None,
-                expires: now + SESSION_AGE_SECS,
-            };
+            let new_session = WebSession { csrf_token: new_csrf.clone(), username: None, expires: now + SESSION_AGE_SECS };
             state_guard.web_sessions.insert(new_token.clone(), new_session);
             (new_token, new_csrf, None, true)
         }
@@ -1309,20 +1180,10 @@ async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Respo
 
     drop(state_guard);
 
-    let mut resp = json_ok(&SessionResponse {
-        csrf: csrf_token,
-        user: username,
-        profiles,
-        active,
-        default,
-        avatar_version,
-    });
+    let mut resp = json_ok(&SessionResponse { csrf: csrf_token, user: username, profiles, active, default, avatar_version });
 
     if set_cookie {
-        let cookie_str = format!(
-            "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
-            SESSION_COOKIE_NAME, token, SESSION_AGE_SECS
-        );
+        let cookie_str = format!("{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}", SESSION_COOKIE_NAME, token, SESSION_AGE_SECS);
         resp = resp.with_header("Set-Cookie", &cookie_str);
     }
 
@@ -1331,10 +1192,7 @@ async fn handle_session(state: SharedState, headers: &hyper::HeaderMap) -> Respo
 
 async fn handle_login(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1380,10 +1238,7 @@ async fn handle_login(state: SharedState, headers: &hyper::HeaderMap, body: &[u8
 
 async fn handle_logout(state: SharedState, headers: &hyper::HeaderMap) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1411,9 +1266,7 @@ async fn handle_logout(state: SharedState, headers: &hyper::HeaderMap) -> Respon
 
 async fn serve_guest_avatar(state: &SharedState) -> Response {
     if let Some(asset) = EmbeddedAssets::get("vendor/avatar-guest@2x.01495bc4.png") {
-        return Response::image(asset.data.to_vec(), "png")
-            .with_header("Cache-Control", "no-cache, must-revalidate")
-            .with_header("Pragma", "no-cache");
+        return Response::image(asset.data.to_vec(), "png").with_header("Cache-Control", "no-cache, must-revalidate").with_header("Pragma", "no-cache");
     }
 
     let state_read = state.read().await;
@@ -1445,9 +1298,7 @@ async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> 
     if let Some(path) = utils::is_path(&pfp) {
         if let Ok(bytes) = tokio::fs::read(&path).await {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
-            return Response::image(bytes, ext)
-                .with_header("Cache-Control", "no-cache, must-revalidate")
-                .with_header("Pragma", "no-cache");
+            return Response::image(bytes, ext).with_header("Cache-Control", "no-cache, must-revalidate").with_header("Pragma", "no-cache");
         }
     } else if pfp.starts_with("http://") || pfp.starts_with("https://") {
         let state_read = state.read().await;
@@ -1466,9 +1317,7 @@ async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> 
                     } else {
                         "png"
                     };
-                    return Response::image(bytes.to_vec(), ext)
-                        .with_header("Cache-Control", "no-cache, must-revalidate")
-                        .with_header("Pragma", "no-cache");
+                    return Response::image(bytes.to_vec(), ext).with_header("Cache-Control", "no-cache, must-revalidate").with_header("Pragma", "no-cache");
                 }
             }
         }
@@ -1477,16 +1326,9 @@ async fn handle_avatar(state: SharedState, params: &HashMap<String, String>) -> 
     serve_guest_avatar(&state).await
 }
 
-async fn handle_settings(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+async fn handle_settings(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1534,16 +1376,10 @@ async fn handle_settings(
             let conn = s_read.db.lock().await;
             let exists = db::profile_exists(&conn, &valid_name).unwrap_or(false);
             if exists {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("The username '{}' is already taken.", valid_name),
-                );
+                return json_error(StatusCode::BAD_REQUEST, &format!("The username '{}' is already taken.", valid_name));
             }
             if let Err(e) = db::rename_profile(&conn, &current_user, &valid_name) {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Failed to rename profile: {}", e),
-                );
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to rename profile: {}", e));
             }
             drop(conn);
             drop(s_read);
@@ -1581,10 +1417,7 @@ async fn handle_settings(
         let file_path = avatar_dir.join(&filename);
 
         if let Err(e) = tokio::fs::write(&file_path, &img_bytes).await {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to save avatar image: {}", e),
-            );
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to save avatar image: {}", e));
         }
 
         let s_read = state.read().await;
@@ -1617,10 +1450,7 @@ async fn handle_settings(
         let s_read = state.read().await;
         let conn = s_read.db.lock().await;
         if let Err(e) = db::save_profile_details(&conn, &target_username, &details) {
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Failed to save profile details: {}", e),
-            );
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to save profile details: {}", e));
         }
         drop(conn);
         drop(s_read);
@@ -1659,16 +1489,9 @@ async fn handle_settings(
     json_ok(&LoginResponse { name: target_username })
 }
 
-async fn handle_delete_score(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+async fn handle_delete_score(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1702,18 +1525,12 @@ async fn handle_delete_score(
         let deleted = match db::delete_score_by_id(&conn, &current_user, payload.id) {
             Ok(d) => d,
             Err(e) => {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Database error deleting score: {}", e),
-                );
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Database error deleting score: {}", e));
             }
         };
 
         if !deleted {
-            return json_error(
-                StatusCode::NOT_FOUND,
-                "Score not found or not owned by your current profile.",
-            );
+            return json_error(StatusCode::NOT_FOUND, "Score not found or not owned by your current profile.");
         }
 
         let _ = db::decrement_playcount(&conn, &current_user);
@@ -1729,8 +1546,7 @@ async fn handle_delete_score(
     }
 
     // Recalculate profile PP, accuracy, total score, and osudaily rank
-    let (_recalc_count, new_pp, new_acc) =
-        crate::handlers::banchobot::recalculate_profile(&state, &current_user).await;
+    let (_recalc_count, new_pp, new_acc) = crate::handlers::banchobot::recalculate_profile(&state, &current_user).await;
 
     // If player is currently online in-game, immediately broadcast updated stats
     let mut s_write = state.write().await;
@@ -1783,9 +1599,7 @@ async fn handle_score_replay(state: SharedState, params: &HashMap<String, String
     let safe_title: String = title.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == ' ' || *c == '-').collect();
     let safe_version: String = version.chars().filter(|c| c.is_alphanumeric() || *c == '_' || *c == ' ' || *c == '-').collect();
 
-    let mods_str = score.mods_str.unwrap_or_else(|| {
-        Mods::from_bits_truncate(score.mods).short_name()
-    });
+    let mods_str = score.mods_str.unwrap_or_else(|| Mods::from_bits_truncate(score.mods).short_name());
 
     let filename = format!("{safe_player} - {safe_artist} - {safe_title} [{safe_version}] ({mods_str}).osr");
 
@@ -1806,16 +1620,9 @@ struct PinScoreResponse {
     pinned_scores: Vec<String>,
 }
 
-async fn handle_pin_score(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+async fn handle_pin_score(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1862,22 +1669,12 @@ async fn handle_pin_score(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to update pinned scores: {}", e));
     }
 
-    json_ok(&PinScoreResponse {
-        pinned: is_pinned,
-        pinned_scores: details.pinned_scores,
-    })
+    json_ok(&PinScoreResponse { pinned: is_pinned, pinned_scores: details.pinned_scores })
 }
 
-async fn handle_import_official(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+async fn handle_import_official(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -1945,10 +1742,7 @@ async fn handle_import_official(
         let html = match res.text().await {
             Ok(t) => t,
             Err(e) => {
-                return json_error(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("Failed to read response from osu.ppy.sh: {}", e),
-                );
+                return json_error(StatusCode::BAD_GATEWAY, &format!("Failed to read response from osu.ppy.sh: {}", e));
             }
         };
         match parse_official_userpage_html(&html) {
@@ -1962,9 +1756,7 @@ async fn handle_import_official(
         let api_url = format!("https://osu.ppy.sh/api/get_user?k={}&u={}&type={}", key, encoded_query, u_type);
         let api_res = http_client.get(&api_url).send().await;
         let user_opt = match api_res {
-            Ok(r) if r.status().is_success() => {
-                r.json::<Vec<serde_json::Value>>().await.ok().and_then(|v| v.into_iter().next())
-            }
+            Ok(r) if r.status().is_success() => r.json::<Vec<serde_json::Value>>().await.ok().and_then(|v| v.into_iter().next()),
             _ => None,
         };
         match user_opt {
@@ -1984,15 +1776,9 @@ async fn handle_import_official(
             }
             None => {
                 if res.status() == StatusCode::FORBIDDEN {
-                    return json_error(
-                        StatusCode::BAD_GATEWAY,
-                        "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Configure OSU_API_KEY in .env.",
-                    );
+                    return json_error(StatusCode::BAD_GATEWAY, "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Configure OSU_API_KEY in .env.");
                 }
-                return json_error(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("osu.ppy.sh returned status {}.", res.status()),
-                );
+                return json_error(StatusCode::BAD_GATEWAY, &format!("osu.ppy.sh returned status {}.", res.status()));
             }
         }
     } else {
@@ -2002,10 +1788,7 @@ async fn handle_import_official(
                 "osu.ppy.sh returned 403 Forbidden (Cloudflare Challenge). Set OSU_API_KEY in your .env file or enter your numeric osu! User ID.",
             );
         }
-        return json_error(
-            StatusCode::BAD_GATEWAY,
-            &format!("osu.ppy.sh returned status {}.", res.status()),
-        );
+        return json_error(StatusCode::BAD_GATEWAY, &format!("osu.ppy.sh returned status {}.", res.status()));
     };
 
     let mut current_details = {
@@ -2053,12 +1836,7 @@ async fn handle_import_official(
             };
 
             if !final_av_url.contains("avatar-guest") {
-                if let Ok(av_res) = http_client
-                    .get(&final_av_url)
-                    .timeout(std::time::Duration::from_secs(10))
-                    .send()
-                    .await
-                {
+                if let Ok(av_res) = http_client.get(&final_av_url).timeout(std::time::Duration::from_secs(10)).send().await {
                     if av_res.status().is_success() {
                         if let Ok(bytes) = av_res.bytes().await {
                             if let Ok(ext) = validate_image_format_and_dimensions(&bytes) {
@@ -2081,10 +1859,7 @@ async fn handle_import_official(
 
         if details_updated {
             if let Err(e) = db::save_profile_details(&conn, &current_user, &current_details) {
-                return json_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("Failed to save profile details: {}", e),
-                );
+                return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Failed to save profile details: {}", e));
             }
         }
 
@@ -2108,16 +1883,9 @@ async fn handle_import_official(
             }
         }
 
-        let country_byte = if !current_details.country.is_empty() {
-            crate::utils::country_code_to_byte(&current_details.country)
-        } else {
-            0
-        };
+        let country_byte = if !current_details.country.is_empty() { crate::utils::country_code_to_byte(&current_details.country) } else { 0 };
         if country_byte != 0 {
-            let _ = conn.execute(
-                "UPDATE profiles SET country = ?1 WHERE name = ?2",
-                rusqlite::params![country_byte, current_user],
-            );
+            let _ = conn.execute("UPDATE profiles SET country = ?1 WHERE name = ?2", rusqlite::params![country_byte, current_user]);
         }
 
         drop(conn);
@@ -2144,17 +1912,9 @@ async fn handle_import_official(
     }
 
     let message = if payload.apply {
-        format!(
-            "Successfully imported and applied official profile for '{}' (#{id})",
-            parsed.username,
-            id = parsed.id
-        )
+        format!("Successfully imported and applied official profile for '{}' (#{id})", parsed.username, id = parsed.id)
     } else {
-        format!(
-            "Successfully fetched official profile for '{}' (#{id})",
-            parsed.username,
-            id = parsed.id
-        )
+        format!("Successfully fetched official profile for '{}' (#{id})", parsed.username, id = parsed.id)
     };
 
     json_ok(&ImportOfficialResponse {
@@ -2169,15 +1929,9 @@ async fn handle_import_official(
     })
 }
 
-async fn handle_import_scores_status(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-) -> Response {
+async fn handle_import_scores_status(state: SharedState, headers: &hyper::HeaderMap) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -2196,22 +1950,14 @@ async fn handle_import_scores_status(
         _ => return json_error(StatusCode::UNAUTHORIZED, "Sign in to check import status."),
     };
 
-    let progress = crate::services::score_import::get_import_progress(&current_user)
-        .unwrap_or_default();
+    let progress = crate::services::score_import::get_import_progress(&current_user).unwrap_or_default();
 
     json_ok(&progress)
 }
 
-async fn handle_import_scores(
-    state: SharedState,
-    headers: &hyper::HeaderMap,
-    body: &[u8],
-) -> Response {
+async fn handle_import_scores(state: SharedState, headers: &hyper::HeaderMap, body: &[u8]) -> Response {
     let now = now_secs();
-    let cookie_val = headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
+    let cookie_val = headers.get("cookie").and_then(|v| v.to_str().ok()).and_then(|c| extract_cookie(c, SESSION_COOKIE_NAME));
 
     let token = match cookie_val {
         Some(t) => t.to_string(),
@@ -2282,11 +2028,7 @@ mod tests {
 
     #[test]
     fn test_can_write_verification() {
-        let session = WebSession {
-            csrf_token: "csrf_secret_123".to_string(),
-            username: Some("Alice".to_string()),
-            expires: 9999999999,
-        };
+        let session = WebSession { csrf_token: "csrf_secret_123".to_string(), username: Some("Alice".to_string()), expires: 9999999999 };
 
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("127.0.0.1:5000"));
@@ -2373,11 +2115,14 @@ mod tests {
 
         // Insert an expired session
         let expired_token = "expired_token_123";
-        app_state.web_sessions.insert(expired_token.to_string(), WebSession {
-            csrf_token: "old_csrf".to_string(),
-            username: Some("OldUser".to_string()),
-            expires: 100, // expired long ago
-        });
+        app_state.web_sessions.insert(
+            expired_token.to_string(),
+            WebSession {
+                csrf_token: "old_csrf".to_string(),
+                username: Some("OldUser".to_string()),
+                expires: 100, // expired long ago
+            },
+        );
 
         let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
 
@@ -2578,8 +2323,7 @@ mod tests {
         let valid_png = [
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // magic
             0x00, 0x00, 0x00, 0x0D, // IHDR chunk length 13
-            b'I', b'H', b'D', b'R',
-            0x00, 0x00, 0x00, 0x01, // width: 1
+            b'I', b'H', b'D', b'R', 0x00, 0x00, 0x00, 0x01, // width: 1
             0x00, 0x00, 0x00, 0x01, // height: 1
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
@@ -2587,10 +2331,7 @@ mod tests {
 
         // Oversized PNG (>4096)
         let oversized_png = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D,
-            b'I', b'H', b'D', b'R',
-            0x00, 0x00, 0x10, 0x01, // width: 4097
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D', b'R', 0x00, 0x00, 0x10, 0x01, // width: 4097
             0x00, 0x00, 0x00, 0x01, // height: 1
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
@@ -2610,11 +2351,7 @@ mod tests {
     #[test]
     fn test_parse_and_validate_avatar_data_url() {
         let valid_png = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D,
-            b'I', b'H', b'D', b'R',
-            0x00, 0x00, 0x00, 0x02,
-            0x00, 0x00, 0x00, 0x02,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D', b'R', 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x02,
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
         let b64 = base64::engine::general_purpose::STANDARD.encode(valid_png);
@@ -2698,11 +2435,7 @@ mod tests {
 
         // 3. Update settings: rename to NewName, set country to DE, set details, upload avatar
         let valid_png = [
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            0x00, 0x00, 0x00, 0x0D,
-            b'I', b'H', b'D', b'R',
-            0x00, 0x00, 0x00, 0x10,
-            0x00, 0x00, 0x00, 0x10,
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, b'I', b'H', b'D', b'R', 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10,
             0x08, 0x06, 0x00, 0x00, 0x00,
         ];
         let avatar_b64 = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(valid_png));
@@ -2718,7 +2451,8 @@ mod tests {
                 "devices": ["Tablet", "Keyboard"],
                 "section_order": ["me", "top-ranks", "historical", "beatmaps", "medals", "recent-activity"]
             }
-        }).to_string();
+        })
+        .to_string();
 
         let settings_resp = handle_settings(shared_state.clone(), &login_headers, settings_body.as_bytes()).await;
         assert_eq!(settings_resp.status, StatusCode::OK);
@@ -2841,11 +2575,9 @@ mod tests {
             let remaining = crate::db::get_player_scores_with_beatmaps(&conn, "ScoreUser").unwrap();
             assert!(remaining.is_empty(), "Score should be deleted from scores table");
 
-            let archived_count: i32 = conn.query_row(
-                "SELECT COUNT(*) FROM deleted_scores WHERE player_name = 'ScoreUser' AND original_id = ?1",
-                rusqlite::params![s1_id],
-                |r| r.get(0),
-            ).unwrap();
+            let archived_count: i32 = conn
+                .query_row("SELECT COUNT(*) FROM deleted_scores WHERE player_name = 'ScoreUser' AND original_id = ?1", rusqlite::params![s1_id], |r| r.get(0))
+                .unwrap();
             assert_eq!(archived_count, 1, "Score should be archived in deleted_scores table");
         }
 
@@ -2860,14 +2592,8 @@ mod tests {
     #[test]
     fn test_decode_html_entities() {
         assert_eq!(decode_html_entities(""), "");
-        assert_eq!(
-            decode_html_entities("&quot;hello&quot; &amp; &lt;world&gt; &#039;test&#39; &apos;123&apos;"),
-            "\"hello\" & <world> 'test' '123'"
-        );
-        assert_eq!(
-            decode_html_entities("normal text without entities"),
-            "normal text without entities"
-        );
+        assert_eq!(decode_html_entities("&quot;hello&quot; &amp; &lt;world&gt; &#039;test&#39; &apos;123&apos;"), "\"hello\" & <world> 'test' '123'");
+        assert_eq!(decode_html_entities("normal text without entities"), "normal text without entities");
         assert_eq!(decode_html_entities("trailing & and &unknown; entity"), "trailing & and &unknown; entity");
     }
 
@@ -3058,7 +2784,8 @@ mod tests {
             "query": "peppy",
             "modes": ["osu"],
             "types": ["top"]
-        }).to_string();
+        })
+        .to_string();
         let resp_unauth = handle_import_scores(shared_state.clone(), &empty_headers, valid_payload.as_bytes()).await;
         assert_eq!(resp_unauth.status, StatusCode::UNAUTHORIZED);
 
@@ -3094,7 +2821,8 @@ mod tests {
             "query": "   ",
             "modes": ["osu"],
             "types": ["top"]
-        }).to_string();
+        })
+        .to_string();
         let resp_empty_query = handle_import_scores(shared_state.clone(), &login_headers, empty_query_payload.as_bytes()).await;
         assert_eq!(resp_empty_query.status, StatusCode::BAD_REQUEST);
     }
@@ -3105,10 +2833,7 @@ mod tests {
         crate::db::init_db(&conn).unwrap();
         crate::db::ensure_profile(&conn, "CountryFallbackUser").unwrap();
 
-        let config = crate::types::config::Config {
-            country: Some("DE".to_string()),
-            ..Default::default()
-        };
+        let config = crate::types::config::Config { country: Some("DE".to_string()), ..Default::default() };
         let app_state = AppState::new(conn, config);
         let shared_state = std::sync::Arc::new(tokio::sync::RwLock::new(app_state));
 
@@ -3122,4 +2847,3 @@ mod tests {
         assert_eq!(data.details.country, "DE");
     }
 }
-

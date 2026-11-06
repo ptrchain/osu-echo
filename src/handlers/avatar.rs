@@ -42,12 +42,7 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
         return Response::image(s.default_avatar.clone(), "png");
     }
 
-    let player_name = s
-        .player
-        .as_ref()
-        .map(|p| p.name.clone())
-        .or_else(|| s.pending_login_name.clone())
-        .or_else(|| s.config.osu_username.clone());
+    let player_name = s.player.as_ref().map(|p| p.name.clone()).or_else(|| s.pending_login_name.clone()).or_else(|| s.config.osu_username.clone());
 
     let avatar_url = if let Some(ref name) = player_name {
         let db_conn = s.db.lock().await;
@@ -64,9 +59,7 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
-                return Response::image(bytes, ext)
-                    .with_header("Cache-Control", "no-cache, must-revalidate")
-                    .with_header("Pragma", "no-cache");
+                return Response::image(bytes, ext).with_header("Cache-Control", "no-cache, must-revalidate").with_header("Pragma", "no-cache");
             }
             Err(_) => return Response::image(s.default_avatar.clone(), "png"),
         }

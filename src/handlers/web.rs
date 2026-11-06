@@ -343,12 +343,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
     let (current_mode, http, db, config) = {
         let s = state.read().await;
-        (
-            s.mode,
-            s.http.clone(),
-            s.db.clone(),
-            s.config.clone(),
-        )
+        (s.mode, s.http.clone(), s.db.clone(), s.config.clone())
     };
 
     let status = api_to_server_status(bmap.approved);
@@ -366,13 +361,15 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
 
         let cached_scores = {
             let s = state.read().await;
-            s.bancho_score_cache.get(&cache_key).and_then(|(instant, scores)| {
-                if instant.elapsed() < std::time::Duration::from_secs(180) {
-                    Some(scores.clone())
-                } else {
-                    None
-                }
-            })
+            s.bancho_score_cache.get(&cache_key).and_then(
+                |(instant, scores)| {
+                    if instant.elapsed() < std::time::Duration::from_secs(180) {
+                        Some(scores.clone())
+                    } else {
+                        None
+                    }
+                },
+            )
         };
 
         let bancho_scores = if let Some(cs) = cached_scores {
@@ -559,9 +556,7 @@ async fn leaderboard(state: Arc<RwLock<AppState>>, params: &std::collections::Ha
                     lb.scores.remove(pos);
                 }
             }
-        } else if rank_type == LeaderboardTypes::Friends
-            && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name))
-        {
+        } else if rank_type == LeaderboardTypes::Friends && !lb.scores.iter().any(|s| s.username.eq_ignore_ascii_case(&player_name)) {
             lb.scores.push(entry_for_list);
             lb.scores.sort_by_key(|a| std::cmp::Reverse(a.score));
         }
@@ -628,13 +623,7 @@ struct CatboyBeatmapSet {
     children_beatmaps: Option<Vec<CatboyBeatmap>>,
 }
 
-async fn search_catboy(
-    http: &reqwest::Client,
-    query: &str,
-    mode: i32,
-    ranking_status: i32,
-    page: i32,
-) -> Option<Vec<u8>> {
+async fn search_catboy(http: &reqwest::Client, query: &str, mode: i32, ranking_status: i32, page: i32) -> Option<Vec<u8>> {
     let mut url = reqwest::Url::parse("https://catboy.best/api/search").ok()?;
     {
         let mut pairs = url.query_pairs_mut();
@@ -690,12 +679,7 @@ async fn search_catboy(
             })
             .collect();
 
-        let last_updated = set
-            .last_update
-            .unwrap_or_else(|| "2020-01-01 00:00:00".to_string())
-            .replace('T', " ")
-            .trim_end_matches('Z')
-            .to_string();
+        let last_updated = set.last_update.unwrap_or_else(|| "2020-01-01 00:00:00".to_string()).replace('T', " ").trim_end_matches('Z').to_string();
 
         let ranked = set.ranked_status;
 
@@ -778,11 +762,7 @@ pub async fn handle_download(state: Arc<RwLock<AppState>>, setid: i64, no_video:
         s.http.clone()
     };
 
-    let catboy_url = if no_video {
-        format!("https://catboy.best/d/{}n", setid)
-    } else {
-        format!("https://catboy.best/d/{}", setid)
-    };
+    let catboy_url = if no_video { format!("https://catboy.best/d/{}n", setid) } else { format!("https://catboy.best/d/{}", setid) };
 
     let catboy_resp = http.get(&catboy_url).send().await;
     if let Ok(resp) = catboy_resp {
@@ -1021,7 +1001,10 @@ mod tests {
 
         let pkts = packets::split_packets(&p.queue);
         assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoNotification as u16), "Failed plays must NOT send notification popups to the player");
-        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Failed plays must queue ChoUserStats to update in-game HUD immediately");
+        assert!(
+            pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16),
+            "Failed plays must queue ChoUserStats to update in-game HUD immediately"
+        );
         assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoSendMessage as u16), "Failed plays must NOT send messages to #recent");
     }
 
@@ -1327,10 +1310,7 @@ mod tests {
         };
         db::insert_score(&conn, &score_main, "ranked").unwrap();
 
-        let config = crate::types::config::Config {
-            pp_leaderboard: true,
-            ..Default::default()
-        };
+        let config = crate::types::config::Config { pp_leaderboard: true, ..Default::default() };
         let mut app_state = AppState::new(conn, config);
         let mut player = crate::types::player::Player::new("MainPlayer".to_string());
         player.userid = 2;
@@ -1543,10 +1523,7 @@ mod tests {
         bmap.approved = 1;
         db::insert_beatmap(&conn, &bmap).unwrap();
 
-        let config = crate::types::config::Config {
-            amount_of_scores_on_lb: 50,
-            ..Default::default()
-        };
+        let config = crate::types::config::Config { amount_of_scores_on_lb: 50, ..Default::default() };
         let mut app_state = AppState::new(conn, config);
 
         // Pre-populate bancho_score_cache for map 8881
@@ -1568,10 +1545,7 @@ mod tests {
             replay_available: "0".to_string(),
             pp: Some(400.0),
         };
-        app_state.bancho_score_cache.insert(
-            (8881, 0, None, 50),
-            (std::time::Instant::now(), vec![dummy_cached_score]),
-        );
+        app_state.bancho_score_cache.insert((8881, 0, None, 50), (std::time::Instant::now(), vec![dummy_cached_score]));
         app_state.player = Some(crate::types::player::Player::new("TestPlayer".to_string()));
 
         let shared_state = Arc::new(RwLock::new(app_state));
@@ -1630,14 +1604,7 @@ mod tests {
 
         let headers = hyper::HeaderMap::new();
         let params = std::collections::HashMap::new();
-        let resp = handle(
-            shared_state,
-            "/osu-submit-modular-selector.php",
-            &params,
-            &hyper::Method::POST,
-            &headers,
-            b"test_body",
-        ).await;
+        let resp = handle(shared_state, "/osu-submit-modular-selector.php", &params, &hyper::Method::POST, &headers, b"test_body").await;
 
         assert_eq!(resp.status, hyper::StatusCode::OK);
         assert_eq!(resp.body, b"error: ban\n");
@@ -1687,14 +1654,7 @@ mod tests {
         params.insert("u".to_string(), "RestrictedLBUser".to_string());
 
         let headers = hyper::HeaderMap::new();
-        let resp = handle(
-            shared_state,
-            "/osu-osz2-getscores.php",
-            &params,
-            &hyper::Method::GET,
-            &headers,
-            b"",
-        ).await;
+        let resp = handle(shared_state, "/osu-osz2-getscores.php", &params, &hyper::Method::GET, &headers, b"").await;
 
         let body_str = String::from_utf8_lossy(&resp.body);
         let lines: Vec<&str> = body_str.lines().collect();
@@ -1824,11 +1784,7 @@ mod tests {
         };
         db::insert_score(&conn, &score, "ranked").unwrap();
 
-        let config = crate::types::config::Config {
-            pp_leaderboard: false,
-            show_pp_for_personal_best: true,
-            ..Default::default()
-        };
+        let config = crate::types::config::Config { pp_leaderboard: false, show_pp_for_personal_best: true, ..Default::default() };
 
         let mut app_state = AppState::new(conn, config);
         app_state.player = Some(crate::types::player::Player::new("PBUser".to_string()));
@@ -1858,4 +1814,3 @@ mod tests {
         assert!(!lb_line.contains("|450|"), "Leaderboard list entry must NOT leak show_pp_pb: got {}", lb_line);
     }
 }
-

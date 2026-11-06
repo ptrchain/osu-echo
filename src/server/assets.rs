@@ -1,7 +1,7 @@
+use crate::server::response::Response;
 use hyper::StatusCode;
 use rust_embed::RustEmbed;
 use std::path::PathBuf;
-use crate::server::response::Response;
 
 #[derive(RustEmbed)]
 #[folder = "website/static/"]
@@ -59,8 +59,7 @@ pub fn serve_asset(path: &str) -> Response {
             .with_header("X-Content-Type-Options", "nosniff");
 
         if is_html || clean == "profile.js" || clean == "profile.css" {
-            resp = resp
-                .with_header("Cache-Control", "no-cache");
+            resp = resp.with_header("Cache-Control", "no-cache");
             if is_html {
                 resp = resp.with_header(
                     "Content-Security-Policy",

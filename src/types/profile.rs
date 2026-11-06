@@ -2,14 +2,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SUPPORTED_DEVICES: &[&str] = &["Mouse", "Keyboard", "Tablet", "Touchscreen", "Controller"];
 
-pub const DEFAULT_SECTIONS: &[&str] = &[
-    "me",
-    "top-ranks",
-    "historical",
-    "beatmaps",
-    "medals",
-    "recent-activity",
-];
+pub const DEFAULT_SECTIONS: &[&str] = &["me", "top-ranks", "historical", "beatmaps", "medals", "recent-activity"];
 
 pub fn default_section_order() -> Vec<String> {
     DEFAULT_SECTIONS.iter().map(|s| s.to_string()).collect()
@@ -124,16 +117,10 @@ mod tests {
         let valid = ProfileDetails::default();
         assert!(valid.validate().is_ok());
 
-        let invalid_about = ProfileDetails {
-            about: "a".repeat(5001),
-            ..Default::default()
-        };
+        let invalid_about = ProfileDetails { about: "a".repeat(5001), ..Default::default() };
         assert!(invalid_about.validate().is_err());
 
-        let invalid_location = ProfileDetails {
-            location: "b".repeat(101),
-            ..Default::default()
-        };
+        let invalid_location = ProfileDetails { location: "b".repeat(101), ..Default::default() };
         assert!(invalid_location.validate().is_err());
 
         let mut invalid_device = ProfileDetails::default();
@@ -145,22 +132,13 @@ mod tests {
         valid_device.devices.push("keyboard".to_string());
         assert!(valid_device.validate().is_ok());
 
-        let invalid_sections = ProfileDetails {
-            section_order: vec!["me".to_string(), "me".to_string()],
-            ..Default::default()
-        };
+        let invalid_sections = ProfileDetails { section_order: vec!["me".to_string(), "me".to_string()], ..Default::default() };
         assert!(invalid_sections.validate().is_err());
 
-        let invalid_country = ProfileDetails {
-            country: "ZZZ".to_string(),
-            ..Default::default()
-        };
+        let invalid_country = ProfileDetails { country: "ZZZ".to_string(), ..Default::default() };
         assert!(invalid_country.validate().is_err());
 
-        let valid_country = ProfileDetails {
-            country: "DE".to_string(),
-            ..Default::default()
-        };
+        let valid_country = ProfileDetails { country: "DE".to_string(), ..Default::default() };
         assert!(valid_country.validate().is_ok());
     }
 }

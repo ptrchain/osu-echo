@@ -129,9 +129,7 @@ impl Score {
         out.extend_from_slice(&20210520i32.to_le_bytes());
         write_osu_string(&self.md5, &mut out);
         write_osu_string(&self.name, &mut out);
-        let replay_md5 = self.replay_md5.clone().unwrap_or_else(|| {
-            format!("{:x}", md5::Md5::digest(&raw_frames))
-        });
+        let replay_md5 = self.replay_md5.clone().unwrap_or_else(|| format!("{:x}", md5::Md5::digest(&raw_frames)));
         write_osu_string(&replay_md5, &mut out);
         out.extend_from_slice(&(self.n300 as i16).to_le_bytes());
         out.extend_from_slice(&(self.n100 as i16).to_le_bytes());

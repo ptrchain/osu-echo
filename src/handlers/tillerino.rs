@@ -309,11 +309,7 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
 
     let is_direct_np = np_info.map_id.is_none() && np_info.set_id.is_none() && np_info.title_hint.is_none();
 
-    let target_map_id = if is_direct_np {
-        player_map_id
-    } else {
-        np_info.map_id
-    };
+    let target_map_id = if is_direct_np { player_map_id } else { np_info.map_id };
 
     let target_set_id = np_info.set_id;
 
@@ -441,13 +437,9 @@ pub async fn handle_np(state: &Arc<RwLock<AppState>>, _player_name: &str, target
     if bmap.is_none() {
         let s = state.read().await;
         if let Some(songs_dir) = utils::resolve_songs_folder(&s.config) {
-            if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(
-                &songs_dir,
-                target_set_id,
-                target_map_id,
-                target_md5.as_deref(),
-                target_hint.as_deref(),
-            ) {
+            if let Some((local_bmap, content)) =
+                utils::find_and_parse_local_osu_file(&songs_dir, target_set_id, target_map_id, target_md5.as_deref(), target_hint.as_deref())
+            {
                 let db_conn = s.db.lock().await;
                 let _ = db::insert_beatmap(&db_conn, &local_bmap);
                 let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
@@ -711,12 +703,7 @@ pub async fn handle_recommend(state: &Arc<RwLock<AppState>>, player_name: &str, 
     }
 
     if candidate_maps.is_empty() {
-        reply(
-            state,
-            target,
-            "No beatmaps available to recommend! Play or select songs in-game, or ensure your osu! Songs folder is accessible.",
-        )
-        .await;
+        reply(state, target, "No beatmaps available to recommend! Play or select songs in-game, or ensure your osu! Songs folder is accessible.").await;
         return;
     }
 
@@ -770,11 +757,7 @@ pub async fn handle_recommend(state: &Arc<RwLock<AppState>>, player_name: &str, 
         format!("https://osu.ppy.sh/s/{}", selected_map.beatmapset_id)
     };
 
-    let mods_part = if breakdown.mods_str.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", breakdown.mods_str)
-    };
+    let mods_part = if breakdown.mods_str.is_empty() { String::new() } else { format!(" {}", breakdown.mods_str) };
 
     let rep = format!(
         "[{} {} - {} [{}]{}] ★ {:.2} | 95%: {:.0}pp | 98%: {:.0}pp | 99%: {:.0}pp | 100%: {:.0}pp",

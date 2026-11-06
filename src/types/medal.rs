@@ -57,12 +57,8 @@ static MEDALS_MAP: OnceLock<HashMap<i32, MedalDefinition>> = OnceLock::new();
 static MEDALS_LIST: OnceLock<Vec<MedalDefinition>> = OnceLock::new();
 
 fn init_medals() -> (&'static [MedalDefinition], &'static HashMap<i32, MedalDefinition>) {
-    let list = MEDALS_LIST.get_or_init(|| {
-        serde_json::from_str::<Vec<MedalDefinition>>(MEDALS_RAW).unwrap_or_default()
-    });
-    let map = MEDALS_MAP.get_or_init(|| {
-        list.iter().map(|m| (m.id, m.clone())).collect()
-    });
+    let list = MEDALS_LIST.get_or_init(|| serde_json::from_str::<Vec<MedalDefinition>>(MEDALS_RAW).unwrap_or_default());
+    let map = MEDALS_MAP.get_or_init(|| list.iter().map(|m| (m.id, m.clone())).collect());
     (list.as_slice(), map)
 }
 

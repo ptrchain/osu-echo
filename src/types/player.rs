@@ -174,10 +174,7 @@ mod tests {
         let mut player = Player::new("AccPlayer".to_string());
         player.mode = 0;
 
-        let scores = vec![
-            dummy_score(0, "map_1", 500.0, 100.0, 1_000_000),
-            dummy_score(0, "map_2", 400.0, 90.0, 800_000),
-        ];
+        let scores = vec![dummy_score(0, "map_1", 500.0, 100.0, 1_000_000), dummy_score(0, "map_2", 400.0, 90.0, 800_000)];
 
         player.calculate_stats(&scores, None, 2);
         let expected_acc = (100.0 * 1.0 + 90.0 * 0.95) / (1.0 + 0.95);

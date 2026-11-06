@@ -7,9 +7,7 @@ use tokio::sync::RwLock;
 #[allow(unused_imports)]
 pub use crate::handlers::banchobot::reply as reply_banchobot;
 #[allow(unused_imports)]
-pub use crate::handlers::tillerino::{
-    calculate_np_breakdown, format_np_reply, parse_np_message, reply as reply_tillerino, NpBreakdown, NpInfo,
-};
+pub use crate::handlers::tillerino::{calculate_np_breakdown, format_np_reply, parse_np_message, reply as reply_tillerino, NpBreakdown, NpInfo};
 
 pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str, message: &str, target: &str) {
     let trimmed = message.trim();
@@ -63,10 +61,7 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
     };
 
     if is_restricted {
-        let is_unrestrict_cmd = matches!(
-            cmd.as_str(),
-            "restrictself" | "restrict" | "unrestrictself" | "unrestrict" | "help" | "commands"
-        );
+        let is_unrestrict_cmd = matches!(cmd.as_str(), "restrictself" | "restrict" | "unrestrictself" | "unrestrict" | "help" | "commands");
 
         if !is_unrestrict_cmd {
             if is_tillerino {
@@ -128,7 +123,9 @@ mod tests {
 
     async fn drain_sent_messages(state: &Arc<RwLock<AppState>>) -> Vec<(String, String)> {
         let mut s = state.write().await;
-        let Some(ref mut p) = s.player else { return Vec::new(); };
+        let Some(ref mut p) = s.player else {
+            return Vec::new();
+        };
         let q = p.clear_queue();
         drop(s);
         let pkts = packets::split_packets(&q);
@@ -181,7 +178,8 @@ mod tests {
         assert_eq!(playing.map_id, Some(98765));
         assert_eq!(playing.mods, Some((Mods::HIDDEN | Mods::DOUBLETIME).bits()));
 
-        let ce = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/1222729#osu/2543274 VINXIS - Sidetracked Day GAMMA]\x01").unwrap();
+        let ce =
+            parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/beatmapsets/1222729#osu/2543274 VINXIS - Sidetracked Day GAMMA]\x01").unwrap();
         assert_eq!(ce.map_id, Some(2543274));
         assert_eq!(ce.set_id, Some(1222729));
         assert_eq!(ce.title_hint.as_deref(), Some("VINXIS - Sidetracked Day GAMMA"));
@@ -729,7 +727,8 @@ mod tests {
         assert_eq!(angle_mods.title_hint.as_deref(), Some("Artist - Song Title [Hard Diff]"));
         assert_eq!(angle_mods.mods, Some((Mods::HIDDEN | Mods::DOUBLETIME).bits()));
 
-        let text_mods = parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/s/12345 Artist - Song Title [Insane]] <Hidden, HardRock>\x01").unwrap();
+        let text_mods =
+            parse_np_message("\x01ACTION is listening to [https://osu.ppy.sh/s/12345 Artist - Song Title [Insane]] <Hidden, HardRock>\x01").unwrap();
         assert_eq!(text_mods.set_id, Some(12345));
         assert_eq!(text_mods.title_hint.as_deref(), Some("Artist - Song Title [Insane]"));
         assert_eq!(text_mods.mods, Some((Mods::HIDDEN | Mods::HARDROCK).bits()));

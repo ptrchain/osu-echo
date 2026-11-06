@@ -5,8 +5,18 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig;
 use tokio_rustls::TlsAcceptor;
 
-const TLS_SUBDOMAINS: &[&str] =
-    &["localhost", "c.localhost", "c4.localhost", "c5.localhost", "c6.localhost", "ce.localhost", "osu.localhost", "b.localhost", "a.localhost", "assets.localhost"];
+const TLS_SUBDOMAINS: &[&str] = &[
+    "localhost",
+    "c.localhost",
+    "c4.localhost",
+    "c5.localhost",
+    "c6.localhost",
+    "ce.localhost",
+    "osu.localhost",
+    "b.localhost",
+    "a.localhost",
+    "assets.localhost",
+];
 
 const CURRENT_CERT_VERSION: &str = "v2_with_b_localhost";
 
@@ -109,11 +119,7 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         let hosts_line = "\r\n127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost # osu-echo\r\n";
 
         // Try direct append first (succeeds if already running with admin privileges)
-        let direct_success = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&hosts_path)
-            .and_then(|mut f| f.write_all(hosts_line.as_bytes()))
-            .is_ok();
+        let direct_success = std::fs::OpenOptions::new().append(true).open(&hosts_path).and_then(|mut f| f.write_all(hosts_line.as_bytes())).is_ok();
 
         if direct_success {
             crate::logger::success("Added localhost subdomains to Windows hosts file.");
@@ -132,7 +138,10 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
             .args([
                 "-NoProfile",
                 "-Command",
-                &format!("Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', \"{}\"", ps_script.replace('"', "\\\"")),
+                &format!(
+                    "Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile', '-Command', \"{}\"",
+                    ps_script.replace('"', "\\\"")
+                ),
             ])
             .output();
 
@@ -144,7 +153,9 @@ pub fn setup_windows_hosts() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             crate::logger::warn("Could not automatically update Windows hosts file (elevation was cancelled or failed).");
             crate::logger::warn("Please manually add the following line to C:\\Windows\\System32\\drivers\\etc\\hosts as Administrator:");
-            crate::logger::warn("  127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost");
+            crate::logger::warn(
+                "  127.0.0.1 osu.localhost c.localhost c4.localhost c5.localhost c6.localhost ce.localhost a.localhost assets.localhost b.localhost",
+            );
         }
     }
 

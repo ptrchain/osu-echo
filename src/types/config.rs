@@ -389,11 +389,8 @@ fn print_setup_header(title: &str, subtitle: &str) {
 }
 
 fn print_completion_guide(is_advanced: bool, host: &str, port: u16) {
-    print_setup_header(
-        if is_advanced { "✔ Advanced Setup Complete!" } else { "✔ Quick Setup Complete!" },
-        "Configuration saved to .env and database",
-    );
-    println!("  {}", "▶ HOW TO CONNECT YOUR OSU! CLIENT:".cyan().bold());
+    print_setup_header(if is_advanced { "Advanced Setup Complete!" } else { "Quick Setup Complete!" }, "Configuration saved to .env and database");
+    println!("  {}", "HOW TO CONNECT YOUR OSU! CLIENT:".cyan().bold());
     println!("    1. Right-click your osu! shortcut and choose Properties.");
     println!("    2. In the Target field, append to the end:");
     if host == "127.0.0.1" && port == 5000 {
@@ -433,11 +430,7 @@ fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<Strin
         println!("     {}", "Tip: Scroll down to 'OAuth' -> Click 'New OAuth Application'.".dimmed());
         println!("     {}", "     For Application Name & Callback URL, enter 'osu-echo' and 'http://localhost'".dimmed());
         let client_id = prompt_optional_string("     Client ID (or Enter to skip): ");
-        let client_secret = if client_id.is_some() {
-            prompt_optional_string("     Client Secret (or Enter to skip): ")
-        } else {
-            None
-        };
+        let client_secret = if client_id.is_some() { prompt_optional_string("     Client Secret (or Enter to skip): ") } else { None };
 
         if osu_key.is_none() || daily_key.is_none() {
             println!("\n  {}", "=========================================================================".red().bold());
@@ -447,7 +440,7 @@ fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<Strin
             println!("  {}", "Running without them severely degrades core gameplay and online features:".white().bold());
             println!();
             if osu_key.is_none() {
-                println!("  {} {}", "• osu! Legacy v1 API Key:".red().bold(), "MISSING".on_red().white().bold());
+                println!("  {} {}", "- osu! Legacy v1 API Key:".red().bold(), "MISSING".on_red().white().bold());
                 println!("    {} Online beatmap leaderboards will NOT load in-game.", "Consequence:".yellow().bold());
                 println!("    {} Score comparisons against official Bancho will be completely disabled.", "            ".dimmed());
                 println!("    {} In-game beatmap ranking and direct score fetching will fail.", "            ".dimmed());
@@ -456,7 +449,7 @@ fn prompt_api_keys(title: &str, subtitle: &str) -> (Option<String>, Option<Strin
                 if osu_key.is_none() {
                     println!();
                 }
-                println!("  {} {}", "• osudaily API Key:".red().bold(), "MISSING".on_red().white().bold());
+                println!("  {} {}", "- osudaily API Key:".red().bold(), "MISSING".on_red().white().bold());
                 println!("    {} Real-time global rank calculation will be disabled.", "Consequence:".yellow().bold());
                 println!("    {} Your in-game profile rank will remain stuck as #unranked / #1.", "            ".dimmed());
             }
@@ -481,7 +474,7 @@ fn setup_quick(data_dir: &Path) -> Config {
     let detected_osu = detect_osu_path();
     let chosen_path = match detected_osu {
         Some(ref path) => {
-            println!("  {} Found osu! at: {}", "✔".green(), path.display().to_string().cyan());
+            println!("  {} Found osu! at: {}", "[OK]".green(), path.display().to_string().cyan());
             let use_detected = prompt_bool("  Use this directory? (Y/n) [default: yes]: ", true);
             if use_detected {
                 Some(path.to_string_lossy().to_string())
@@ -496,16 +489,14 @@ fn setup_quick(data_dir: &Path) -> Config {
     };
 
     if let Some(p) = chosen_path {
-        println!("  {} osu! path set: {}", "✔".green(), p);
+        println!("  {} osu! path set: {}", "[OK]".green(), p);
         config.paths.osu_path = Some(p);
     } else {
-        println!("  {} Skipped osu! path. Path-dependent features will be disabled.", "!".yellow());
+        println!("  {} Skipped osu! path. Path-dependent features will be disabled.", "[!]".yellow());
     }
 
-    let (osu_key, daily_key, client_id, client_secret) = prompt_api_keys(
-        "Quick Setup [Step 2/3: Essential API Keys]",
-        "Required for online beatmaps, leaderboards, and rank calculation",
-    );
+    let (osu_key, daily_key, client_id, client_secret) =
+        prompt_api_keys("Quick Setup [Step 2/3: Essential API Keys]", "Required for online beatmaps, leaderboards, and rank calculation");
     config.osu_api_key = osu_key;
     config.osu_daily_api_key = daily_key;
     config.osu_client_id = client_id;
@@ -518,9 +509,9 @@ fn setup_quick(data_dir: &Path) -> Config {
         let install_cert = prompt_bool("  Install certificate & update hosts file? (Y/n) [default: yes]: ", true);
         if install_cert {
             setup_tls_and_hosts(data_dir);
-            println!("\n  {} Certificate installed & hosts file updated successfully.", "✔".green());
+            println!("\n  {} Certificate installed & hosts file updated successfully.", "[OK]".green());
         } else {
-            println!("  {} Skipped certificate installation. (You can run 'osu-echo --trust-cert' later)", "!".yellow());
+            println!("  {} Skipped certificate installation. (You can run 'osu-echo --trust-cert' later)", "[!]".yellow());
         }
         prompt_input("\n  Press Enter to continue...");
     }
@@ -576,7 +567,7 @@ fn setup_advanced(data_dir: &Path) -> Config {
 
         let p = PathBuf::from(&input);
         if !p.exists() {
-            println!("  {} Directory '{}' does not exist! Please try again.", "✖".red(), input);
+            println!("  {} Directory '{}' does not exist! Please try again.", "[ERROR]".red(), input);
             continue;
         }
         config.paths.osu_path = Some(input);
@@ -586,19 +577,15 @@ fn setup_advanced(data_dir: &Path) -> Config {
     if config.paths.osu_path.is_some() {
         let customize = prompt_bool("  Customize Songs / Replays / Screenshots folders? (y/N) [default: no]: ", false);
         if customize {
-            config.paths.songs = prompt_optional_path("    • Songs folder path (or Enter for default): ");
-            config.paths.replay = prompt_optional_path("    • Replays folder path (or Enter for default): ");
-            config.paths.screenshots = prompt_optional_path("    • Screenshots folder path (or Enter for default): ");
+            config.paths.songs = prompt_optional_path("    - Songs folder path (or Enter for default): ");
+            config.paths.replay = prompt_optional_path("    - Replays folder path (or Enter for default): ");
+            config.paths.screenshots = prompt_optional_path("    - Screenshots folder path (or Enter for default): ");
         }
     }
 
     print_setup_header("Advanced Setup [Step 2/5: Server & Network Settings]", "Configure bind address, port, and TLS certificates");
     let host_input = prompt_input("  Server Host IP [default: 127.0.0.1]: ");
-    let host = if host_input.is_empty() {
-        "127.0.0.1".to_string()
-    } else {
-        host_input
-    };
+    let host = if host_input.is_empty() { "127.0.0.1".to_string() } else { host_input };
 
     let port = prompt_port("  Server Port [default: 5000]: ", 5000);
 
@@ -607,9 +594,9 @@ fn setup_advanced(data_dir: &Path) -> Config {
         let install_cert = prompt_bool("  Install & trust local certificate for osu! client? (Y/n) [default: yes]: ", true);
         if install_cert {
             setup_tls_and_hosts(data_dir);
-            println!("\n  {} Certificate installed & hosts file updated successfully.", "✔".green());
+            println!("\n  {} Certificate installed & hosts file updated successfully.", "[OK]".green());
         } else {
-            println!("  {} Skipped certificate installation.", "!".yellow());
+            println!("  {} Skipped certificate installation.", "[!]".yellow());
         }
         prompt_input("\n  Press Enter to continue to API keys...");
     }
@@ -618,10 +605,8 @@ fn setup_advanced(data_dir: &Path) -> Config {
         let _ = data_dir;
     }
 
-    let (osu_key, daily_key, client_id, client_secret) = prompt_api_keys(
-        "Advanced Setup [Step 3/5: Essential API Keys]",
-        "API keys for online beatmaps, leaderboards, and rank calculation",
-    );
+    let (osu_key, daily_key, client_id, client_secret) =
+        prompt_api_keys("Advanced Setup [Step 3/5: Essential API Keys]", "API keys for online beatmaps, leaderboards, and rank calculation");
     config.osu_api_key = osu_key;
     config.osu_daily_api_key = daily_key;
     config.osu_client_id = client_id;
@@ -649,48 +634,40 @@ fn setup_advanced(data_dir: &Path) -> Config {
             if let Some(pw) = raw_pw {
                 let hash = format!("{:x}", md5::Md5::digest(pw.as_bytes()));
                 config.osu_password = Some(hash);
-                println!("    {} Password hashed successfully (plaintext password is never stored).", "✔".green());
+                println!("    {} Password hashed successfully (plaintext password is never stored).", "[OK]".green());
             }
             config.osu_username = Some(u.clone());
         }
     }
 
     print_setup_header("Advanced Setup [Configuration Summary]", "Review your settings before saving");
-    println!("  • osu! Path:        {}", config.paths.osu_path.as_deref().unwrap_or("Not configured"));
-    println!("  • Bind Address:     {}:{}", host, port);
-    println!("  • Country Flag:     {}", config.country.as_deref().unwrap_or("None"));
-    println!("  • Leaderboard Mode: {}", if config.pp_leaderboard { "Performance Points (PP)" } else { "Score" });
-    println!("  • Leaderboard Size: {} scores", config.amount_of_scores_on_lb);
-    println!("  • #recent Feed:     {}", if config.enable_recent_channel { "Enabled" } else { "Disabled" });
+    println!("  - osu! Path:        {}", config.paths.osu_path.as_deref().unwrap_or("Not configured"));
+    println!("  - Bind Address:     {}:{}", host, port);
+    println!("  - Country Flag:     {}", config.country.as_deref().unwrap_or("None"));
+    println!("  - Leaderboard Mode: {}", if config.pp_leaderboard { "Performance Points (PP)" } else { "Score" });
+    println!("  - Leaderboard Size: {} scores", config.amount_of_scores_on_lb);
+    println!("  - #recent Feed:     {}", if config.enable_recent_channel { "Enabled" } else { "Disabled" });
     println!(
-        "  • osu! v1 API Key:  {}",
-        if config.osu_api_key.is_some() {
-            "Configured".green()
-        } else {
-            "CRITICAL: Missing (online beatmap leaderboards disabled)".red().bold()
-        }
+        "  - osu! v1 API Key:  {}",
+        if config.osu_api_key.is_some() { "Configured".green() } else { "CRITICAL: Missing (online beatmap leaderboards disabled)".red().bold() }
     );
     println!(
-        "  • osudaily API Key: {}",
-        if config.osu_daily_api_key.is_some() {
-            "Configured".green()
-        } else {
-            "CRITICAL: Missing (global rank calculation disabled)".red().bold()
-        }
+        "  - osudaily API Key: {}",
+        if config.osu_daily_api_key.is_some() { "Configured".green() } else { "CRITICAL: Missing (global rank calculation disabled)".red().bold() }
     );
     println!(
-        "  • osu! OAuth (v2):  {}",
+        "  - osu! OAuth (v2):  {}",
         if config.osu_client_id.is_some() && config.osu_client_secret.is_some() {
             "Configured".green()
         } else {
             "None (country rank calculation disabled)".normal()
         }
     );
-    println!("  • Bancho Account:   {}", if config.osu_username.is_some() { "Configured".green() } else { "None".normal() });
+    println!("  - Bancho Account:   {}", if config.osu_username.is_some() { "Configured".green() } else { "None".normal() });
 
     let save = prompt_bool("\nSave this configuration? (Y/n) [default: yes]: ", true);
     if !save {
-        println!("  {} Setup cancelled. Using defaults.\n", "!".yellow());
+        println!("  {} Setup cancelled. Using defaults.\n", "[!]".yellow());
         return Config::default();
     }
 
@@ -723,14 +700,14 @@ fn setup_advanced(data_dir: &Path) -> Config {
 pub fn setup_config(data_dir: &Path) -> Config {
     print_setup_header("osu-echo Configuration Wizard", "Select your preferred setup experience:");
     println!("  {} Quick Setup (Recommended)", "[1]".green().bold());
-    println!("      • Fast, streamlined setup with smart auto-detection.");
-    println!("      • Configures essential API keys and local HTTPS certificate.");
-    println!("      • Recommended defaults applied for all other settings.\n");
+    println!("      - Fast, streamlined setup with smart auto-detection.");
+    println!("      - Configures essential API keys and local HTTPS certificate.");
+    println!("      - Recommended defaults applied for all other settings.\n");
     println!("  {} Advanced Setup", "[2]".cyan().bold());
-    println!("      • Custom folders (Songs, Replays, Screenshots).");
-    println!("      • Server host IP / port network settings.");
-    println!("      • Essential API keys for online leaderboards & rank calculation.");
-    println!("      • Scoring mode, profile country, and official Bancho account sync.\n");
+    println!("      - Custom folders (Songs, Replays, Screenshots).");
+    println!("      - Server host IP / port network settings.");
+    println!("      - Essential API keys for online leaderboards & rank calculation.");
+    println!("      - Scoring mode, profile country, and official Bancho account sync.\n");
 
     let choice = prompt_input("Select setup mode [1-2, default: 1]: ");
     let is_advanced = choice == "2" || choice.eq_ignore_ascii_case("advanced") || choice.eq_ignore_ascii_case("a");
@@ -806,11 +783,7 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
 
     let render = |pw: &str, is_revealed: bool| {
         let mut out = stdout();
-        let display = if is_revealed {
-            format!("{} (revealed)", pw)
-        } else {
-            "*".repeat(pw.chars().count())
-        };
+        let display = if is_revealed { format!("{} (revealed)", pw) } else { "*".repeat(pw.chars().count()) };
         let _ = write!(out, "\r\x1b[2K{} {}", prompt, display);
         let _ = out.flush();
     };
@@ -820,8 +793,7 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
     loop {
         let now = Instant::now();
 
-        let is_revealed = !password.is_empty()
-            && (is_tab_down() || tab_held_until.is_some_and(|until| now < until));
+        let is_revealed = !password.is_empty() && (is_tab_down() || tab_held_until.is_some_and(|until| now < until));
 
         let state_key = format!("{}:{}", password, is_revealed);
         if state_key != last_rendered_state {
@@ -829,17 +801,11 @@ pub fn prompt_password(prompt: &str) -> Option<String> {
             last_rendered_state = state_key;
         }
 
-        let poll_timeout = if is_revealed {
-            Duration::from_millis(20)
-        } else {
-            Duration::from_millis(30)
-        };
+        let poll_timeout = if is_revealed { Duration::from_millis(20) } else { Duration::from_millis(30) };
 
         if event::poll(poll_timeout).unwrap_or(false) {
             if let Ok(Event::Key(key)) = event::read() {
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d'))
-                {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && (key.code == KeyCode::Char('c') || key.code == KeyCode::Char('d')) {
                     drop(_guard);
                     println!();
                     return None;
@@ -915,7 +881,7 @@ fn prompt_existing_directory(prompt: &str) -> Option<String> {
         }
         let p = PathBuf::from(&input);
         if !p.exists() {
-            println!("  {} Directory '{}' does not exist! Please try again.", "✖".red(), input);
+            println!("  {} Directory '{}' does not exist! Please try again.", "[ERROR]".red(), input);
             continue;
         }
         return Some(input);
@@ -939,7 +905,7 @@ fn prompt_port(prompt: &str, default_val: u16) -> u16 {
         if let Some(port) = parse_port_input(&input, default_val) {
             return port;
         }
-        println!("  {} Invalid port number (must be 1-65535). Please try again.", "✖".red());
+        println!("  {} Invalid port number (must be 1-65535). Please try again.", "[ERROR]".red());
     }
 }
 
@@ -960,7 +926,7 @@ fn prompt_number(prompt: &str, default_val: i32, min: i32, max: i32) -> i32 {
         if let Some(n) = parse_number_input(&input, default_val, min, max) {
             return n;
         }
-        println!("  {} Value must be between {} and {}. Please try again.", "✖".red(), min, max);
+        println!("  {} Value must be between {} and {}. Please try again.", "[ERROR]".red(), min, max);
     }
 }
 
@@ -985,7 +951,7 @@ fn prompt_optional_country(prompt: &str) -> Option<String> {
         if let Some(code) = parse_country_code(&input) {
             return Some(code);
         }
-        println!("  {} Country code must be a 2-letter ISO code (e.g. US, DE, JP). Please try again.", "✖".red());
+        println!("  {} Country code must be a 2-letter ISO code (e.g. US, DE, JP). Please try again.", "[ERROR]".red());
     }
 }
 

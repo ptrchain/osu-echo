@@ -70,10 +70,7 @@ pub async fn calculate_map_ranks(
         }
     };
 
-    let player_prev_scores: Vec<&Score> = all_local_scores
-        .iter()
-        .filter(|sc| sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods))
-        .collect();
+    let player_prev_scores: Vec<&Score> = all_local_scores.iter().filter(|sc| sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods)).collect();
 
     let max_combo_before = player_prev_scores.iter().map(|s| s.max_combo).max();
 
@@ -117,11 +114,7 @@ pub async fn calculate_map_ranks(
     for sc in all_local_scores {
         if !sc.name.eq_ignore_ascii_case(player_name) && is_valid_mode(sc.mods) {
             let entry = other_players.entry(sc.name.to_lowercase()).or_insert(sc);
-            let curr_better = if pp_leaderboard || server_mode.is_some() {
-                sc.pp.unwrap_or(0.0) > entry.pp.unwrap_or(0.0)
-            } else {
-                sc.score > entry.score
-            };
+            let curr_better = if pp_leaderboard || server_mode.is_some() { sc.pp.unwrap_or(0.0) > entry.pp.unwrap_or(0.0) } else { sc.score > entry.score };
             if curr_better {
                 *entry = sc;
             }
@@ -156,11 +149,7 @@ pub async fn calculate_map_ranks(
 
     let new_m = get_score_metric(new_score);
     let better_count = competitor_metrics.iter().filter(|m| m.is_greater_than(&new_m)).count();
-    let rank_after = if better_count < 50 {
-        Some((better_count + 1) as i32)
-    } else {
-        None
-    };
+    let rank_after = if better_count < 50 { Some((better_count + 1) as i32) } else { None };
 
     (previous, rank_before, rank_after, max_combo_before)
 }
@@ -328,11 +317,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             let pc = db::get_playcount(&db_conn, &player_name).unwrap_or(1);
             let overall_max = db::get_max_combo_for_player(&db_conn, &player_name, sub.score.mode).unwrap_or(0);
 
-            let existing_medals: HashSet<i32> = db::get_user_medals(&db_conn, &player_name)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.medal_id)
-                .collect();
+            let existing_medals: HashSet<i32> = db::get_user_medals(&db_conn, &player_name).unwrap_or_default().into_iter().map(|m| m.medal_id).collect();
             let bmap_ref = db::get_beatmap_by_md5(&db_conn, &sub.score.md5).unwrap_or(None).unwrap_or_else(Beatmap::blank);
             let mode_hits = db::get_mode_total_hits(&db_conn, &player_name, sub.score.mode).unwrap_or(0);
             let new_ids = medals::evaluate_score_submission(&sub.score, &bmap_ref, None, pc, mode_hits, &existing_medals, false);
@@ -356,19 +341,8 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
             let api_key = s.config.osu_api_key.as_deref();
             let pp_lb = s.config.pp_leaderboard;
-            let (prev, r_before, _, map_max_before) = calculate_map_ranks(
-                &s.http,
-                api_key,
-                b,
-                sub.score.mode,
-                s.mode,
-                pp_lb,
-                None,
-                &all_local,
-                &player_name,
-                &sub.score,
-            )
-            .await;
+            let (prev, r_before, _, map_max_before) =
+                calculate_map_ranks(&s.http, api_key, b, sub.score.mode, s.mode, pp_lb, None, &all_local, &player_name, &sub.score).await;
 
             let prev_rank_str = r_before.map(|r| r.to_string()).unwrap_or_default();
             let effective_combo = map_max_before.or_else(|| prev.as_ref().map(|s| s.max_combo));
@@ -384,10 +358,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let bmap_id = bmap.as_ref().map(|b| b.beatmap_id).unwrap_or(0);
         let bmapset_id = bmap.as_ref().map(|b| b.beatmapset_id).unwrap_or(0);
 
-        let meta = format!(
-            "beatmapId:{}|beatmapSetId:{}|beatmapPlaycount:{}|beatmapPasscount:{}|approvedDate:0",
-            bmap_id, bmapset_id, playcount, playcount
-        );
+        let meta = format!("beatmapId:{}|beatmapSetId:{}|beatmapPlaycount:{}|beatmapPasscount:{}|approvedDate:0", bmap_id, bmapset_id, playcount, playcount);
 
         let beatmap_chart = format!(
             "chartId:beatmap|chartUrl:https://osu.ppy.sh/b/{}|chartName:Local Beatmap Ranking|rankBefore:{}|rankAfter:{}|maxComboBefore:{}|maxComboAfter:{}|accuracyBefore:{}|accuracyAfter:{}|rankedScoreBefore:{}|rankedScoreAfter:{}|ppBefore:{}|ppAfter:{}|onlineScoreId:0",
@@ -451,13 +422,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
                 }
             }
             if fetched.is_none() {
-                let player_match = s.player.as_ref().and_then(|p| {
-                    if p.map_md5 == sub.score.md5 {
-                        Some((p.map_id, p.info_text.clone()))
-                    } else {
-                        None
-                    }
-                });
+                let player_match = s.player.as_ref().and_then(|p| if p.map_md5 == sub.score.md5 { Some((p.map_id, p.info_text.clone())) } else { None });
                 if let Some((mid, _info)) = player_match {
                     if mid > 0 {
                         let db_conn = s.db.lock().await;
@@ -491,7 +456,11 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             let db_conn = s.db.lock().await;
             if let Ok(Some(canonical)) = db::get_beatmap_by_id(&db_conn, b.beatmap_id) {
                 // If canonical entry has a ranked status and a different MD5, this is an altered/cloned diff
-                if canonical.approved > 0 && !canonical.file_md5.is_empty() && !canonical.file_md5.eq_ignore_ascii_case(&b.file_md5) && canonical.file_md5 != "old_draft_md5" {
+                if canonical.approved > 0
+                    && !canonical.file_md5.is_empty()
+                    && !canonical.file_md5.eq_ignore_ascii_case(&b.file_md5)
+                    && canonical.file_md5 != "old_draft_md5"
+                {
                     b.beatmap_id = 0;
                     b.approved = 0;
                 }
@@ -574,19 +543,8 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
         let api_key = s.config.osu_api_key.as_deref();
         let pp_lb = s.config.pp_leaderboard;
-        let (prev, r_before, r_after, map_max_before) = calculate_map_ranks(
-            &s.http,
-            api_key,
-            &bmap,
-            score.mode,
-            mode,
-            pp_lb,
-            parsed_map.as_ref(),
-            &all_local,
-            &player_name,
-            &score,
-        )
-        .await;
+        let (prev, r_before, r_after, map_max_before) =
+            calculate_map_ranks(&s.http, api_key, &bmap, score.mode, mode, pp_lb, parsed_map.as_ref(), &all_local, &player_name, &score).await;
         (prev, r_before, r_after, map_max_before, overall_max)
     };
 
@@ -613,11 +571,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
             }
         }
 
-        let existing_medals: HashSet<i32> = db::get_user_medals(&db_conn, &player_name)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|m| m.medal_id)
-            .collect();
+        let existing_medals: HashSet<i32> = db::get_user_medals(&db_conn, &player_name).unwrap_or_default().into_iter().map(|m| m.medal_id).collect();
         let pc = db::get_playcount(&db_conn, &player_name).unwrap_or(1);
         let mode_hits = db::get_mode_total_hits(&db_conn, &player_name, score.mode).unwrap_or(0);
         let new_ids = medals::evaluate_score_submission(&score, &bmap, parsed_map.as_ref(), pc, mode_hits, &existing_medals, true);
@@ -667,11 +621,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
 
         // S-Ranker (ID 15): At least 5 S or SS scores on distinct ranked maps
         if !existing_medals.contains(&15) && !newly_unlocked_medals.contains(&15) {
-            let s_rank_maps: HashSet<&str> = scores
-                .iter()
-                .filter(|s| s.nmiss == 0 && s.acc.unwrap_or(0.0) >= 95.0)
-                .map(|s| s.md5.as_str())
-                .collect();
+            let s_rank_maps: HashSet<&str> = scores.iter().filter(|s| s.nmiss == 0 && s.acc.unwrap_or(0.0) >= 95.0).map(|s| s.md5.as_str()).collect();
             if s_rank_maps.len() >= 5 {
                 newly_unlocked_medals.push(15);
             }
@@ -714,11 +664,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         let mode_prefix = if score.mode != 0 { format!("[{}] ", utils::get_mode_name(score.mode as u8)) } else { String::new() };
 
         let pp = score.pp.unwrap_or(0.0);
-        let notif = if pp > 0.0 {
-            format!("Score submitted! ({:.0}pp)", pp)
-        } else {
-            "Score submitted!".to_string()
-        };
+        let notif = if pp > 0.0 { format!("Score submitted! ({:.0}pp)", pp) } else { "Score submitted!".to_string() };
         player.queue.extend_from_slice(&packets::notification(&notif));
 
         for &id in &newly_unlocked_medals {
@@ -766,16 +712,7 @@ pub async fn process_native_submission(state: Arc<RwLock<AppState>>, sub: Decode
         if meets_pp {
             let player_rank = after_stats.rank;
             let player_pp = after_stats.pp;
-            crate::handlers::webhook::send_score_webhook(
-                http,
-                webhook_url,
-                player_name.clone(),
-                score,
-                bmap,
-                rank_after,
-                player_rank,
-                player_pp,
-            );
+            crate::handlers::webhook::send_score_webhook(http, webhook_url, player_name.clone(), score, bmap, rank_after, player_rank, player_pp);
         }
     }
 
@@ -871,7 +808,18 @@ mod tests {
         assert!(chart_str_new.contains("maxComboBefore:800|maxComboAfter:950"));
 
         // Test achievements-new string populated in overall chart
-        let charts_medals = build_charts(&bmap, &score, &before, &after, None, None, Some(1), None, 5, Some("osu-combo-500+500 Combo+300,000 combo/osu-skill-pass-1+Rising Star+1 star pass"));
+        let charts_medals = build_charts(
+            &bmap,
+            &score,
+            &before,
+            &after,
+            None,
+            None,
+            Some(1),
+            None,
+            5,
+            Some("osu-combo-500+500 Combo+300,000 combo/osu-skill-pass-1+Rising Star+1 star pass"),
+        );
         let str_medals = String::from_utf8(charts_medals).unwrap();
         assert!(str_medals.contains("achievements-new:osu-combo-500+500 Combo+300,000 combo/osu-skill-pass-1+Rising Star+1 star pass|onlineScoreId:-10"));
     }
@@ -896,18 +844,7 @@ mod tests {
 
         // 1. Solo play, no competitors in DB, no API key -> rank 1
         let new_score = make_score("Alice", 100_000, 50.0);
-        let (prev, r_before, r_after, max_c_before) = calculate_map_ranks(
-            &http,
-            None,
-            &bmap,
-            0,
-            None,
-            false,
-            None,
-            &[],
-            "Alice",
-            &new_score,
-        ).await;
+        let (prev, r_before, r_after, max_c_before) = calculate_map_ranks(&http, None, &bmap, 0, None, false, None, &[], "Alice", &new_score).await;
         assert!(prev.is_none());
         assert_eq!(r_before, None);
         assert_eq!(r_after, Some(1));
@@ -921,18 +858,7 @@ mod tests {
             make_score("P4", 200_000, 120.0),
             make_score("P5", 50_000, 30.0),
         ];
-        let (prev, r_before, r_after, _) = calculate_map_ranks(
-            &http,
-            None,
-            &bmap,
-            0,
-            None,
-            false,
-            None,
-            &local_scores,
-            "Alice",
-            &new_score,
-        ).await;
+        let (prev, r_before, r_after, _) = calculate_map_ranks(&http, None, &bmap, 0, None, false, None, &local_scores, "Alice", &new_score).await;
         assert!(prev.is_none());
         assert_eq!(r_before, None);
         assert_eq!(r_after, Some(5));
@@ -943,18 +869,7 @@ mod tests {
             top50.push(make_score(&format!("Player{}", i), 1_000_000 - i * 1000, 100.0));
         }
         let low_score = make_score("Alice", 50_000, 10.0);
-        let (prev, r_before, r_after, _) = calculate_map_ranks(
-            &http,
-            None,
-            &bmap,
-            0,
-            None,
-            false,
-            None,
-            &top50,
-            "Alice",
-            &low_score,
-        ).await;
+        let (prev, r_before, r_after, _) = calculate_map_ranks(&http, None, &bmap, 0, None, false, None, &top50, "Alice", &low_score).await;
         assert!(prev.is_none());
         assert_eq!(r_before, None);
         assert_eq!(r_after, None);
@@ -963,18 +878,7 @@ mod tests {
         let mut with_prev = local_scores.clone();
         with_prev.push(make_score("Alice", 80_000, 40.0)); // Alice previous was 5th (behind P1..P4)
         let improved_score = make_score("Alice", 450_000, 190.0); // beats P2..P5, behind P1 -> rank 2
-        let (prev, r_before, r_after, _) = calculate_map_ranks(
-            &http,
-            None,
-            &bmap,
-            0,
-            None,
-            false,
-            None,
-            &with_prev,
-            "Alice",
-            &improved_score,
-        ).await;
+        let (prev, r_before, r_after, _) = calculate_map_ranks(&http, None, &bmap, 0, None, false, None, &with_prev, "Alice", &improved_score).await;
         assert!(prev.is_some());
         assert_eq!(r_before, Some(5));
         assert_eq!(r_after, Some(2));
@@ -992,18 +896,7 @@ mod tests {
         let mut score_c = make_score("Alice", 500_000, 150.0);
         score_c.max_combo = 400;
 
-        let (prev, _, _, max_c_before) = calculate_map_ranks(
-            &http,
-            None,
-            &bmap,
-            0,
-            None,
-            false,
-            None,
-            &multi_scores,
-            "Alice",
-            &score_c,
-        ).await;
+        let (prev, _, _, max_c_before) = calculate_map_ranks(&http, None, &bmap, 0, None, false, None, &multi_scores, "Alice", &score_c).await;
         assert_eq!(prev.as_ref().map(|s| s.max_combo), Some(200));
         assert_eq!(max_c_before, Some(800));
     }
@@ -1041,16 +934,8 @@ mod tests {
         app_state.player = Some(player);
         let shared_state = Arc::new(RwLock::new(app_state));
 
-        let sub_score = Score {
-            md5: "abc".to_string(),
-            name: "TestPlayer".to_string(),
-            score: 1000,
-            max_combo: 10,
-            n300: 10,
-            nmiss: 1,
-            time: 12345,
-            ..Score::blank()
-        };
+        let sub_score =
+            Score { md5: "abc".to_string(), name: "TestPlayer".to_string(), score: 1000, max_combo: 10, n300: 10, nmiss: 1, time: 12345, ..Score::blank() };
         let sub = DecodedSubmission {
             score: sub_score,
             submission_checksum: String::new(),
@@ -1073,7 +958,10 @@ mod tests {
 
         let pkts = packets::split_packets(&p.queue);
         assert!(!pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoNotification as u16), "Failed plays must NOT send notification popups to the player");
-        assert!(pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16), "Failed plays must enqueue ChoUserStats to update profile panel immediately");
+        assert!(
+            pkts.iter().any(|pkt| pkt.id == packets::PacketId::ChoUserStats as u16),
+            "Failed plays must enqueue ChoUserStats to update profile panel immediately"
+        );
 
         let db_conn = s.db.lock().await;
         let scores = db::get_all_scores_on_map(&db_conn, "abc", 0).unwrap();
@@ -1164,12 +1052,9 @@ mod tests {
             identity: None,
         };
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            process_native_submission(shared_state.clone(), sub),
-        )
-        .await
-        .expect("Submission must not deadlock on player mismatch");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), process_native_submission(shared_state.clone(), sub))
+            .await
+            .expect("Submission must not deadlock on player mismatch");
 
         assert_eq!(result.err(), Some("Player mismatch".to_string()));
         let s = shared_state.read().await;
@@ -1296,11 +1181,11 @@ mod tests {
         let medals = db::get_user_medals(&db_conn, "Kyrie").unwrap();
         assert!(!medals.is_empty());
         let medal_ids: Vec<i32> = medals.iter().map(|m| m.medal_id).collect();
-        assert!(medal_ids.contains(&1));  // 500 combo
+        assert!(medal_ids.contains(&1)); // 500 combo
         assert!(!medal_ids.contains(&55)); // 1 star pass NOT awarded for 3.2★
-        assert!(medal_ids.contains(&57));  // 3 star pass
+        assert!(medal_ids.contains(&57)); // 3 star pass
         assert!(!medal_ids.contains(&63)); // 1 star FC NOT awarded for 3.2★
-        assert!(medal_ids.contains(&65));  // 3 star FC
+        assert!(medal_ids.contains(&65)); // 3 star FC
 
         // Verify in-game notifications and chat announcements queued
         let p = s.player.as_ref().unwrap();
@@ -1313,4 +1198,3 @@ mod tests {
         assert!(msg_count >= 3);
     }
 }
-

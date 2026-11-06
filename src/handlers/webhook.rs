@@ -42,17 +42,8 @@ pub fn build_score_webhook_payload(
     player_rank: i32,
     player_pp: f64,
 ) -> serde_json::Value {
-    let grade = utils::get_grade(
-        score.mode as u8,
-        score.n300,
-        score.n100,
-        score.n50,
-        score.ngeki,
-        score.nkatu,
-        score.nmiss,
-        score.mods,
-        score.acc.unwrap_or(0.0),
-    );
+    let grade =
+        utils::get_grade(score.mode as u8, score.n300, score.n100, score.n50, score.ngeki, score.nkatu, score.nmiss, score.mods, score.acc.unwrap_or(0.0));
 
     let mods_str = score.mods_str.as_deref().unwrap_or("NM");
     let formatted_mods = if mods_str == "NM" { String::new() } else { format!(" +{}", mods_str) };
@@ -159,14 +150,7 @@ pub fn send_score_webhook(
     tokio::spawn(async move {
         let payload = build_score_webhook_payload(&player_name, &score, &bmap, rank_after, player_rank, player_pp);
 
-        match http
-            .post(&webhook_url)
-            .header("Content-Type", "application/json")
-            .json(&payload)
-            .timeout(std::time::Duration::from_secs(5))
-            .send()
-            .await
-        {
+        match http.post(&webhook_url).header("Content-Type", "application/json").json(&payload).timeout(std::time::Duration::from_secs(5)).send().await {
             Ok(resp) if resp.status().is_success() => {
                 crate::logger::info("Discord webhook score posted successfully.");
             }

@@ -145,7 +145,12 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             p.queue.extend_from_slice(&packets::user_stats(&tillerino));
 
                             for f in friend_records {
-                                if f.friend_id <= 2 || f.friend_id == player_id || f.friend_id == BANCHOBOT_ID || f.friend_id == TILLERINO_ID || f.friend_id == 2070907 {
+                                if f.friend_id <= 2
+                                    || f.friend_id == player_id
+                                    || f.friend_id == BANCHOBOT_ID
+                                    || f.friend_id == TILLERINO_ID
+                                    || f.friend_id == 2070907
+                                {
                                     continue;
                                 }
                                 let display_name = if f.friend_name.is_empty() { format!("Friend {}", f.friend_id) } else { f.friend_name };
@@ -465,13 +470,7 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
 
     let (api_key_opt, http_client, osu_uname_opt, config_country_opt, osu_daily_api_key_opt) = {
         let s = state.read().await;
-        (
-            s.config.osu_api_key.clone(),
-            s.http.clone(),
-            s.config.osu_username.clone(),
-            s.config.country.clone(),
-            s.config.osu_daily_api_key.clone(),
-        )
+        (s.config.osu_api_key.clone(), s.http.clone(), s.config.osu_username.clone(), s.config.country.clone(), s.config.osu_daily_api_key.clone())
     };
 
     let mut friend_records = {
@@ -723,7 +722,10 @@ async fn login(state: Arc<RwLock<AppState>>, body_bytes: &[u8]) -> (Vec<u8>, Str
         body.extend_from_slice(&packets::user_stats(&fp));
     }
 
-    body.extend_from_slice(&packets::local_message("Welcome! BanchoBot and Tillerino are online. Type !help in chat or PM BanchoBot/Tillerino to see commands.", "#osu"));
+    body.extend_from_slice(&packets::local_message(
+        "Welcome! BanchoBot and Tillerino are online. Type !help in chat or PM BanchoBot/Tillerino to see commands.",
+        "#osu",
+    ));
 
     utils::log_success(&format!("{} successfully logged in!", profile_name));
 
@@ -802,10 +804,7 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         db::init_db(&conn).unwrap();
 
-        let config = crate::types::config::Config {
-            enable_recent_channel: false,
-            ..Default::default()
-        };
+        let config = crate::types::config::Config { enable_recent_channel: false, ..Default::default() };
         let mut app_state = AppState::new(conn, config);
         app_state.pending_login_name = Some("NoRecentTester".to_string());
         let shared_state = Arc::new(RwLock::new(app_state));

@@ -47,9 +47,7 @@ pub async fn handle_command(state: &Arc<RwLock<AppState>>, player_name: &str, re
         "clearscores" | "clearmap" | "removescores" | "deletescores" | "clearscore" | "removemap" | "clear" => {
             handle_clear_scores(state, player_name, reply_target, args).await
         }
-        "importscores" | "importscore" | "fetchscores" | "syncbancho" => {
-            handle_import_scores(state, player_name, reply_target, args).await
-        }
+        "importscores" | "importscore" | "fetchscores" | "syncbancho" => handle_import_scores(state, player_name, reply_target, args).await,
         "avatar" => {
             reply(state, reply_target, "Avatar customization is now managed at https://osu.localhost/settings").await;
         }
@@ -491,7 +489,9 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
 
         if target_set_id > 0 {
             if let Some(ref sdir) = songs_dir {
-                if let Some(folder_path) = utils::find_local_mapset_folder(sdir, Some(target_set_id), if !effective_md5.is_empty() { Some(&effective_md5) } else { None }) {
+                if let Some(folder_path) =
+                    utils::find_local_mapset_folder(sdir, Some(target_set_id), if !effective_md5.is_empty() { Some(&effective_md5) } else { None })
+                {
                     let scanned = utils::scan_dir_for_all_osu_files(&folder_path, Some(target_set_id));
                     let s = state.read().await;
                     let db_conn = s.db.lock().await;
@@ -542,7 +542,12 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
                 }
                 drop(s);
 
-                reply(state, target, &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is now {}!", artist, title, target_set_id, count, status_name)).await;
+                reply(
+                    state,
+                    target,
+                    &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is now {}!", artist, title, target_set_id, count, status_name),
+                )
+                .await;
                 return;
             }
         }
@@ -580,7 +585,8 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
 
                         let display_artist = if artist.is_empty() { "Unknown Artist" } else { &artist };
                         let display_title = if title.is_empty() { "Custom Beatmap" } else { &title };
-                        reply(state, target, &format!("Beatmapset {} - {} ({} difficulties) is now {}!", display_artist, display_title, count, status_name)).await;
+                        reply(state, target, &format!("Beatmapset {} - {} ({} difficulties) is now {}!", display_artist, display_title, count, status_name))
+                            .await;
                         return;
                     }
                 }
@@ -673,10 +679,8 @@ pub async fn handle_set_status(state: &Arc<RwLock<AppState>>, target: &str, args
                 let _ = db::insert_beatmap(&db_conn, &target_bmap);
                 let _ = db::set_beatmap_status_by_md5(&db_conn, &effective_md5, status);
                 if target_bmap.beatmap_id > 0 {
-                    let is_canonical = db::get_beatmap_by_id(&db_conn, target_bmap.beatmap_id)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|c| c.file_md5.eq_ignore_ascii_case(&effective_md5));
+                    let is_canonical =
+                        db::get_beatmap_by_id(&db_conn, target_bmap.beatmap_id).ok().flatten().is_some_and(|c| c.file_md5.eq_ignore_ascii_case(&effective_md5));
                     if is_canonical {
                         let _ = db::set_beatmap_status(&db_conn, target_bmap.beatmap_id, status);
                     }
@@ -899,7 +903,9 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
 
             if set_bmaps.is_empty() {
                 if let Some(ref sdir) = songs_dir {
-                    if let Some(folder_path) = utils::find_local_mapset_folder(sdir, Some(target_set_id), if !effective_md5.is_empty() { Some(&effective_md5) } else { None }) {
+                    if let Some(folder_path) =
+                        utils::find_local_mapset_folder(sdir, Some(target_set_id), if !effective_md5.is_empty() { Some(&effective_md5) } else { None })
+                    {
                         let scanned = utils::scan_dir_for_all_osu_files(&folder_path, Some(target_set_id));
                         let s = state.read().await;
                         let db_conn = s.db.lock().await;
@@ -940,14 +946,23 @@ pub async fn handle_status(state: &Arc<RwLock<AppState>>, target: &str, args: &[
                     "Unranked / Pending".to_string()
                 } else {
                     let mut parts = Vec::new();
-                    if ranked > 0 { parts.push(format!("{} Ranked", ranked)); }
-                    if loved > 0 { parts.push(format!("{} Loved", loved)); }
-                    if qualified > 0 { parts.push(format!("{} Qualified", qualified)); }
-                    if unranked > 0 { parts.push(format!("{} Unranked", unranked)); }
+                    if ranked > 0 {
+                        parts.push(format!("{} Ranked", ranked));
+                    }
+                    if loved > 0 {
+                        parts.push(format!("{} Loved", loved));
+                    }
+                    if qualified > 0 {
+                        parts.push(format!("{} Qualified", qualified));
+                    }
+                    if unranked > 0 {
+                        parts.push(format!("{} Unranked", unranked));
+                    }
                     parts.join(", ")
                 };
 
-                reply(state, target, &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is {}", artist, title, target_set_id, total, status_summary)).await;
+                reply(state, target, &format!("Beatmapset {} - {} (Set ID: {}) ({} difficulties) is {}", artist, title, target_set_id, total, status_summary))
+                    .await;
                 return;
             }
         }
@@ -1233,7 +1248,12 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 if let Some(ref mut p) = s.player {
                     p.queue.extend_from_slice(&packets::friends_list(&friend_ids));
 
-                    if friend_rec.friend_id != BOT_ID && friend_rec.friend_id != tillerino::BOT_ID && friend_rec.friend_id != tillerino::OFFICIAL_BOT_ID && friend_rec.friend_id > 2 && friend_rec.friend_id != p.userid {
+                    if friend_rec.friend_id != BOT_ID
+                        && friend_rec.friend_id != tillerino::BOT_ID
+                        && friend_rec.friend_id != tillerino::OFFICIAL_BOT_ID
+                        && friend_rec.friend_id > 2
+                        && friend_rec.friend_id != p.userid
+                    {
                         let mut fp = Player::new(friend_rec.friend_name.clone());
                         fp.userid = friend_rec.friend_id;
                         fp.bancho_privs = 1;
@@ -1386,11 +1406,7 @@ pub async fn handle_friend(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                 let sem = sem.clone();
                 join_set.spawn(async move {
                     let _permit = sem.acquire().await.ok();
-                    let rec = if let Some(ref k) = key {
-                        utils::fetch_user_stats_from_api(&http, k, &id.to_string()).await
-                    } else {
-                        None
-                    };
+                    let rec = if let Some(ref k) = key { utils::fetch_user_stats_from_api(&http, k, &id.to_string()).await } else { None };
                     (id, rec)
                 });
             }
@@ -1559,15 +1575,7 @@ pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &st
                 .calculate();
 
             let new_pp = result.pp();
-            let new_acc = utils::calculate_accuracy(
-                score.mode as u8,
-                score.n300,
-                score.n100,
-                score.n50,
-                score.ngeki,
-                score.nkatu,
-                score.nmiss,
-            );
+            let new_acc = utils::calculate_accuracy(score.mode as u8, score.n300, score.n100, score.n50, score.ngeki, score.nkatu, score.nmiss);
 
             let conn = db.lock().await;
             let _ = db::update_score_pp_and_acc(&conn, score_id, new_pp, new_acc);
@@ -1596,11 +1604,7 @@ pub async fn recalculate_profile(state: &Arc<RwLock<AppState>>, player_name: &st
     };
 
     let daily_key = config.osu_daily_api_key.clone();
-    let rank = if let Some(ref api_key) = daily_key {
-        utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await
-    } else {
-        None
-    };
+    let rank = if let Some(ref api_key) = daily_key { utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await } else { None };
 
     {
         let mut s = state.write().await;
@@ -1629,25 +1633,13 @@ pub async fn handle_recalc(state: &Arc<RwLock<AppState>>, player_name: &str, tar
         crate::handlers::medals::retroactive_eval_profile(&conn, player_name).unwrap_or_default()
     };
 
-    let medal_msg = if !newly_earned.is_empty() {
-        format!(" Earned {} new medal(s)!", newly_earned.len())
-    } else {
-        String::new()
-    };
+    let medal_msg = if !newly_earned.is_empty() { format!(" Earned {} new medal(s)!", newly_earned.len()) } else { String::new() };
 
-    let msg = format!(
-        "Profile recalculation complete! Processed {} score(s). PP: {}pp | Acc: {:.2}%{}",
-        count, new_pp, new_acc, medal_msg
-    );
+    let msg = format!("Profile recalculation complete! Processed {} score(s). PP: {}pp | Acc: {:.2}%{}", count, new_pp, new_acc, medal_msg);
     reply(state, target, &msg).await;
 }
 
-pub async fn handle_import_scores(
-    state: &Arc<RwLock<AppState>>,
-    player_name: &str,
-    target: &str,
-    args: &[&str],
-) {
+pub async fn handle_import_scores(state: &Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     let known_modes = ["osu", "taiko", "fruits", "mania", "catch", "ctb"];
     let known_cats = ["top", "best", "pinned", "firsts", "recent"];
 
@@ -1679,15 +1671,7 @@ pub async fn handle_import_scores(
         }
     }
 
-    reply(
-        state,
-        target,
-        &format!(
-            "Fetching {} scores for '{}' (mode: {}) from osu.ppy.sh... please wait.",
-            cat_arg, query, mode_arg
-        ),
-    )
-    .await;
+    reply(state, target, &format!("Fetching {} scores for '{}' (mode: {}) from osu.ppy.sh... please wait.", cat_arg, query, mode_arg)).await;
 
     let payload = crate::services::score_import::ImportScoresPayload {
         query: query.clone(),
@@ -1707,20 +1691,10 @@ pub async fn handle_import_scores(
     tokio::spawn(async move {
         match crate::services::score_import::execute_import(&state_clone, &p_name_owned, &payload).await {
             Ok(res) => {
-                let medal_part = if res.medals_unlocked > 0 {
-                    format!(" | Unlocked {} new medal(s)!", res.medals_unlocked)
-                } else {
-                    String::new()
-                };
+                let medal_part = if res.medals_unlocked > 0 { format!(" | Unlocked {} new medal(s)!", res.medals_unlocked) } else { String::new() };
                 let msg = format!(
                     "Import complete for '{}'! Imported: {}, Skipped: {}, Replays: {} | PP: {}pp, Acc: {:.2}%{}",
-                    res.username,
-                    res.imported_count,
-                    res.skipped_count,
-                    res.replays_downloaded,
-                    res.new_pp,
-                    res.new_acc,
-                    medal_part,
+                    res.username, res.imported_count, res.skipped_count, res.replays_downloaded, res.new_pp, res.new_acc, medal_part,
                 );
                 reply(&state_clone, &target_owned, &msg).await;
             }
@@ -1761,17 +1735,10 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
                     }
                 }
 
-                let reply_msg = format!(
-                    "Medal sync complete! Unlocked {} new medal(s)! Total: {} / 352 medals.",
-                    newly_earned.len(),
-                    total_count
-                );
+                let reply_msg = format!("Medal sync complete! Unlocked {} new medal(s)! Total: {} / 352 medals.", newly_earned.len(), total_count);
                 reply(state, target, &reply_msg).await;
             } else {
-                let reply_msg = format!(
-                    "Medals are up to date! Total: {} / 352 medals.",
-                    total_count
-                );
+                let reply_msg = format!("Medals are up to date! Total: {} / 352 medals.", total_count);
                 reply(state, target, &reply_msg).await;
             }
         }
@@ -1779,18 +1746,18 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
             if !args.is_empty() && subcmd != "info" && subcmd != "stats" && subcmd != "all" {
                 let query = args.join(" ").to_lowercase();
                 let all_medals = crate::types::medal::get_all_medals();
-                if let Some(m) = all_medals.iter().find(|m| m.name.eq_ignore_ascii_case(&query))
-                    .or_else(|| all_medals.iter().find(|m| m.name.to_lowercase().contains(&query))) {
+                if let Some(m) = all_medals
+                    .iter()
+                    .find(|m| m.name.eq_ignore_ascii_case(&query))
+                    .or_else(|| all_medals.iter().find(|m| m.name.to_lowercase().contains(&query)))
+                {
                     let has_it = {
                         let s = state.read().await;
                         let conn = s.db.lock().await;
                         db::get_user_medals(&conn, player_name).unwrap_or_default().iter().any(|r| r.medal_id == m.id)
                     };
                     let status = if has_it { "Unlocked" } else { "Locked" };
-                    let msg = format!(
-                        "Medal: {} [{}] ({})\n{}\nStatus: {}",
-                        m.name, m.id, m.category.as_str(), m.description, status
-                    );
+                    let msg = format!("Medal: {} [{}] ({})\n{}\nStatus: {}", m.name, m.id, m.category.as_str(), m.description, status);
                     reply(state, target, &msg).await;
                     return;
                 }
@@ -1826,7 +1793,6 @@ pub async fn handle_medals(state: &Arc<RwLock<AppState>>, player_name: &str, tar
     }
 }
 
-
 pub async fn refresh_player_stats(state: &Arc<RwLock<AppState>>, player_name: &str) {
     let (db, http, config) = {
         let s = state.read().await;
@@ -1854,11 +1820,7 @@ pub async fn refresh_player_stats(state: &Arc<RwLock<AppState>>, player_name: &s
     };
 
     let daily_key = config.osu_daily_api_key.clone();
-    let rank = if let Some(ref api_key) = daily_key {
-        utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await
-    } else {
-        None
-    };
+    let rank = if let Some(ref api_key) = daily_key { utils::get_rank_from_daily(&http, api_key, new_pp, p_mode).await } else { None };
 
     {
         let mut s = state.write().await;
@@ -1899,11 +1861,7 @@ pub async fn handle_clear_scores(state: &Arc<RwLock<AppState>>, player_name: &st
         let mut target_set_id = 0i64;
         let (player_md5, player_mid, last_np) = {
             let s = state.read().await;
-            (
-                s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(),
-                s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0),
-                s.last_np_map.clone(),
-            )
+            (s.player.as_ref().map(|p| p.map_md5.clone()).unwrap_or_default(), s.player.as_ref().map(|p| p.map_id as i64).unwrap_or(0), s.last_np_map.clone())
         };
 
         if let Some(num) = explicit_id {
@@ -2073,7 +2031,6 @@ pub async fn handle_clear_scores(state: &Arc<RwLock<AppState>>, player_name: &st
     }
 }
 
-
 pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &str, reply_target: &str, args: &[&str]) {
     if let Some(&sub) = args.first() {
         if sub.eq_ignore_ascii_case("off") || sub.eq_ignore_ascii_case("undo") || sub.eq_ignore_ascii_case("lift") {
@@ -2093,11 +2050,7 @@ pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &st
     }
 
     let reason = if !args.is_empty() {
-        let filtered_args: Vec<&str> = if args.first() == Some(&"on") {
-            args[1..].to_vec()
-        } else {
-            args.to_vec()
-        };
+        let filtered_args: Vec<&str> = if args.first() == Some(&"on") { args[1..].to_vec() } else { args.to_vec() };
         if filtered_args.is_empty() {
             None
         } else {
@@ -2114,9 +2067,7 @@ pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &st
         p.rank = 0;
         p.pp = 0;
 
-        p.queue.extend_from_slice(&packets::notification(
-            "Your account is currently in restricted mode! Please visit the osu! website for more information."
-        ));
+        p.queue.extend_from_slice(&packets::notification("Your account is currently in restricted mode! Please visit the osu! website for more information."));
 
         p.queue.extend_from_slice(&packets::bancho_privs(0));
 
@@ -2124,10 +2075,7 @@ pub async fn handle_restrictself(state: &Arc<RwLock<AppState>>, player_name: &st
         p.queue.extend_from_slice(&packets::user_presence(p));
 
         let pm_text = if let Some(ref r) = reason {
-            format!(
-                "Your account is currently in restricted mode! Please visit the osu! website for more information.\nReason: {}",
-                r
-            )
+            format!("Your account is currently in restricted mode! Please visit the osu! website for more information.\nReason: {}", r)
         } else {
             "Your account is currently in restricted mode! Please visit the osu! website for more information.".to_string()
         };
@@ -2167,9 +2115,7 @@ pub async fn handle_unrestrictself(state: &Arc<RwLock<AppState>>, player_name: &
     if let Some(ref mut p) = s.player {
         p.bancho_privs = 63;
         p.queue.extend_from_slice(&packets::bancho_privs(63));
-        p.queue.extend_from_slice(&packets::notification(
-            "Your account restriction has been lifted! Welcome back."
-        ));
+        p.queue.extend_from_slice(&packets::notification("Your account restriction has been lifted! Welcome back."));
         p.queue.extend_from_slice(&packets::user_presence(p));
 
         let pm_text = "Your restriction has been lifted! Your stats and rankings have been restored. Have fun playing!";
@@ -2240,7 +2186,6 @@ pub async fn handle_mode(state: &Arc<RwLock<AppState>>, player_name: &str, targe
     reply(state, target, &format!("Game mode switched to {}!", sub)).await;
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2260,7 +2205,9 @@ mod tests {
 
     async fn drain_sent_messages(state: &Arc<RwLock<AppState>>) -> Vec<(String, String)> {
         let mut s = state.write().await;
-        let Some(ref mut p) = s.player else { return Vec::new(); };
+        let Some(ref mut p) = s.player else {
+            return Vec::new();
+        };
         let queue = p.clear_queue();
         drop(s);
         let pkts = packets::split_packets(&queue);
@@ -2366,11 +2313,8 @@ mod tests {
         assert!(ids.contains(&12345));
 
         let records = db::get_friend_records(&conn, "Hero").unwrap();
-        let presence_ids: Vec<i32> = records
-            .iter()
-            .filter(|f| f.friend_id > 2 && f.friend_id != BOT_ID && !tillerino::is_tillerino_id(f.friend_id))
-            .map(|f| f.friend_id)
-            .collect();
+        let presence_ids: Vec<i32> =
+            records.iter().filter(|f| f.friend_id > 2 && f.friend_id != BOT_ID && !tillerino::is_tillerino_id(f.friend_id)).map(|f| f.friend_id).collect();
         assert_eq!(presence_ids, vec![12345]);
     }
 
@@ -2532,9 +2476,7 @@ mod tests {
 
         // Check that BanchoBot sent confirmation packet
         let msgs = drain_sent_messages(&state).await;
-        let has_recalc_msg = msgs.iter().any(|(sender, msg)| {
-            sender == "BanchoBot" && msg.contains("Profile recalculation complete! Processed 1 score(s).")
-        });
+        let has_recalc_msg = msgs.iter().any(|(sender, msg)| sender == "BanchoBot" && msg.contains("Profile recalculation complete! Processed 1 score(s)."));
         assert!(has_recalc_msg, "BanchoBot must send confirmation message with score count");
 
         // Also test !recalc alias
@@ -2661,9 +2603,9 @@ mod tests {
 
         // BanchoBot reply should confirm set ranking with difficulty count
         let msgs = drain_sent_messages(&state).await;
-        let reply_found = msgs.iter().any(|(sender, msg)| {
-            sender == "BanchoBot" && msg.contains("Beatmapset Xi - Blue Zenith (Set ID: 5555) (3 difficulties) is now Ranked!")
-        });
+        let reply_found = msgs
+            .iter()
+            .any(|(sender, msg)| sender == "BanchoBot" && msg.contains("Beatmapset Xi - Blue Zenith (Set ID: 5555) (3 difficulties) is now Ranked!"));
         assert!(reply_found, "Reply must confirm set ranking for all 3 difficulties");
 
         // 2. Test "!unrank set 5555" with explicit ID
@@ -2697,9 +2639,7 @@ mod tests {
         // 4. Test "!status set" reporting mixed statuses
         handle_status(&state, "Player1", &["set"]).await;
         let msgs_status = drain_sent_messages(&state).await;
-        let status_found = msgs_status.iter().any(|(sender, msg)| {
-            sender == "BanchoBot" && msg.contains("1 Ranked, 2 Unranked")
-        });
+        let status_found = msgs_status.iter().any(|(sender, msg)| sender == "BanchoBot" && msg.contains("1 Ranked, 2 Unranked"));
         assert!(status_found, "Status set message must report mixed diff counts");
     }
 
@@ -2771,15 +2711,18 @@ mod tests {
             s.player.as_mut().unwrap().clear_queue()
         };
         let unrestrict_pkts = packets::split_packets(&unrestrict_queue);
-        assert!(unrestrict_pkts.iter().any(|pkt| {
-            if pkt.id == packets::PacketId::ChoNotification as u16 {
-                let mut r = packets::PacketReader::new(pkt.payload);
-                let msg = r.read_string().unwrap_or_default();
-                msg.contains("restriction has been lifted")
-            } else {
-                false
-            }
-        }), "Must queue restriction lifted notification");
+        assert!(
+            unrestrict_pkts.iter().any(|pkt| {
+                if pkt.id == packets::PacketId::ChoNotification as u16 {
+                    let mut r = packets::PacketReader::new(pkt.payload);
+                    let msg = r.read_string().unwrap_or_default();
+                    msg.contains("restriction has been lifted")
+                } else {
+                    false
+                }
+            }),
+            "Must queue restriction lifted notification"
+        );
 
         handle_unrestrictself(&state, "RestrictedUser", "#osu").await;
         let not_restricted_queue = {
@@ -2835,12 +2778,8 @@ mod tests {
         let state = Arc::new(RwLock::new(app_state));
 
         // Player /np's Map B
-        let np_info = crate::handlers::tillerino::NpInfo {
-            map_id: Some(7002),
-            set_id: None,
-            title_hint: Some("Artist B - Song B [Insane]".to_string()),
-            mods: None,
-        };
+        let np_info =
+            crate::handlers::tillerino::NpInfo { map_id: Some(7002), set_id: None, title_hint: Some("Artist B - Song B [Insane]".to_string()), mods: None };
         crate::handlers::tillerino::handle_np(&state, "Player1", "Tillerino", np_info).await;
 
         // Player runs "!rank" without args
@@ -3062,12 +3001,8 @@ mod tests {
         }
 
         // Simulate /np to select the map
-        let np_info = crate::handlers::tillerino::NpInfo {
-            map_id: Some(9005),
-            set_id: None,
-            title_hint: Some("NP Artist - NP Title [Expert]".to_string()),
-            mods: None,
-        };
+        let np_info =
+            crate::handlers::tillerino::NpInfo { map_id: Some(9005), set_id: None, title_hint: Some("NP Artist - NP Title [Expert]".to_string()), mods: None };
         crate::handlers::tillerino::handle_np(&state, "Player1", "Tillerino", np_info).await;
 
         // Now run !clearmap
@@ -3124,5 +3059,3 @@ mod tests {
         assert!(msgs2.iter().any(|(s, m)| s == "BanchoBot" && m.contains("Fetching top scores for 'ScoreBotTester' (mode: osu)")));
     }
 }
-
-

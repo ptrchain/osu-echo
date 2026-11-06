@@ -210,11 +210,7 @@ pub async fn fetch_beatmap_from_api(http: &reqwest::Client, api_key: &str, param
     fetch_beatmap_from_api_with_hint(http, api_key, params, None).await
 }
 
-pub async fn fetch_all_beatmaps_from_api(
-    http: &reqwest::Client,
-    api_key: &str,
-    params: &[(&str, String)],
-) -> Option<Vec<crate::types::beatmap::Beatmap>> {
+pub async fn fetch_all_beatmaps_from_api(http: &reqwest::Client, api_key: &str, params: &[(&str, String)]) -> Option<Vec<crate::types::beatmap::Beatmap>> {
     let mut url = reqwest::Url::parse("https://osu.ppy.sh/api/get_beatmaps").ok()?;
     {
         let mut pairs = url.query_pairs_mut();
@@ -235,10 +231,7 @@ pub async fn fetch_all_beatmaps_from_api(
         return None;
     }
 
-    let list: Vec<crate::types::beatmap::Beatmap> = arr
-        .iter()
-        .filter_map(crate::types::beatmap::Beatmap::from_api_json)
-        .collect();
+    let list: Vec<crate::types::beatmap::Beatmap> = arr.iter().filter_map(crate::types::beatmap::Beatmap::from_api_json).collect();
 
     if list.is_empty() {
         None
@@ -656,10 +649,7 @@ pub fn find_and_parse_local_osu_file(
     None
 }
 
-pub fn scan_dir_for_all_osu_files(
-    dir: &std::path::Path,
-    fallback_set_id: Option<i64>,
-) -> Vec<(crate::types::beatmap::Beatmap, String)> {
+pub fn scan_dir_for_all_osu_files(dir: &std::path::Path, fallback_set_id: Option<i64>) -> Vec<(crate::types::beatmap::Beatmap, String)> {
     let mut results = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -676,11 +666,7 @@ pub fn scan_dir_for_all_osu_files(
     results
 }
 
-pub fn find_local_mapset_folder(
-    songs_dir: &std::path::Path,
-    set_id: Option<i64>,
-    map_md5: Option<&str>,
-) -> Option<std::path::PathBuf> {
+pub fn find_local_mapset_folder(songs_dir: &std::path::Path, set_id: Option<i64>, map_md5: Option<&str>) -> Option<std::path::PathBuf> {
     if !songs_dir.exists() {
         return None;
     }
@@ -917,7 +903,10 @@ pub async fn get_or_fetch_beatmap_content(
         let md5_opt = if !bmap.file_md5.is_empty() { Some(bmap.file_md5.as_str()) } else { None };
         if let Some((local_bmap, local_c)) = find_and_parse_local_osu_file(&songs_dir, sid, mid, md5_opt, Some(&diff_hint)) {
             let md5_match = !bmap.file_md5.is_empty() && local_bmap.file_md5.eq_ignore_ascii_case(&bmap.file_md5);
-            let id_and_ver_match = bmap.beatmap_id > 0 && local_bmap.beatmap_id == bmap.beatmap_id && !bmap.version.is_empty() && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
+            let id_and_ver_match = bmap.beatmap_id > 0
+                && local_bmap.beatmap_id == bmap.beatmap_id
+                && !bmap.version.is_empty()
+                && local_bmap.version.eq_ignore_ascii_case(&bmap.version);
 
             if md5_match || id_and_ver_match {
                 let conn = db.lock().await;
