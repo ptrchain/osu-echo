@@ -28,6 +28,48 @@ pub fn safe_logout_bots(player: &mut Player, removed_bot_ids: &[i32], friend_ids
     }
 }
 
+/// Asynchronously locates and caches a beatmap's `.osu` file content in SQLite so
+/// `OsuMatchStart` never blocks the `/cho` poll loop with a synchronous `Songs/` scan.
+fn spawn_prefetch_beatmap_osu(state: Arc<RwLock<AppState>>, md5: String, beatmap_id: i32, beatmap_name: String) {
+    if md5.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let songs_dir = {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &md5) {
+                if b.file_content.is_some() {
+                    return;
+                }
+            }
+            drop(db_conn);
+            utils::resolve_songs_folder(&s.config)
+        };
+        let Some(sdir) = songs_dir else {
+            return;
+        };
+
+        let md5_clone = md5.clone();
+        let id_opt = if beatmap_id > 0 { Some(beatmap_id as i64) } else { None };
+        let hint_opt = if beatmap_name.is_empty() { None } else { Some(beatmap_name) };
+
+        let found = tokio::task::spawn_blocking(move || {
+            utils::find_and_parse_local_osu_file(&sdir, None, id_opt, Some(md5_clone.as_str()), hint_opt.as_deref())
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some((local_bmap, content)) = found {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            let _ = db::insert_beatmap(&db_conn, &local_bmap);
+            let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+        }
+    });
+}
+
 fn frame_accuracy_pct(f: &packets::ScoreFrame, mode: u8) -> f64 {
     match mode {
         3 => {
@@ -585,12 +627,16 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 .map(|mut old| old.clear_bots().into_iter().map(|b| b.userid).collect())
                                 .unwrap_or_default();
 
+                            let mut prefetch_osu: Option<(String, i32, String)> = None;
                             if let Some(ref mut p) = s.player {
                                 if !prev_bot_ids.is_empty() {
                                     safe_logout_bots(p, &prev_bot_ids, &friend_ids);
                                 }
                                 let room = MatchRoom::from_create_wire(1, p.userid, &wire_in);
                                 let wire_out = room.to_wire();
+                                if !room.beatmap_md5.is_empty() {
+                                    prefetch_osu = Some((room.beatmap_md5.clone(), room.beatmap_id, room.beatmap_name.clone()));
+                                }
                                 p.queue.extend_from_slice(&packets::match_join_success(&wire_out));
                                 p.queue.extend_from_slice(&packets::channel_join("#multiplayer"));
                                 p.queue.extend_from_slice(&packets::send_msg(
@@ -600,6 +646,10 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                     BANCHOBOT_ID,
                                 ));
                                 s.active_match = Some(room);
+                            }
+                            drop(s);
+                            if let Some((md5, bmap_id, bmap_name)) = prefetch_osu {
+                                spawn_prefetch_beatmap_osu(state.clone(), md5, bmap_id, bmap_name);
                             }
                         }
                     }
@@ -673,6 +723,7 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         let mut reader = packets::PacketReader::new(in_pkt.payload);
                         if let Ok(wire_in) = reader.read_match() {
                             let mut prefetch_target: Option<(i64, u8)> = None;
+                            let mut prefetch_osu: Option<(String, i32, String)> = None;
                             {
                                 let mut s = state.write().await;
                                 let wire_out = if let Some(ref mut room) = s.active_match {
@@ -698,6 +749,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                         if room.beatmap_id > 0 {
                                             prefetch_target = Some((room.beatmap_id as i64, room.mode));
                                         }
+                                        if !room.beatmap_md5.is_empty() {
+                                            prefetch_osu = Some((room.beatmap_md5.clone(), room.beatmap_id, room.beatmap_name.clone()));
+                                        }
                                     }
                                     room.set_all_bots_ready();
                                     room.apply_freemod_constraints();
@@ -712,6 +766,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             }
                             if let Some((bmap_id, mode)) = prefetch_target {
                                 crate::multiplayer::mimic::spawn_prefetch_mimic_scores(state.clone(), bmap_id, mode);
+                            }
+                            if let Some((md5, bmap_id, bmap_name)) = prefetch_osu {
+                                spawn_prefetch_beatmap_osu(state.clone(), md5, bmap_id, bmap_name);
                             }
                         }
                     }
@@ -923,7 +980,10 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         let start_snapshot = {
                             let s = state.read().await;
                             let now = std::time::Instant::now();
-                            s.active_match.as_ref().map(|room| {
+                            s.active_match.as_ref().and_then(|room| {
+                                if room.in_progress {
+                                    return None;
+                                }
                                 let bmap_id = room.beatmap_id as i64;
                                 let bots: Vec<(usize, i32, SkillProfile, u32, Option<simulator::ConstrainedScore>)> = room
                                     .slots
@@ -956,43 +1016,27 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                         Some((idx, bot.profile.userid, skill, room.effective_mods_for_slot(idx), cached_score))
                                     })
                                     .collect();
-                                (
+                                Some((
                                     room.beatmap_md5.clone(),
-                                    room.beatmap_id,
                                     room.mode,
                                     room.win_condition,
                                     room.rng_seed_override,
                                     room.seed,
                                     room.run_nonce,
                                     bots,
-                                    utils::resolve_songs_folder(&s.config),
-                                )
+                                ))
                             })
                         };
 
-                        if let Some((md5, map_id, mode, win_condition, seed_override, wire_seed, run_nonce, bots, songs_dir)) = start_snapshot {
-                            // Resolve .osu file bytes outside AppState write lock
-                            let mut osu_content: Option<String> = None;
-                            if !md5.is_empty() {
+                        if let Some((md5, mode, win_condition, seed_override, wire_seed, run_nonce, bots)) = start_snapshot {
+                            // Fast DB-only .osu lookup (never block /cho with a full Songs/ disk scan)
+                            let osu_content: Option<String> = if !md5.is_empty() {
                                 let s = state.read().await;
                                 let db_conn = s.db.lock().await;
-                                if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &md5) {
-                                    osu_content = b.file_content;
-                                }
-                            }
-                            if osu_content.is_none() {
-                                if let Some(ref sdir) = songs_dir {
-                                    let id_opt = if map_id > 0 { Some(map_id as i64) } else { None };
-                                    let md5_opt = if !md5.is_empty() { Some(md5.as_str()) } else { None };
-                                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, id_opt, md5_opt, None) {
-                                        let s = state.read().await;
-                                        let db_conn = s.db.lock().await;
-                                        let _ = db::insert_beatmap(&db_conn, &local_bmap);
-                                        let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
-                                        osu_content = Some(content);
-                                    }
-                                }
-                            }
+                                db::get_beatmap_by_md5(&db_conn, &md5).ok().flatten().and_then(|b| b.file_content)
+                            } else {
+                                None
+                            };
 
                             let (match_seed, effective_nonce) = match seed_override {
                                 Some(seed) => (seed, 0u64),
@@ -1028,7 +1072,7 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 room.run_nonce = room.run_nonce.wrapping_add(1);
 
                                 for slot in &mut room.slots {
-                                    if slot.is_occupied() {
+                                    if matches!(slot.status, SlotStatus::NotReady | SlotStatus::Ready) {
                                         slot.status = SlotStatus::Playing;
                                     }
                                 }

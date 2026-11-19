@@ -130,13 +130,18 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, player_name: &str, target: 
     let Some(ref player_snapshot) = s.player else {
         return;
     };
+    let player_uid = player_snapshot.userid;
     let rival_template = BotProfile::rival_for(player_snapshot, 0);
 
     let Some(ref mut room) = s.active_match else {
         return;
     };
 
-    let mut profile = if let Some(mimic_profile) = resolved_mimic {
+    let mut profile = if let Some(mut mimic_profile) = resolved_mimic {
+        room.ensure_unique_bot_userid(
+            &mut mimic_profile,
+            &[player_uid, crate::handlers::cho::BANCHOBOT_ID, crate::handlers::cho::TILLERINO_ID],
+        );
         mimic_profile
     } else {
         let synth_id = room.alloc_synthetic_bot_id();

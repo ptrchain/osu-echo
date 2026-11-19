@@ -238,6 +238,17 @@ impl MatchRoom {
         id
     }
 
+    /// Reassigns `profile.userid` to a fresh synthetic ID if it collides with reserved IDs
+    /// (local player, BanchoBot, Tillerino, <= 4) or any user already occupying a slot in the room.
+    pub fn ensure_unique_bot_userid(&mut self, profile: &mut BotProfile, protected_ids: &[i32]) {
+        let collides = profile.userid <= 4
+            || protected_ids.contains(&profile.userid)
+            || self.slots.iter().any(|s| s.is_occupied() && s.user_id == profile.userid);
+        if collides {
+            profile.userid = self.alloc_synthetic_bot_id();
+        }
+    }
+
     pub fn to_wire(&self) -> MatchWire {
         let mut slot_status = [SlotStatus::Open as u8; 16];
         let mut slot_team = [Team::Neutral as u8; 16];
@@ -297,8 +308,9 @@ impl MatchRoom {
         }
     }
 
-    pub fn add_bot(&mut self, profile: BotProfile) -> Result<usize, &'static str> {
+    pub fn add_bot(&mut self, mut profile: BotProfile) -> Result<usize, &'static str> {
         let slot_idx = self.find_open_slot().ok_or("Room has no open slots")?;
+        self.ensure_unique_bot_userid(&mut profile, &[self.host_id]);
         let team = self.next_balanced_team();
         let slot_mods = if self.freemods {
             sanitize_freemod_bits(profile.preferred_mods())
@@ -503,5 +515,50 @@ mod tests {
         assert!(!bs.has_failed);
         assert_eq!(bs.fail_time_ms, None);
         assert_eq!(bs.last_sent_idx, 0);
+    }
+
+    #[test]
+    fn test_colliding_bot_userid_reassigned_to_synthetic() {
+        use crate::multiplayer::bot::SkillProfile;
+        use crate::multiplayer::is_synthetic_bot_id;
+
+        let mut room = make_room(false, TeamType::HeadToHead);
+        // Local human host has userid = 2; adding peppy (userid = 2) must NOT collide!
+        let peppy = BotProfile {
+            userid: 2,
+            name: "peppy".to_string(),
+            country: 16,
+            rank: 500_000,
+            pp: 200,
+            acc: 95.0,
+            source: BotSource::MimicPlayer {
+                username: "peppy".to_string(),
+                osu_user_id: Some(2),
+                fallback_skill: SkillProfile::default(),
+            },
+        };
+        let slot1 = room.add_bot(peppy).unwrap();
+        assert_ne!(room.slots[slot1].user_id, 2);
+        assert!(is_synthetic_bot_id(room.slots[slot1].user_id));
+
+        // Adding the same mimicked player twice must give the second copy a distinct synthetic ID
+        let mrekk = BotProfile {
+            userid: 7562902,
+            name: "mrekk".to_string(),
+            country: 16,
+            rank: 1,
+            pp: 30_000,
+            acc: 98.5,
+            source: BotSource::MimicPlayer {
+                username: "mrekk".to_string(),
+                osu_user_id: Some(7562902),
+                fallback_skill: SkillProfile::default(),
+            },
+        };
+        let s2 = room.add_bot(mrekk.clone()).unwrap();
+        let s3 = room.add_bot(mrekk).unwrap();
+        assert_eq!(room.slots[s2].user_id, 7562902);
+        assert_ne!(room.slots[s3].user_id, 7562902);
+        assert!(is_synthetic_bot_id(room.slots[s3].user_id));
     }
 }
