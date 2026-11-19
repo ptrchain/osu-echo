@@ -180,6 +180,7 @@ pub struct MatchRoom {
     pub win_condition: WinCondition,
     pub in_progress: bool,
     pub seed: i32,
+    pub rng_seed_override: Option<u64>,
     pub next_bot_id: i32,
     pub slots: [MatchSlot; 16],
 }
@@ -219,6 +220,7 @@ impl MatchRoom {
             win_condition: WinCondition::from_u8(wire.win_condition),
             in_progress: false,
             seed: wire.seed,
+            rng_seed_override: None,
             next_bot_id: SYNTHETIC_BOT_ID_BASE + 1,
             slots,
         }

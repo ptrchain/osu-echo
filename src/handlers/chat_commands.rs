@@ -41,6 +41,8 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
 
     let cmd_text = if let Some(stripped) = trimmed.strip_prefix(&prefix) {
         stripped
+    } else if target.eq_ignore_ascii_case("#multiplayer") && trimmed.starts_with('!') {
+        &trimmed[1..]
     } else if is_pm {
         trimmed.strip_prefix('!').or_else(|| trimmed.strip_prefix('/')).unwrap_or(trimmed)
     } else {
@@ -72,6 +74,11 @@ pub async fn handle_chat_message(state: Arc<RwLock<AppState>>, player_name: &str
                 return;
             }
         }
+    }
+
+    if cmd == "mp" && (target.eq_ignore_ascii_case("#multiplayer") || is_banchobot) {
+        crate::multiplayer::commands::handle_mp_command(state.clone(), player_name, &reply_target, args).await;
+        return;
     }
 
     if is_tillerino {

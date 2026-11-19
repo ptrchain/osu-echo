@@ -1,4 +1,5 @@
 pub mod bot;
+pub mod commands;
 pub mod match_state;
 
 pub const SYNTHETIC_BOT_ID_BASE: i32 = 1_000_000_000;
