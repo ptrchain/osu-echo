@@ -19,6 +19,10 @@ pub async fn handle(state: Arc<RwLock<AppState>>, userid: i32) -> Response {
 
     let s = state.read().await;
 
+    if crate::multiplayer::is_synthetic_bot_id(userid) {
+        return Response::image(s.default_avatar.clone(), "png");
+    }
+
     if userid != 2 {
         let avatar_cache_dir = std::path::Path::new(".data").join("avatars");
         let cached_file = avatar_cache_dir.join(format!("{}.png", userid));
@@ -118,5 +122,17 @@ mod tests {
         let resp = handle(shared_state, 2).await;
         assert_eq!(resp.status, hyper::StatusCode::OK);
         assert_eq!(resp.body, vec![1, 2, 3, 4]);
+    }
+
+    #[tokio::test]
+    async fn test_synthetic_bot_avatar_short_circuit() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut app_state = AppState::new(conn, Config::default());
+        app_state.default_avatar = vec![9, 8, 7, 6];
+        let shared_state = Arc::new(RwLock::new(app_state));
+
+        let resp = handle(shared_state, crate::multiplayer::SYNTHETIC_BOT_ID_BASE + 1).await;
+        assert_eq!(resp.status, hyper::StatusCode::OK);
+        assert_eq!(resp.body, vec![9, 8, 7, 6]);
     }
 }

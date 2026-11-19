@@ -4,6 +4,7 @@ mod commands;
 mod db;
 mod handlers;
 mod logger;
+mod multiplayer;
 mod packets;
 mod server;
 pub mod services;

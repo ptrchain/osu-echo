@@ -1,3 +1,4 @@
+use crate::multiplayer::match_state::MatchRoom;
 use crate::types::beatmap::Beatmap;
 use crate::types::command::Command;
 use crate::types::config::Config;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub recent_recommendations: Vec<String>,
     pub bancho_score_cache: HashMap<BanchoScoreCacheKey, (std::time::Instant, Vec<crate::types::score::BanchoScore>)>,
     pub web_sessions: HashMap<String, WebSession>,
+    pub in_lobby: bool,
+    pub active_match: Option<MatchRoom>,
 }
 
 pub type BanchoScoreCacheKey = (i64, i32, Option<u32>, i32);
@@ -55,6 +58,8 @@ impl AppState {
             recent_recommendations: Vec::new(),
             bancho_score_cache: HashMap::new(),
             web_sessions: HashMap::new(),
+            in_lobby: false,
+            active_match: None,
         }
     }
 }
