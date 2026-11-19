@@ -9,6 +9,20 @@ pub struct SimulationResult {
     pub fail_time_ms: Option<i32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstrainedScore {
+    pub n300: u16,
+    pub n100: u16,
+    pub n50: u16,
+    pub ngeki: u16,
+    pub nkatu: u16,
+    pub nmiss: u16,
+    pub max_combo: u16,
+    pub total_score: i32,
+    pub mods: u32,
+    pub perfect: bool,
+}
+
 /// Deterministic SplitMix64 PRNG for reproducible per-bot simulations.
 #[derive(Debug, Clone)]
 struct Rng {
@@ -418,6 +432,287 @@ pub fn simulate_bot(
     SimulationResult { timeline, fail_time_ms }
 }
 
+/// Generates a realistic timestamped `ScoreFrame` timeline constrained to land on an exact
+/// target score's `(n300, n100, n50, ngeki, nkatu, nmiss, max_combo, total_score)`.
+pub fn simulate_constrained_score(
+    osu_bytes: Option<&[u8]>,
+    target: &ConstrainedScore,
+    mode: u8,
+    slot_idx: usize,
+    match_seed: u64,
+) -> SimulationResult {
+    let map = osu_bytes
+        .and_then(|b| analyze_beatmap(b, mode, target.mods))
+        .unwrap_or_else(|| fallback_map(5.0));
+
+    let is_mania = mode == 3;
+    let total_hits: usize = if is_mania {
+        target.ngeki as usize
+            + target.n300 as usize
+            + target.nkatu as usize
+            + target.n100 as usize
+            + target.n50 as usize
+            + target.nmiss as usize
+    } else {
+        target.n300 as usize + target.n100 as usize + target.n50 as usize + target.nmiss as usize
+    };
+
+    if total_hits == 0 {
+        let t = map.objects.last().map(|o| o.time_ms).unwrap_or(1_000);
+        return SimulationResult {
+            timeline: vec![ScoreFrame {
+                time: t,
+                id: slot_idx as u8,
+                total_score: target.total_score,
+                max_combo: target.max_combo,
+                current_combo: target.max_combo,
+                perfect: target.perfect,
+                current_hp: 200,
+                ..Default::default()
+            }],
+            fail_time_ms: None,
+        };
+    }
+
+    let mut rng = Rng::new(match_seed, slot_idx, target.total_score, total_hits as u64);
+
+    // Map each hit index to a beatmap timestamp and local_sr
+    let map_len = map.objects.len().max(1);
+    let mut times = Vec::with_capacity(total_hits);
+    let mut strains = Vec::with_capacity(total_hits);
+    for i in 0..total_hits {
+        let src_idx = (i * map_len) / total_hits;
+        let obj = &map.objects[src_idx.min(map_len - 1)];
+        times.push(obj.time_ms);
+        strains.push(obj.local_sr);
+    }
+
+    // Judgement codes: 0=miss, 1=50, 2=100, 3=300, 4=katu(mania), 5=geki(mania)
+    let mut judgements = vec![3u8; total_hits];
+
+    // Place misses biased toward highest-strain positions outside a protected streak
+    let nmiss = (target.nmiss as usize).min(total_hits);
+    if nmiss > 0 {
+        let non_miss = total_hits - nmiss;
+        let desired_streak = (target.max_combo as usize).min(non_miss);
+
+        // Find lowest-strain window of length `desired_streak` to protect for max_combo
+        let mut best_start = 0usize;
+        if desired_streak > 0 && desired_streak < total_hits {
+            let mut window_sum: f64 = strains[..desired_streak].iter().sum();
+            let mut best_sum = window_sum;
+            for start in 1..=(total_hits - desired_streak) {
+                window_sum += strains[start + desired_streak - 1] - strains[start - 1];
+                if window_sum < best_sum {
+                    best_sum = window_sum;
+                    best_start = start;
+                }
+            }
+        }
+        let streak_end = best_start + desired_streak;
+
+        // Rank candidate indices outside [best_start, streak_end) by strain (+ small noise)
+        let mut candidates: Vec<(usize, f64)> = (0..total_hits)
+            .filter(|&i| i < best_start || i >= streak_end)
+            .map(|i| (i, strains[i] + rng.next_f64() * 0.35))
+            .collect();
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        for &(idx, _) in candidates.iter().take(nmiss) {
+            judgements[idx] = 0;
+        }
+    }
+
+    // Rank remaining non-miss indices by strain (+ noise) to assign 50s, 100s, (and katu/geki in mania)
+    let mut hit_indices: Vec<(usize, f64)> = (0..total_hits)
+        .filter(|&i| judgements[i] != 0)
+        .map(|i| (i, strains[i] + rng.next_f64() * 0.5))
+        .collect();
+    hit_indices.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut cursor = 0usize;
+    for _ in 0..target.n50 as usize {
+        if cursor < hit_indices.len() {
+            judgements[hit_indices[cursor].0] = 1;
+            cursor += 1;
+        }
+    }
+    for _ in 0..target.n100 as usize {
+        if cursor < hit_indices.len() {
+            judgements[hit_indices[cursor].0] = 2;
+            cursor += 1;
+        }
+    }
+    if is_mania {
+        for _ in 0..target.nkatu as usize {
+            if cursor < hit_indices.len() {
+                judgements[hit_indices[cursor].0] = 4;
+                cursor += 1;
+            }
+        }
+        // Assign geki to the easiest remaining hits (from the back)
+        let mut back = hit_indices.len();
+        for _ in 0..target.ngeki as usize {
+            if back > cursor {
+                back -= 1;
+                judgements[hit_indices[back].0] = 5;
+            }
+        }
+    }
+
+    // First pass: compute raw combo & raw score curve for exact scaling
+    let mut raw_combo = 0u32;
+    let mut raw_max_combo = 0u32;
+    let mut raw_scores = Vec::with_capacity(total_hits);
+    let mut acc_raw_score = 0.0f64;
+    for &j in &judgements {
+        if j == 0 {
+            raw_combo = 0;
+        } else {
+            raw_combo += 1;
+            raw_max_combo = raw_max_combo.max(raw_combo);
+            let base = match j {
+                1 => 50.0,
+                2 => 100.0,
+                4 => 200.0,
+                5 => 320.0,
+                _ => 300.0,
+            };
+            acc_raw_score += base * (1.0 + (raw_combo as f64) * 0.04);
+        }
+        raw_scores.push(acc_raw_score);
+    }
+
+    let score_scale = if acc_raw_score > 0.0 {
+        target.total_score as f64 / acc_raw_score
+    } else {
+        0.0
+    };
+    let combo_scale = if raw_max_combo > 0 {
+        target.max_combo as f64 / raw_max_combo as f64
+    } else {
+        1.0
+    };
+
+    // Second pass: emit ~1000ms monotonic ScoreFrames landing on exact target values
+    let mut n300: u16 = 0;
+    let mut n100: u16 = 0;
+    let mut n50: u16 = 0;
+    let mut ngeki: u16 = 0;
+    let mut nkatu: u16 = 0;
+    let mut nmiss_so_far: u16 = 0;
+    let mut cur_raw_combo = 0u32;
+    let mut max_raw_combo_so_far = 0u32;
+    let mut hp: f64 = 200.0;
+    let mut last_emit_t: Option<i32> = None;
+    let mut timeline: Vec<ScoreFrame> = Vec::with_capacity(total_hits / 4 + 2);
+    let using_score_v2 = Mods::from_bits_truncate(target.mods).contains(Mods::SCOREV2);
+
+    for i in 0..total_hits {
+        let j = judgements[i];
+        match j {
+            0 => {
+                nmiss_so_far = nmiss_so_far.saturating_add(1);
+                cur_raw_combo = 0;
+                hp = (hp - 18.0).max(20.0);
+            }
+            1 => {
+                n50 = n50.saturating_add(1);
+                cur_raw_combo += 1;
+                hp = (hp + 1.0).min(200.0);
+            }
+            2 => {
+                n100 = n100.saturating_add(1);
+                cur_raw_combo += 1;
+                hp = (hp + 2.5).min(200.0);
+            }
+            4 => {
+                nkatu = nkatu.saturating_add(1);
+                cur_raw_combo += 1;
+                hp = (hp + 3.5).min(200.0);
+            }
+            5 => {
+                ngeki = ngeki.saturating_add(1);
+                cur_raw_combo += 1;
+                hp = (hp + 4.5).min(200.0);
+            }
+            _ => {
+                n300 = n300.saturating_add(1);
+                cur_raw_combo += 1;
+                hp = (hp + 4.0).min(200.0);
+            }
+        }
+        max_raw_combo_so_far = max_raw_combo_so_far.max(cur_raw_combo);
+
+        let is_last = i + 1 == total_hits;
+        let t_ms = times[i];
+        let interval_elapsed = last_emit_t.is_none_or(|lt| t_ms.saturating_sub(lt) >= 1000);
+
+        if is_last || interval_elapsed {
+            let scaled_score = if is_last {
+                target.total_score
+            } else {
+                (raw_scores[i] * score_scale).round().clamp(0.0, target.total_score as f64) as i32
+            };
+            let scaled_max_combo = if is_last {
+                target.max_combo
+            } else {
+                (max_raw_combo_so_far as f64 * combo_scale).round().clamp(0.0, target.max_combo as f64) as u16
+            };
+            let scaled_cur_combo = (cur_raw_combo as f64 * combo_scale).round().clamp(0.0, target.max_combo as f64) as u16;
+            let progress = (i + 1) as f64 / total_hits as f64;
+            let (out_geki, out_katu) = if is_mania {
+                (ngeki, nkatu)
+            } else if is_last {
+                (target.ngeki, target.nkatu)
+            } else {
+                (
+                    (target.ngeki as f64 * progress).round() as u16,
+                    (target.nkatu as f64 * progress).round() as u16,
+                )
+            };
+
+            let frame = ScoreFrame {
+                time: t_ms,
+                id: slot_idx as u8,
+                n300,
+                n100,
+                n50,
+                ngeki: out_geki,
+                nkatu: out_katu,
+                nmiss: nmiss_so_far,
+                total_score: scaled_score,
+                max_combo: scaled_max_combo,
+                current_combo: scaled_cur_combo,
+                perfect: if is_last { target.perfect } else { nmiss_so_far == 0 },
+                current_hp: hp.round().clamp(1.0, 200.0) as u8,
+                tag_byte: 0,
+                using_score_v2,
+                combo_portion: 0.0,
+                bonus_portion: 0.0,
+            };
+
+            if let Some(last) = timeline.last_mut() {
+                if last.time >= frame.time {
+                    let mut fixed = frame;
+                    fixed.time = last.time;
+                    *last = fixed;
+                } else {
+                    timeline.push(frame);
+                }
+            } else {
+                timeline.push(frame);
+            }
+            last_emit_t = Some(t_ms);
+        }
+    }
+
+    SimulationResult {
+        timeline,
+        fail_time_ms: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,5 +854,42 @@ mod tests {
         for w in res.timeline.windows(2) {
             assert!(w[1].time > w[0].time, "timestamps must be strictly monotonic: {} -> {}", w[0].time, w[1].time);
         }
+    }
+
+    #[test]
+    fn test_simulate_constrained_score_exact_final_frame() {
+        let map = sample_osu_map(5.0, 120, 150, 150);
+        let target = ConstrainedScore {
+            n300: 132,
+            n100: 11,
+            n50: 3,
+            ngeki: 24,
+            nkatu: 5,
+            nmiss: 4,
+            max_combo: 95,
+            total_score: 2_345_678,
+            mods: (Mods::HIDDEN | Mods::DOUBLETIME).bits(),
+            perfect: false,
+        };
+
+        let res = simulate_constrained_score(Some(&map), &target, 0, 2, 1234);
+        assert!(res.fail_time_ms.is_none());
+        assert!(res.timeline.len() >= 2);
+        for w in res.timeline.windows(2) {
+            assert!(w[1].time > w[0].time);
+            assert!(w[1].total_score >= w[0].total_score);
+        }
+
+        let last = res.timeline.last().unwrap();
+        assert_eq!(last.id, 2);
+        assert_eq!(last.n300, 132);
+        assert_eq!(last.n100, 11);
+        assert_eq!(last.n50, 3);
+        assert_eq!(last.ngeki, 24);
+        assert_eq!(last.nkatu, 5);
+        assert_eq!(last.nmiss, 4);
+        assert_eq!(last.max_combo, 95);
+        assert_eq!(last.total_score, 2_345_678);
+        assert!(!last.perfect);
     }
 }

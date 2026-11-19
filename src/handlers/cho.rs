@@ -672,37 +672,46 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                     x if x == packets::PacketId::OsuMatchChangeSettings as u16 => {
                         let mut reader = packets::PacketReader::new(in_pkt.payload);
                         if let Ok(wire_in) = reader.read_match() {
-                            let mut s = state.write().await;
-                            let wire_out = if let Some(ref mut room) = s.active_match {
-                                let map_changed = room.beatmap_md5 != wire_in.beatmap_md5 || room.beatmap_id != wire_in.beatmap_id;
-                                if !wire_in.name.is_empty() {
-                                    room.name = wire_in.name;
-                                }
-                                room.beatmap_name = wire_in.beatmap_name;
-                                room.beatmap_id = wire_in.beatmap_id;
-                                room.beatmap_md5 = wire_in.beatmap_md5;
-                                room.mods = wire_in.mods;
-                                room.mode = wire_in.mode;
-                                room.win_condition = WinCondition::from_u8(wire_in.win_condition);
-                                room.team_type = TeamType::from_u8(wire_in.team_type);
-                                room.freemods = wire_in.freemods != 0;
+                            let mut prefetch_target: Option<(i64, u8)> = None;
+                            {
+                                let mut s = state.write().await;
+                                let wire_out = if let Some(ref mut room) = s.active_match {
+                                    let map_changed = room.beatmap_md5 != wire_in.beatmap_md5 || room.beatmap_id != wire_in.beatmap_id;
+                                    if !wire_in.name.is_empty() {
+                                        room.name = wire_in.name;
+                                    }
+                                    room.beatmap_name = wire_in.beatmap_name;
+                                    room.beatmap_id = wire_in.beatmap_id;
+                                    room.beatmap_md5 = wire_in.beatmap_md5;
+                                    room.mods = wire_in.mods;
+                                    room.mode = wire_in.mode;
+                                    room.win_condition = WinCondition::from_u8(wire_in.win_condition);
+                                    room.team_type = TeamType::from_u8(wire_in.team_type);
+                                    room.freemods = wire_in.freemods != 0;
 
-                                if map_changed {
-                                    for slot in &mut room.slots {
-                                        if slot.is_human() && slot.status == SlotStatus::Ready {
-                                            slot.status = SlotStatus::NotReady;
+                                    if map_changed {
+                                        for slot in &mut room.slots {
+                                            if slot.is_human() && slot.status == SlotStatus::Ready {
+                                                slot.status = SlotStatus::NotReady;
+                                            }
+                                        }
+                                        if room.beatmap_id > 0 {
+                                            prefetch_target = Some((room.beatmap_id as i64, room.mode));
                                         }
                                     }
+                                    room.set_all_bots_ready();
+                                    room.apply_freemod_constraints();
+                                    room.assign_balanced_teams();
+                                    Some(room.to_wire())
+                                } else {
+                                    None
+                                };
+                                if let (Some(ref mut p), Some(wire)) = (&mut s.player, wire_out) {
+                                    p.queue.extend_from_slice(&packets::update_match(&wire, true));
                                 }
-                                room.set_all_bots_ready();
-                                room.apply_freemod_constraints();
-                                room.assign_balanced_teams();
-                                Some(room.to_wire())
-                            } else {
-                                None
-                            };
-                            if let (Some(ref mut p), Some(wire)) = (&mut s.player, wire_out) {
-                                p.queue.extend_from_slice(&packets::update_match(&wire, true));
+                            }
+                            if let Some((bmap_id, mode)) = prefetch_target {
+                                crate::multiplayer::mimic::spawn_prefetch_mimic_scores(state.clone(), bmap_id, mode);
                             }
                         }
                     }
@@ -913,19 +922,38 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         // Snapshot room & bot metadata outside write lock
                         let start_snapshot = {
                             let s = state.read().await;
+                            let now = std::time::Instant::now();
                             s.active_match.as_ref().map(|room| {
-                                let bots: Vec<(usize, i32, SkillProfile, u32)> = room
+                                let bmap_id = room.beatmap_id as i64;
+                                let bots: Vec<(usize, i32, SkillProfile, u32, Option<simulator::ConstrainedScore>)> = room
                                     .slots
                                     .iter()
                                     .enumerate()
                                     .filter_map(|(idx, slot)| {
                                         let bot = slot.bot.as_ref()?;
-                                        let skill = match &bot.profile.source {
-                                            BotSource::Procedural(sk) => sk.clone(),
-                                            BotSource::MimicPlayer { fallback_skill, .. } => fallback_skill.clone(),
-                                            BotSource::PersonalBest | BotSource::ReplayGhost { .. } => SkillProfile::default(),
+                                        let (skill, cached_score) = match &bot.profile.source {
+                                            BotSource::Procedural(sk) => (sk.clone(), None),
+                                            BotSource::MimicPlayer { osu_user_id, fallback_skill, .. } => {
+                                                let sc = osu_user_id.and_then(|uid| {
+                                                    if bmap_id <= 0 {
+                                                        return None;
+                                                    }
+                                                    s.mp_map_score_cache
+                                                        .get(&(uid, bmap_id))
+                                                        .filter(|(ts, _)| {
+                                                            crate::multiplayer::mimic::is_cache_fresh(
+                                                                *ts,
+                                                                crate::multiplayer::mimic::MAP_SCORE_CACHE_TTL,
+                                                                now,
+                                                            )
+                                                        })
+                                                        .and_then(|(_, opt)| opt.clone())
+                                                });
+                                                (fallback_skill.clone(), sc)
+                                            }
+                                            BotSource::PersonalBest | BotSource::ReplayGhost { .. } => (SkillProfile::default(), None),
                                         };
-                                        Some((idx, bot.profile.userid, skill, room.effective_mods_for_slot(idx)))
+                                        Some((idx, bot.profile.userid, skill, room.effective_mods_for_slot(idx), cached_score))
                                     })
                                     .collect();
                                 (
@@ -973,18 +1001,22 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
 
                             let osu_bytes = osu_content.as_deref().map(str::as_bytes);
                             let mut sim_results: Vec<(usize, simulator::SimulationResult)> = Vec::with_capacity(bots.len());
-                            for (slot_idx, bot_uid, skill, eff_mods) in &bots {
-                                let res = simulator::simulate_bot(
-                                    osu_bytes,
-                                    skill,
-                                    mode,
-                                    *eff_mods,
-                                    win_condition,
-                                    *slot_idx,
-                                    *bot_uid,
-                                    match_seed,
-                                    effective_nonce,
-                                );
+                            for (slot_idx, bot_uid, skill, eff_mods, cached_score) in &bots {
+                                let res = if let Some(ref target_score) = cached_score {
+                                    simulator::simulate_constrained_score(osu_bytes, target_score, mode, *slot_idx, match_seed)
+                                } else {
+                                    simulator::simulate_bot(
+                                        osu_bytes,
+                                        skill,
+                                        mode,
+                                        *eff_mods,
+                                        win_condition,
+                                        *slot_idx,
+                                        *bot_uid,
+                                        match_seed,
+                                        effective_nonce,
+                                    )
+                                };
                                 sim_results.push((*slot_idx, res));
                             }
 

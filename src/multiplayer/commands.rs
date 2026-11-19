@@ -84,7 +84,7 @@ pub async fn handle_mp_command(state: Arc<RwLock<AppState>>, player_name: &str, 
     }
 
     match sub.as_str() {
-        "addbot" => handle_addbot(state, target, sub_args).await,
+        "addbot" => handle_addbot(state, player_name, target, sub_args).await,
         "removebot" => handle_removebot(state, player_name, target, sub_args).await,
         "clearbots" => handle_clearbots(state, player_name, target).await,
         "botskill" => handle_botskill(state, target, sub_args).await,
@@ -98,13 +98,33 @@ pub async fn handle_mp_command(state: Arc<RwLock<AppState>>, player_name: &str, 
     }
 }
 
-async fn handle_addbot(state: Arc<RwLock<AppState>>, target: &str, args: &[&str]) {
+async fn handle_addbot(state: Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     if args.is_empty() {
-        banchobot::reply(&state, target, "Usage: !mp addbot <6digit..1digit|rival|custom> [name] [sr=X] [acc=Y] [mods=+HD] [nofail]").await;
+        banchobot::reply(
+            &state,
+            target,
+            "Usage: !mp addbot <6digit..1digit|rival|custom|username> [name] [sr=X] [acc=Y] [mods=+HD] [nofail]",
+        )
+        .await;
         return;
     }
 
     let kind = args[0].to_ascii_lowercase();
+    let is_builtin = matches!(kind.as_str(), "6digit" | "5digit" | "4digit" | "3digit" | "2digit" | "1digit" | "rival" | "custom");
+
+    // Resolve real osu! player outside AppState locks when not a built-in preset
+    let resolved_mimic = if !is_builtin {
+        match crate::multiplayer::mimic::resolve_player(&state, player_name, args[0]).await {
+            Ok(profile) => Some(profile),
+            Err(err) => {
+                banchobot::reply(&state, target, &err).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let mut s = state.write().await;
 
     let Some(ref player_snapshot) = s.player else {
@@ -116,42 +136,37 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, target: &str, args: &[&str]
         return;
     };
 
-    let synth_id = room.alloc_synthetic_bot_id();
-    let mut profile = match kind.as_str() {
-        "6digit" | "5digit" | "4digit" | "3digit" | "2digit" | "1digit" => BotProfile::from_preset(&kind, synth_id).unwrap(),
-        "rival" => {
-            let mut r = rival_template;
-            r.userid = synth_id;
-            r
-        }
-        "custom" => BotProfile {
-            userid: synth_id,
-            name: "Custom Bot".to_string(),
-            country: 0,
-            rank: 50_000,
-            pp: 4_000,
-            acc: 97.0,
-            source: BotSource::Procedural(SkillProfile::default()),
-        },
-        _ => {
-            drop(s);
-            banchobot::reply(
-                &state,
-                target,
-                &format!("Unknown bot preset '{}'. Use 6digit..1digit, rival, or custom.", args[0]),
-            )
-            .await;
-            return;
+    let mut profile = if let Some(mimic_profile) = resolved_mimic {
+        mimic_profile
+    } else {
+        let synth_id = room.alloc_synthetic_bot_id();
+        match kind.as_str() {
+            "6digit" | "5digit" | "4digit" | "3digit" | "2digit" | "1digit" => BotProfile::from_preset(&kind, synth_id).unwrap(),
+            "rival" => {
+                let mut r = rival_template;
+                r.userid = synth_id;
+                r
+            }
+            _ => BotProfile {
+                userid: synth_id,
+                name: "Custom Bot".to_string(),
+                country: 0,
+                rank: 50_000,
+                pp: 4_000,
+                acc: 97.0,
+                source: BotSource::Procedural(SkillProfile::default()),
+            },
         }
     };
 
-    let mut custom_name_set = false;
+    let is_mimic = matches!(profile.source, BotSource::MimicPlayer { .. });
+    let mut custom_name_set = is_mimic;
     for &tok in &args[1..] {
         if let Some((k, v)) = tok.split_once('=') {
             match k.to_ascii_lowercase().as_str() {
                 "sr" => {
                     if let Ok(sr) = v.parse::<f64>() {
-                        if let BotSource::Procedural(ref mut sk) = profile.source {
+                        if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                             sk.target_sr = clamp_sr(sr);
                         }
                     }
@@ -160,35 +175,35 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, target: &str, args: &[&str]
                     if let Ok(acc) = v.parse::<f64>() {
                         let clamped = clamp_acc(acc);
                         profile.acc = clamped;
-                        if let BotSource::Procedural(ref mut sk) = profile.source {
+                        if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                             sk.accuracy_mean = clamped;
                         }
                     }
                 }
                 "consistency" | "cons" => {
                     if let Ok(c) = v.parse::<f64>() {
-                        if let BotSource::Procedural(ref mut sk) = profile.source {
+                        if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                             sk.consistency = clamp_unit(c);
                         }
                     }
                 }
                 "choke" => {
                     if let Ok(ch) = v.parse::<f64>() {
-                        if let BotSource::Procedural(ref mut sk) = profile.source {
+                        if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                             sk.choke_tendency = clamp_unit(ch);
                         }
                     }
                 }
                 "mods" => {
                     let m = parse_freemod_arg(v);
-                    if let BotSource::Procedural(ref mut sk) = profile.source {
+                    if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                         sk.preferred_mods = m;
                     }
                 }
                 _ => {}
             }
         } else if tok.eq_ignore_ascii_case("nofail") || tok.eq_ignore_ascii_case("nf") {
-            if let BotSource::Procedural(ref mut sk) = profile.source {
+            if let BotSource::Procedural(ref mut sk) | BotSource::MimicPlayer { fallback_skill: ref mut sk, .. } = profile.source {
                 sk.can_fail = false;
             }
         } else if !custom_name_set {
@@ -200,9 +215,13 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, target: &str, args: &[&str]
     let bp = profile.to_bancho_player(room.mode);
     let summary_name = profile.name.clone();
     let (sr_str, acc_str) = match &profile.source {
-        BotSource::Procedural(sk) => (format!("{:.1}*", sk.target_sr), format!("{:.1}%", sk.accuracy_mean)),
+        BotSource::Procedural(sk) | BotSource::MimicPlayer { fallback_skill: sk, .. } => {
+            (format!("{:.1}*", sk.target_sr), format!("{:.1}%", sk.accuracy_mean))
+        }
         _ => ("?".to_string(), format!("{:.1}%", profile.acc)),
     };
+    let beatmap_id = room.beatmap_id as i64;
+    let mode = room.mode;
 
     match room.add_bot(profile) {
         Ok(slot_idx) => {
@@ -213,7 +232,16 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, target: &str, args: &[&str]
                 p.queue.extend_from_slice(&packets::update_match(&wire, true));
             }
             drop(s);
-            banchobot::reply(&state, target, &format!("Added {} to slot {} ({}, {} acc).", summary_name, slot_idx + 1, sr_str, acc_str)).await;
+            if is_mimic && beatmap_id > 0 {
+                crate::multiplayer::mimic::spawn_prefetch_mimic_scores(state.clone(), beatmap_id, mode);
+            }
+            let tag = if is_mimic { " [Mimic]" } else { "" };
+            banchobot::reply(
+                &state,
+                target,
+                &format!("Added {}{} to slot {} ({}, {} acc).", summary_name, tag, slot_idx + 1, sr_str, acc_str),
+            )
+            .await;
         }
         Err(msg) => {
             drop(s);

@@ -1,4 +1,5 @@
 use crate::multiplayer::match_state::MatchRoom;
+use crate::multiplayer::mimic::{MimicMapScore, ResolvedPlayer};
 use crate::types::beatmap::Beatmap;
 use crate::types::command::Command;
 use crate::types::config::Config;
@@ -35,6 +36,8 @@ pub struct AppState {
     pub web_sessions: HashMap<String, WebSession>,
     pub in_lobby: bool,
     pub active_match: Option<MatchRoom>,
+    pub mp_player_cache: HashMap<String, (std::time::Instant, ResolvedPlayer)>,
+    pub mp_map_score_cache: HashMap<(i32, i64), (std::time::Instant, Option<MimicMapScore>)>,
 }
 
 pub type BanchoScoreCacheKey = (i64, i32, Option<u32>, i32);
@@ -60,6 +63,8 @@ impl AppState {
             web_sessions: HashMap::new(),
             in_lobby: false,
             active_match: None,
+            mp_player_cache: HashMap::new(),
+            mp_map_score_cache: HashMap::new(),
         }
     }
 }
