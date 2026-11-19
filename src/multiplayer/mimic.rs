@@ -4,7 +4,10 @@ use crate::multiplayer::bot::{infer_target_sr_from_pp, BotProfile, BotSource, Sk
 use crate::multiplayer::simulator::ConstrainedScore;
 use crate::services::score_import::{mode_to_ruleset_str, parse_bancho_mods, BanchoModItem};
 use crate::state::AppState;
+use crate::types::replay::Replay;
+use crate::types::score::Score;
 use crate::utils;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -363,6 +366,79 @@ pub fn spawn_prefetch_mimic_scores(state: Arc<RwLock<AppState>>, beatmap_id: i64
     });
 }
 
+pub fn constrained_from_score(s: &Score) -> ConstrainedScore {
+    ConstrainedScore {
+        n300: s.n300.max(0).min(u16::MAX as i32) as u16,
+        n100: s.n100.max(0).min(u16::MAX as i32) as u16,
+        n50: s.n50.max(0).min(u16::MAX as i32) as u16,
+        ngeki: s.ngeki.max(0).min(u16::MAX as i32) as u16,
+        nkatu: s.nkatu.max(0).min(u16::MAX as i32) as u16,
+        nmiss: s.nmiss.max(0).min(u16::MAX as i32) as u16,
+        max_combo: s.max_combo.max(0).min(u16::MAX as i32) as u16,
+        total_score: s.score.clamp(0, i32::MAX as i64) as i32,
+        mods: s.mods,
+        perfect: s.perfect,
+    }
+}
+
+pub fn constrained_from_replay(r: &Replay) -> ConstrainedScore {
+    ConstrainedScore {
+        n300: r.n300.max(0) as u16,
+        n100: r.n100.max(0) as u16,
+        n50: r.n50.max(0) as u16,
+        ngeki: r.ngeki.max(0) as u16,
+        nkatu: r.nkatu.max(0) as u16,
+        nmiss: r.nmiss.max(0) as u16,
+        max_combo: r.combo.max(0) as u16,
+        total_score: r.total_score.max(0),
+        mods: r.mods.bits(),
+        perfect: r.perfect,
+    }
+}
+
+/// Queries SQLite for the player's highest local score on `beatmap_md5` in `mode`.
+pub fn resolve_personal_best_score(conn: &rusqlite::Connection, player_name: &str, beatmap_md5: &str, mode: u8) -> Option<ConstrainedScore> {
+    if beatmap_md5.is_empty() {
+        return None;
+    }
+    let scores = db::get_scores_on_map(conn, player_name, beatmap_md5, mode as i32).ok()?;
+    let best = scores.into_iter().max_by_key(|s| s.score)?;
+    Some(constrained_from_score(&best))
+}
+
+/// Validates that `replay_path` resolves strictly inside `replay_folder` (preventing path traversal)
+/// and parses its `.osr` header into a `ConstrainedScore`.
+pub fn load_replay_ghost_confined(replay_folder: &Path, replay_path: &Path) -> Result<ConstrainedScore, String> {
+    let canonical_root = replay_folder
+        .canonicalize()
+        .map_err(|e| format!("Invalid replay folder: {}", e))?;
+
+    let candidate = if replay_path.is_absolute() {
+        replay_path.to_path_buf()
+    } else {
+        replay_folder.join(replay_path)
+    };
+
+    let canonical_file = candidate
+        .canonicalize()
+        .map_err(|e| format!("Replay file not found: {}", e))?;
+
+    if !canonical_file.starts_with(&canonical_root) {
+        return Err("Replay path is outside the configured replay folder.".to_string());
+    }
+
+    let is_osr = canonical_file
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("osr"));
+    if !is_osr {
+        return Err("Replay file must have a .osr extension.".to_string());
+    }
+
+    let replay = Replay::from_file(&canonical_file)?;
+    Ok(constrained_from_replay(&replay))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -434,5 +510,61 @@ mod tests {
         assert_eq!(bot.pp, 29_000);
         assert_eq!(bot.country, 16);
         assert!(matches!(bot.source, BotSource::MimicPlayer { osu_user_id: Some(7562902), .. }));
+    }
+
+    #[test]
+    fn test_personal_best_lookup_and_missing_fallback() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "PBPlayer").unwrap();
+
+        // No score yet -> None
+        assert!(resolve_personal_best_score(&conn, "PBPlayer", "map_md5_1", 0).is_none());
+
+        // Insert two scores on the same map; highest score should win
+        let mut s1 = Score::blank();
+        s1.name = "PBPlayer".to_string();
+        s1.md5 = "map_md5_1".to_string();
+        s1.mode = 0;
+        s1.score = 1_500_000;
+        s1.n300 = 200;
+        s1.n100 = 10;
+        s1.nmiss = 2;
+        s1.max_combo = 150;
+        s1.time = 1000;
+        db::insert_score(&conn, &s1, "Ranked").unwrap();
+
+        let mut s2 = s1.clone();
+        s2.score = 2_800_000;
+        s2.n300 = 210;
+        s2.n100 = 2;
+        s2.nmiss = 0;
+        s2.max_combo = 212;
+        s2.perfect = true;
+        s2.time = 2000;
+        db::insert_score(&conn, &s2, "Ranked").unwrap();
+
+        let pb = resolve_personal_best_score(&conn, "PBPlayer", "map_md5_1", 0).expect("PB found");
+        assert_eq!(pb.total_score, 2_800_000);
+        assert_eq!(pb.n300, 210);
+        assert_eq!(pb.max_combo, 212);
+        assert!(pb.perfect);
+    }
+
+    #[test]
+    fn test_replay_ghost_path_traversal_rejected() {
+        let tmp = std::env::temp_dir().join("osu_echo_mp_ghost_test");
+        let replays = tmp.join("Replays");
+        let outside = tmp.join("secret.osr");
+        let _ = std::fs::create_dir_all(&replays);
+        let _ = std::fs::write(&outside, b"not-a-real-replay");
+
+        let err = load_replay_ghost_confined(&replays, Path::new("../secret.osr")).unwrap_err();
+        assert!(err.contains("outside"), "Expected traversal rejection, got: {}", err);
+
+        let err_abs = load_replay_ghost_confined(&replays, &outside).unwrap_err();
+        assert!(err_abs.contains("outside"), "Expected traversal rejection for absolute path, got: {}", err_abs);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

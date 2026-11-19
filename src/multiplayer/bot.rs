@@ -34,6 +34,7 @@ pub enum BotSource {
         fallback_skill: SkillProfile,
     },
     PersonalBest,
+    ScoreGhost(crate::multiplayer::simulator::ConstrainedScore),
     ReplayGhost {
         replay_path: PathBuf,
     },
@@ -190,6 +191,7 @@ impl BotProfile {
         match &self.source {
             BotSource::Procedural(s) => s.preferred_mods,
             BotSource::MimicPlayer { fallback_skill, .. } => fallback_skill.preferred_mods,
+            BotSource::ScoreGhost(sc) => sc.mods,
             BotSource::PersonalBest | BotSource::ReplayGhost { .. } => 0,
         }
     }

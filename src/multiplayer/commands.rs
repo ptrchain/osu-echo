@@ -66,7 +66,7 @@ fn parse_freemod_arg(raw: &str) -> u32 {
 
 pub async fn handle_mp_command(state: Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
     if args.is_empty() || args[0].eq_ignore_ascii_case("help") {
-        let help = "MP Bot Commands: !mp addbot <6digit..1digit|rival|custom> [name] [sr=X] [acc=Y] [mods=+HD] [nofail] | !mp removebot <slot|name> | !mp clearbots | !mp botskill <slot> <sr> [acc] | !mp botmods <slot> <+HDHR|NM> | !mp team <slot> <red|blue> | !mp seed <u64> | !mp abort";
+        let help = "MP Bot Commands: !mp addbot <6digit..1digit|rival|custom|username> [name] [sr=X] [acc=Y] [mods=+HD] [nofail] | !mp ghost <pb|score_id|file.osr> | !mp removebot <slot|name> | !mp clearbots | !mp botskill <slot> <sr> [acc] | !mp botmods <slot> <+HDHR|NM> | !mp team <slot> <red|blue> | !mp seed <u64> | !mp abort";
         banchobot::reply(&state, target, help).await;
         return;
     }
@@ -85,6 +85,7 @@ pub async fn handle_mp_command(state: Arc<RwLock<AppState>>, player_name: &str, 
 
     match sub.as_str() {
         "addbot" => handle_addbot(state, player_name, target, sub_args).await,
+        "ghost" => handle_ghost(state, player_name, target, sub_args).await,
         "removebot" => handle_removebot(state, player_name, target, sub_args).await,
         "clearbots" => handle_clearbots(state, player_name, target).await,
         "botskill" => handle_botskill(state, target, sub_args).await,
@@ -247,6 +248,88 @@ async fn handle_addbot(state: Arc<RwLock<AppState>>, player_name: &str, target: 
                 &format!("Added {}{} to slot {} ({}, {} acc).", summary_name, tag, slot_idx + 1, sr_str, acc_str),
             )
             .await;
+        }
+        Err(msg) => {
+            drop(s);
+            banchobot::reply(&state, target, msg).await;
+        }
+    }
+}
+
+async fn handle_ghost(state: Arc<RwLock<AppState>>, player_name: &str, target: &str, args: &[&str]) {
+    if args.is_empty() {
+        banchobot::reply(&state, target, "Usage: !mp ghost <pb|score_id|file.osr>").await;
+        return;
+    }
+
+    let arg = args.join(" ");
+    let trimmed = arg.trim();
+
+    let (ghost_name, source, label) = if trimmed.eq_ignore_ascii_case("pb") {
+        let name = sanitize_bot_name(&format!("{} (PB)", player_name));
+        (name, BotSource::PersonalBest, "Personal Best ghost".to_string())
+    } else if let Ok(score_id) = trimmed.parse::<i64>() {
+        let score_opt = {
+            let s = state.read().await;
+            let db_conn = s.db.lock().await;
+            db::get_score_by_id(&db_conn, score_id).ok().flatten()
+        };
+        let Some(sc) = score_opt else {
+            banchobot::reply(&state, target, &format!("Local score #{} not found.", score_id)).await;
+            return;
+        };
+        let name = sanitize_bot_name(&format!("{} (#{})", sc.name, score_id));
+        let constrained = crate::multiplayer::mimic::constrained_from_score(&sc);
+        (name, BotSource::ScoreGhost(constrained), format!("score #{} ghost ({})", score_id, sc.score))
+    } else {
+        let replay_folder = {
+            let s = state.read().await;
+            s.config.replay_folder()
+        };
+        let Some(folder) = replay_folder else {
+            banchobot::reply(&state, target, "Replay folder is not configured in settings.").await;
+            return;
+        };
+        let rel_path = std::path::PathBuf::from(trimmed);
+        if let Err(err) = crate::multiplayer::mimic::load_replay_ghost_confined(&folder, &rel_path) {
+            banchobot::reply(&state, target, &err).await;
+            return;
+        }
+        let stem = rel_path.file_stem().and_then(|s| s.to_str()).unwrap_or("Replay");
+        let name = sanitize_bot_name(&format!("{} (OSR)", stem));
+        (name, BotSource::ReplayGhost { replay_path: rel_path }, "replay ghost".to_string())
+    };
+
+    let mut s = state.write().await;
+    let Some((country, rank, pp, acc)) = s.player.as_ref().map(|p| (p.country, p.rank, p.pp, p.acc)) else {
+        return;
+    };
+    let Some(ref mut room) = s.active_match else {
+        return;
+    };
+
+    let synth_id = room.alloc_synthetic_bot_id();
+    let profile = BotProfile {
+        userid: synth_id,
+        name: ghost_name.clone(),
+        country,
+        rank,
+        pp,
+        acc,
+        source,
+    };
+    let bp = profile.to_bancho_player(room.mode);
+
+    match room.add_bot(profile) {
+        Ok(slot_idx) => {
+            let wire = room.to_wire();
+            if let Some(ref mut p) = s.player {
+                p.queue.extend_from_slice(&packets::user_presence(&bp));
+                p.queue.extend_from_slice(&packets::user_stats(&bp));
+                p.queue.extend_from_slice(&packets::update_match(&wire, true));
+            }
+            drop(s);
+            banchobot::reply(&state, target, &format!("Added {} ({}) to slot {}.", ghost_name, label, slot_idx + 1)).await;
         }
         Err(msg) => {
             drop(s);

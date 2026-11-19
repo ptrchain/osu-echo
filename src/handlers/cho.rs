@@ -976,23 +976,40 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                         }
                     }
                     x if x == packets::PacketId::OsuMatchStart as u16 => {
+                        enum BotStartPlan {
+                            Procedural(SkillProfile),
+                            Constrained(simulator::ConstrainedScore),
+                            PersonalBest { bot_name: String, fallback: SkillProfile },
+                            ReplayGhost { bot_name: String, path: std::path::PathBuf, fallback: SkillProfile },
+                        }
+
                         // Snapshot room & bot metadata outside write lock
                         let start_snapshot = {
                             let s = state.read().await;
                             let now = std::time::Instant::now();
+                            let rival_skill = s
+                                .player
+                                .as_ref()
+                                .map(|p| match crate::multiplayer::bot::BotProfile::rival_for(p, 0).source {
+                                    BotSource::Procedural(sk) => sk,
+                                    _ => SkillProfile::default(),
+                                })
+                                .unwrap_or_default();
+                            let replay_folder = s.config.replay_folder();
+
                             s.active_match.as_ref().and_then(|room| {
                                 if room.in_progress {
                                     return None;
                                 }
                                 let bmap_id = room.beatmap_id as i64;
-                                let bots: Vec<(usize, i32, SkillProfile, u32, Option<simulator::ConstrainedScore>)> = room
+                                let bots: Vec<(usize, i32, u32, BotStartPlan)> = room
                                     .slots
                                     .iter()
                                     .enumerate()
                                     .filter_map(|(idx, slot)| {
                                         let bot = slot.bot.as_ref()?;
-                                        let (skill, cached_score) = match &bot.profile.source {
-                                            BotSource::Procedural(sk) => (sk.clone(), None),
+                                        let plan = match &bot.profile.source {
+                                            BotSource::Procedural(sk) => BotStartPlan::Procedural(sk.clone()),
                                             BotSource::MimicPlayer { osu_user_id, fallback_skill, .. } => {
                                                 let sc = osu_user_id.and_then(|uid| {
                                                     if bmap_id <= 0 {
@@ -1009,11 +1026,23 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                                         })
                                                         .and_then(|(_, opt)| opt.clone())
                                                 });
-                                                (fallback_skill.clone(), sc)
+                                                match sc {
+                                                    Some(score) => BotStartPlan::Constrained(score),
+                                                    None => BotStartPlan::Procedural(fallback_skill.clone()),
+                                                }
                                             }
-                                            BotSource::PersonalBest | BotSource::ReplayGhost { .. } => (SkillProfile::default(), None),
+                                            BotSource::PersonalBest => BotStartPlan::PersonalBest {
+                                                bot_name: bot.profile.name.clone(),
+                                                fallback: rival_skill.clone(),
+                                            },
+                                            BotSource::ScoreGhost(sc) => BotStartPlan::Constrained(sc.clone()),
+                                            BotSource::ReplayGhost { replay_path } => BotStartPlan::ReplayGhost {
+                                                bot_name: bot.profile.name.clone(),
+                                                path: replay_path.clone(),
+                                                fallback: rival_skill.clone(),
+                                            },
                                         };
-                                        Some((idx, bot.profile.userid, skill, room.effective_mods_for_slot(idx), cached_score))
+                                        Some((idx, bot.profile.userid, room.effective_mods_for_slot(idx), plan))
                                     })
                                     .collect();
                                 Some((
@@ -1023,19 +1052,29 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                     room.rng_seed_override,
                                     room.seed,
                                     room.run_nonce,
+                                    replay_folder,
                                     bots,
                                 ))
                             })
                         };
 
-                        if let Some((md5, mode, win_condition, seed_override, wire_seed, run_nonce, bots)) = start_snapshot {
-                            // Fast DB-only .osu lookup (never block /cho with a full Songs/ disk scan)
-                            let osu_content: Option<String> = if !md5.is_empty() {
+                        if let Some((md5, mode, win_condition, seed_override, wire_seed, run_nonce, replay_folder, bots)) = start_snapshot {
+                            // Fast DB-only .osu + PB lookup (never block /cho with a full Songs/ disk scan)
+                            let has_pb_bot = bots.iter().any(|(_, _, _, p)| matches!(p, BotStartPlan::PersonalBest { .. }));
+                            let (osu_content, pb_score) = {
                                 let s = state.read().await;
                                 let db_conn = s.db.lock().await;
-                                db::get_beatmap_by_md5(&db_conn, &md5).ok().flatten().and_then(|b| b.file_content)
-                            } else {
-                                None
+                                let osu = if !md5.is_empty() {
+                                    db::get_beatmap_by_md5(&db_conn, &md5).ok().flatten().and_then(|b| b.file_content)
+                                } else {
+                                    None
+                                };
+                                let pb = if has_pb_bot {
+                                    crate::multiplayer::mimic::resolve_personal_best_score(&db_conn, &player_name, &md5, mode)
+                                } else {
+                                    None
+                                };
+                                (osu, pb)
                             };
 
                             let (match_seed, effective_nonce) = match seed_override {
@@ -1044,12 +1083,14 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             };
 
                             let osu_bytes = osu_content.as_deref().map(str::as_bytes);
+                            let mut notices: Vec<String> = Vec::new();
                             let mut sim_results: Vec<(usize, simulator::SimulationResult)> = Vec::with_capacity(bots.len());
-                            for (slot_idx, bot_uid, skill, eff_mods, cached_score) in &bots {
-                                let res = if let Some(ref target_score) = cached_score {
-                                    simulator::simulate_constrained_score(osu_bytes, target_score, mode, *slot_idx, match_seed)
-                                } else {
-                                    simulator::simulate_bot(
+                            for (slot_idx, bot_uid, eff_mods, plan) in &bots {
+                                let res = match plan {
+                                    BotStartPlan::Constrained(target_score) => {
+                                        simulator::simulate_constrained_score(osu_bytes, target_score, mode, *slot_idx, match_seed)
+                                    }
+                                    BotStartPlan::Procedural(skill) => simulator::simulate_bot(
                                         osu_bytes,
                                         skill,
                                         mode,
@@ -1059,7 +1100,48 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                         *bot_uid,
                                         match_seed,
                                         effective_nonce,
-                                    )
+                                    ),
+                                    BotStartPlan::PersonalBest { bot_name, fallback } => {
+                                        if let Some(ref pb) = pb_score {
+                                            simulator::simulate_constrained_score(osu_bytes, pb, mode, *slot_idx, match_seed)
+                                        } else {
+                                            notices.push(format!("No local PB found for this map; using Rival fallback for {}.", bot_name));
+                                            simulator::simulate_bot(
+                                                osu_bytes,
+                                                fallback,
+                                                mode,
+                                                *eff_mods,
+                                                win_condition,
+                                                *slot_idx,
+                                                *bot_uid,
+                                                match_seed,
+                                                effective_nonce,
+                                            )
+                                        }
+                                    }
+                                    BotStartPlan::ReplayGhost { bot_name, path, fallback } => {
+                                        let loaded = replay_folder
+                                            .as_deref()
+                                            .ok_or_else(|| "Replay folder not configured.".to_string())
+                                            .and_then(|folder| crate::multiplayer::mimic::load_replay_ghost_confined(folder, path));
+                                        match loaded {
+                                            Ok(sc) => simulator::simulate_constrained_score(osu_bytes, &sc, mode, *slot_idx, match_seed),
+                                            Err(err) => {
+                                                notices.push(format!("Failed to load replay ghost {} ({}); using Rival fallback.", bot_name, err));
+                                                simulator::simulate_bot(
+                                                    osu_bytes,
+                                                    fallback,
+                                                    mode,
+                                                    *eff_mods,
+                                                    win_condition,
+                                                    *slot_idx,
+                                                    *bot_uid,
+                                                    match_seed,
+                                                    effective_nonce,
+                                                )
+                                            }
+                                        }
+                                    }
                                 };
                                 sim_results.push((*slot_idx, res));
                             }
@@ -1089,6 +1171,9 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                                 None
                             };
                             if let (Some(ref mut p), Some(wire)) = (&mut s.player, wire_out) {
+                                for note in &notices {
+                                    p.queue.extend_from_slice(&packets::send_msg("BanchoBot", note, "#multiplayer", BANCHOBOT_ID));
+                                }
                                 p.queue.extend_from_slice(&packets::match_start(&wire));
                             }
                         }
