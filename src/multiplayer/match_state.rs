@@ -181,6 +181,9 @@ pub struct MatchRoom {
     pub in_progress: bool,
     pub seed: i32,
     pub rng_seed_override: Option<u64>,
+    pub run_nonce: u64,
+    pub human_last_frame: Option<ScoreFrame>,
+    pub human_failed: bool,
     pub next_bot_id: i32,
     pub slots: [MatchSlot; 16],
 }
@@ -221,6 +224,9 @@ impl MatchRoom {
             in_progress: false,
             seed: wire.seed,
             rng_seed_override: None,
+            run_nonce: 0,
+            human_last_frame: None,
+            human_failed: false,
             next_bot_id: SYNTHETIC_BOT_ID_BASE + 1,
             slots,
         }
@@ -376,6 +382,8 @@ impl MatchRoom {
 
     pub fn reset_after_match(&mut self) {
         self.in_progress = false;
+        self.human_last_frame = None;
+        self.human_failed = false;
         for slot in &mut self.slots {
             if let Some(ref mut bot) = slot.bot {
                 bot.reset_playback();

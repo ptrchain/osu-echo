@@ -1,7 +1,8 @@
 use crate::db;
-use crate::multiplayer::bot::sanitize_freemod_bits;
+use crate::multiplayer::bot::{sanitize_freemod_bits, BotSource, SkillProfile};
 use crate::multiplayer::is_synthetic_bot_id;
 use crate::multiplayer::match_state::{MatchRoom, MatchSlot, SlotStatus, Team, TeamType, WinCondition};
+use crate::multiplayer::simulator;
 use crate::packets;
 use crate::server::response::Response;
 use crate::state::AppState;
@@ -25,6 +26,133 @@ pub fn safe_logout_bots(player: &mut Player, removed_bot_ids: &[i32], friend_ids
             player.queue.extend_from_slice(&packets::logout(uid));
         }
     }
+}
+
+fn frame_accuracy_pct(f: &packets::ScoreFrame, mode: u8) -> f64 {
+    match mode {
+        3 => {
+            let total = f.ngeki as f64 + f.n300 as f64 + f.nkatu as f64 + f.n100 as f64 + f.n50 as f64 + f.nmiss as f64;
+            if total <= 0.0 {
+                return 100.0;
+            }
+            let weighted = (f.ngeki as f64 + f.n300 as f64) * 300.0 + f.nkatu as f64 * 200.0 + f.n100 as f64 * 100.0 + f.n50 as f64 * 50.0;
+            (weighted / (total * 300.0)) * 100.0
+        }
+        1 => {
+            let total = f.n300 as f64 + f.n100 as f64 + f.nmiss as f64;
+            if total <= 0.0 {
+                return 100.0;
+            }
+            ((f.n300 as f64 + f.n100 as f64 * 0.5) / total) * 100.0
+        }
+        _ => {
+            let total = f.n300 as f64 + f.n100 as f64 + f.n50 as f64 + f.nmiss as f64;
+            if total <= 0.0 {
+                return 100.0;
+            }
+            ((f.n300 as f64 * 300.0 + f.n100 as f64 * 100.0 + f.n50 as f64 * 50.0) / (total * 300.0)) * 100.0
+        }
+    }
+}
+
+fn finalize_match(room: &mut MatchRoom, player: &mut Player) {
+    struct Entry {
+        name: String,
+        team: Team,
+        score: i32,
+        acc: f64,
+        max_combo: u16,
+        failed: bool,
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+    let mode = room.mode;
+
+    // Collect human entry
+    if let Some(human_idx) = room.find_human_slot(player.userid) {
+        let team = room.slots[human_idx].team;
+        let (score, acc, max_combo) = if let Some(ref f) = room.human_last_frame {
+            (f.total_score, frame_accuracy_pct(f, mode), f.max_combo)
+        } else {
+            (0, 0.0, 0)
+        };
+        entries.push(Entry {
+            name: player.name.clone(),
+            team,
+            score,
+            acc,
+            max_combo,
+            failed: room.human_failed,
+        });
+    }
+
+    // Flush final frames for all bots and collect their results
+    for (slot_idx, slot) in room.slots.iter_mut().enumerate() {
+        let team = slot.team;
+        if let Some(ref mut bot) = slot.bot {
+            if !bot.has_failed && bot.fail_time_ms.is_some() {
+                bot.has_failed = true;
+                player.queue.extend_from_slice(&packets::match_player_failed(slot_idx as i32));
+            }
+            if let Some(last_frame) = bot.timeline.last() {
+                if bot.last_sent_idx < bot.timeline.len() {
+                    let mut final_frame = last_frame.clone();
+                    final_frame.id = slot_idx as u8;
+                    player.queue.extend_from_slice(&packets::match_score_update(&final_frame));
+                    bot.last_sent_idx = bot.timeline.len();
+                }
+                entries.push(Entry {
+                    name: bot.profile.name.clone(),
+                    team,
+                    score: last_frame.total_score,
+                    acc: frame_accuracy_pct(last_frame, mode),
+                    max_combo: last_frame.max_combo,
+                    failed: bot.has_failed,
+                });
+            }
+        }
+    }
+
+    let summary = if room.team_type.is_team_mode() {
+        let red_total: i64 = entries.iter().filter(|e| e.team == Team::Red && !e.failed).map(|e| e.score as i64).sum();
+        let blue_total: i64 = entries.iter().filter(|e| e.team == Team::Blue && !e.failed).map(|e| e.score as i64).sum();
+        let winner = if red_total > blue_total {
+            "Red Team wins!"
+        } else if blue_total > red_total {
+            "Blue Team wins!"
+        } else {
+            "It's a tie!"
+        };
+        format!("Match finished — {} (Red: {} vs Blue: {})", winner, red_total, blue_total)
+    } else {
+        entries.sort_by(|a, b| {
+            a.failed.cmp(&b.failed).then_with(|| match room.win_condition {
+                WinCondition::Accuracy => b.acc.partial_cmp(&a.acc).unwrap_or(std::cmp::Ordering::Equal),
+                WinCondition::Combo => b.max_combo.cmp(&a.max_combo),
+                WinCondition::Score | WinCondition::ScoreV2 => b.score.cmp(&a.score),
+            })
+        });
+        let board: Vec<String> = entries
+            .iter()
+            .take(4)
+            .enumerate()
+            .map(|(i, e)| {
+                let fail_tag = if e.failed { " [FAIL]" } else { "" };
+                format!("#{} {} ({}, {:.1}%, {}x){}", i + 1, e.name, e.score, e.acc, e.max_combo, fail_tag)
+            })
+            .collect();
+        if board.is_empty() {
+            "Match finished!".to_string()
+        } else {
+            format!("Match finished — {}", board.join(" | "))
+        }
+    };
+
+    room.reset_after_match();
+    let wire = room.to_wire();
+    player.queue.extend_from_slice(&packets::match_complete());
+    player.queue.extend_from_slice(&packets::update_match(&wire, true));
+    player.queue.extend_from_slice(&packets::send_msg("BanchoBot", &summary, "#multiplayer", BANCHOBOT_ID));
 }
 
 pub fn create_bot_player(name: &str, userid: i32) -> Player {
@@ -778,6 +906,187 @@ pub async fn handle(state: Arc<RwLock<AppState>>, osu_token: Option<&str>, body_
                             });
                             if let (Some(ref mut p), Some(wire)) = (&mut s.player, wire_out) {
                                 p.queue.extend_from_slice(&packets::update_match(&wire, true));
+                            }
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchStart as u16 => {
+                        // Snapshot room & bot metadata outside write lock
+                        let start_snapshot = {
+                            let s = state.read().await;
+                            s.active_match.as_ref().map(|room| {
+                                let bots: Vec<(usize, i32, SkillProfile, u32)> = room
+                                    .slots
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(idx, slot)| {
+                                        let bot = slot.bot.as_ref()?;
+                                        let skill = match &bot.profile.source {
+                                            BotSource::Procedural(sk) => sk.clone(),
+                                            BotSource::MimicPlayer { fallback_skill, .. } => fallback_skill.clone(),
+                                            BotSource::PersonalBest | BotSource::ReplayGhost { .. } => SkillProfile::default(),
+                                        };
+                                        Some((idx, bot.profile.userid, skill, room.effective_mods_for_slot(idx)))
+                                    })
+                                    .collect();
+                                (
+                                    room.beatmap_md5.clone(),
+                                    room.beatmap_id,
+                                    room.mode,
+                                    room.win_condition,
+                                    room.rng_seed_override,
+                                    room.seed,
+                                    room.run_nonce,
+                                    bots,
+                                    utils::resolve_songs_folder(&s.config),
+                                )
+                            })
+                        };
+
+                        if let Some((md5, map_id, mode, win_condition, seed_override, wire_seed, run_nonce, bots, songs_dir)) = start_snapshot {
+                            // Resolve .osu file bytes outside AppState write lock
+                            let mut osu_content: Option<String> = None;
+                            if !md5.is_empty() {
+                                let s = state.read().await;
+                                let db_conn = s.db.lock().await;
+                                if let Ok(Some(b)) = db::get_beatmap_by_md5(&db_conn, &md5) {
+                                    osu_content = b.file_content;
+                                }
+                            }
+                            if osu_content.is_none() {
+                                if let Some(ref sdir) = songs_dir {
+                                    let id_opt = if map_id > 0 { Some(map_id as i64) } else { None };
+                                    let md5_opt = if !md5.is_empty() { Some(md5.as_str()) } else { None };
+                                    if let Some((local_bmap, content)) = utils::find_and_parse_local_osu_file(sdir, None, id_opt, md5_opt, None) {
+                                        let s = state.read().await;
+                                        let db_conn = s.db.lock().await;
+                                        let _ = db::insert_beatmap(&db_conn, &local_bmap);
+                                        let _ = db::update_beatmap_file_content(&db_conn, &local_bmap.file_md5, &content);
+                                        osu_content = Some(content);
+                                    }
+                                }
+                            }
+
+                            let (match_seed, effective_nonce) = match seed_override {
+                                Some(seed) => (seed, 0u64),
+                                None => ((wire_seed as u64).wrapping_add(1), run_nonce),
+                            };
+
+                            let osu_bytes = osu_content.as_deref().map(str::as_bytes);
+                            let mut sim_results: Vec<(usize, simulator::SimulationResult)> = Vec::with_capacity(bots.len());
+                            for (slot_idx, bot_uid, skill, eff_mods) in &bots {
+                                let res = simulator::simulate_bot(
+                                    osu_bytes,
+                                    skill,
+                                    mode,
+                                    *eff_mods,
+                                    win_condition,
+                                    *slot_idx,
+                                    *bot_uid,
+                                    match_seed,
+                                    effective_nonce,
+                                );
+                                sim_results.push((*slot_idx, res));
+                            }
+
+                            let mut s = state.write().await;
+                            let wire_out = if let Some(ref mut room) = s.active_match {
+                                room.in_progress = true;
+                                room.human_last_frame = None;
+                                room.human_failed = false;
+                                room.run_nonce = room.run_nonce.wrapping_add(1);
+
+                                for slot in &mut room.slots {
+                                    if slot.is_occupied() {
+                                        slot.status = SlotStatus::Playing;
+                                    }
+                                }
+                                for (slot_idx, res) in sim_results {
+                                    if let Some(ref mut bot) = room.slots[slot_idx].bot {
+                                        bot.timeline = res.timeline;
+                                        bot.fail_time_ms = res.fail_time_ms;
+                                        bot.last_sent_idx = 0;
+                                        bot.has_failed = false;
+                                    }
+                                }
+                                Some(room.to_wire())
+                            } else {
+                                None
+                            };
+                            if let (Some(ref mut p), Some(wire)) = (&mut s.player, wire_out) {
+                                p.queue.extend_from_slice(&packets::match_start(&wire));
+                            }
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchLoadComplete as u16 => {
+                        let mut s = state.write().await;
+                        if let Some(ref mut p) = s.player {
+                            p.queue.extend_from_slice(&packets::match_all_players_loaded());
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchSkipRequest as u16 => {
+                        let mut s = state.write().await;
+                        if let Some(ref mut p) = s.player {
+                            p.queue.extend_from_slice(&packets::match_skip());
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchScoreUpdate as u16 => {
+                        let mut reader = packets::PacketReader::new(in_pkt.payload);
+                        if let Ok(frame) = reader.read_score_frame() {
+                            let current_time = frame.time;
+                            let mut s = state.write().await;
+                            let mut out_bytes = Vec::new();
+                            if let Some(ref mut room) = s.active_match {
+                                if room.in_progress {
+                                    room.human_last_frame = Some(frame);
+                                    for (slot_idx, slot) in room.slots.iter_mut().enumerate() {
+                                        if slot.status != SlotStatus::Playing {
+                                            continue;
+                                        }
+                                        if let Some(ref mut bot) = slot.bot {
+                                            if !bot.has_failed && bot.fail_time_ms.is_some_and(|ft| ft <= current_time) {
+                                                bot.has_failed = true;
+                                                out_bytes.extend_from_slice(&packets::match_player_failed(slot_idx as i32));
+                                            }
+                                            if let Some(latest_idx) = bot.timeline.iter().rposition(|f| f.time <= current_time) {
+                                                if latest_idx >= bot.last_sent_idx {
+                                                    let mut out_frame = bot.timeline[latest_idx].clone();
+                                                    out_frame.id = slot_idx as u8;
+                                                    out_bytes.extend_from_slice(&packets::match_score_update(&out_frame));
+                                                    bot.last_sent_idx = latest_idx + 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(ref mut p) = s.player {
+                                p.queue.extend_from_slice(&out_bytes);
+                            }
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchFailed as u16 => {
+                        let mut s = state.write().await;
+                        let AppState { active_match, player, .. } = &mut *s;
+                        if let (Some(ref mut room), Some(ref mut p)) = (active_match, player) {
+                            if room.in_progress {
+                                room.human_failed = true;
+                                let all_bots_failed = room
+                                    .slots
+                                    .iter()
+                                    .filter_map(|sl| sl.bot.as_ref())
+                                    .all(|b| b.has_failed);
+                                if all_bots_failed {
+                                    finalize_match(room, p);
+                                }
+                            }
+                        }
+                    }
+                    x if x == packets::PacketId::OsuMatchComplete as u16 => {
+                        let mut s = state.write().await;
+                        let AppState { active_match, player, .. } = &mut *s;
+                        if let (Some(ref mut room), Some(ref mut p)) = (active_match, player) {
+                            if room.in_progress {
+                                finalize_match(room, p);
                             }
                         }
                     }
@@ -1605,5 +1914,97 @@ mod tests {
             "Must never log out a mimicked player who is in the friends list"
         );
         assert!(shared.read().await.active_match.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_mp_gameplay_loop_and_abort() {
+        use crate::multiplayer::bot::BotProfile;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::ensure_profile(&conn, "Gamer").unwrap();
+
+        let mut app_state = AppState::new(conn, crate::types::config::Config::default());
+        app_state.player = Some(Player::new("Gamer".to_string()));
+        let mut wire = packets::MatchWire::default();
+        wire.name = "Gameplay Room".to_string();
+        wire.slot_status = [SlotStatus::Open as u8; 16];
+        let mut room = MatchRoom::from_create_wire(1, 2, &wire);
+        let b1_id = room.alloc_synthetic_bot_id();
+        room.add_bot(BotProfile::from_preset("5digit", b1_id).unwrap()).unwrap();
+        let b2_id = room.alloc_synthetic_bot_id();
+        room.add_bot(BotProfile::from_preset("3digit", b2_id).unwrap()).unwrap();
+        app_state.active_match = Some(room);
+        let shared = Arc::new(RwLock::new(app_state));
+
+        // 1. OsuMatchStart
+        let start_pkt = packets::write_packet(packets::PacketId::OsuMatchStart as u16, &[]);
+        let resp_start = handle(shared.clone(), Some("tok"), &start_pkt).await;
+        let pkts_start = packets::split_packets(&resp_start.body);
+        assert!(pkts_start.iter().any(|p| p.id == packets::PacketId::ChoMatchStart as u16));
+        assert!(shared.read().await.active_match.as_ref().unwrap().in_progress);
+
+        // 2. OsuMatchLoadComplete + OsuMatchSkipRequest
+        let mut load_and_skip = packets::write_packet(packets::PacketId::OsuMatchLoadComplete as u16, &[]);
+        load_and_skip.extend_from_slice(&packets::write_packet(packets::PacketId::OsuMatchSkipRequest as u16, &[]));
+        let resp_ls = handle(shared.clone(), Some("tok"), &load_and_skip).await;
+        let pkts_ls = packets::split_packets(&resp_ls.body);
+        assert!(pkts_ls.iter().any(|p| p.id == packets::PacketId::ChoMatchAllPlayersLoaded as u16));
+        assert!(pkts_ls.iter().any(|p| p.id == packets::PacketId::ChoMatchSkip as u16));
+
+        // 3. Multiple OsuMatchScoreUpdate ticks
+        let mut bot_updates_received = 0usize;
+        for t in [5_000i32, 30_000, 75_000] {
+            let human_frame = packets::ScoreFrame {
+                time: t,
+                id: 0,
+                n300: (t / 200) as u16,
+                total_score: t * 10,
+                max_combo: (t / 200) as u16,
+                current_combo: (t / 200) as u16,
+                perfect: true,
+                current_hp: 200,
+                ..Default::default()
+            };
+            let score_pkt = packets::write_packet(
+                packets::PacketId::OsuMatchScoreUpdate as u16,
+                &packets::write_score_frame_bytes(&human_frame),
+            );
+            let resp_tick = handle(shared.clone(), Some("tok"), &score_pkt).await;
+            let pkts_tick = packets::split_packets(&resp_tick.body);
+            for p in pkts_tick {
+                if p.id == packets::PacketId::ChoMatchScoreUpdate as u16 {
+                    let decoded = packets::PacketReader::new(p.payload).read_score_frame().unwrap();
+                    assert!(decoded.id == 1 || decoded.id == 2);
+                    assert!(decoded.time <= t);
+                    bot_updates_received += 1;
+                }
+            }
+        }
+        assert!(bot_updates_received >= 4, "Expected live bot ScoreFrame updates, got {}", bot_updates_received);
+
+        // 4. OsuMatchComplete
+        let comp_pkt = packets::write_packet(packets::PacketId::OsuMatchComplete as u16, &[]);
+        let resp_comp = handle(shared.clone(), Some("tok"), &comp_pkt).await;
+        let pkts_comp = packets::split_packets(&resp_comp.body);
+        assert!(pkts_comp.iter().any(|p| p.id == packets::PacketId::ChoMatchComplete as u16));
+        assert!(pkts_comp.iter().any(|p| p.id == packets::PacketId::ChoUpdateMatch as u16));
+        assert!(pkts_comp.iter().any(|p| p.id == packets::PacketId::ChoSendMessage as u16));
+        {
+            let s = shared.read().await;
+            let room = s.active_match.as_ref().unwrap();
+            assert!(!room.in_progress);
+            assert_eq!(room.slots[0].status, SlotStatus::NotReady);
+            assert_eq!(room.slots[1].status, SlotStatus::Ready);
+        }
+
+        // 5. Start again and abort via !mp abort
+        let _ = handle(shared.clone(), Some("tok"), &start_pkt).await;
+        assert!(shared.read().await.active_match.as_ref().unwrap().in_progress);
+        crate::multiplayer::commands::handle_mp_command(shared.clone(), "Gamer", "#multiplayer", &["abort"]).await;
+        let s = shared.read().await;
+        assert!(!s.active_match.as_ref().unwrap().in_progress);
+        let pkts_abort = packets::split_packets(&s.player.as_ref().unwrap().queue);
+        assert!(pkts_abort.iter().any(|p| p.id == packets::PacketId::ChoMatchAbort as u16));
     }
 }
